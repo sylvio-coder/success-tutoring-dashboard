@@ -196,8 +196,14 @@ st.markdown(f"""
 # ── Data loading ──────────────────────────────────────────────────────────────
 @st.cache_resource
 def get_sheets_client():
-    creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES_SHEETS)
+    try:
+        import json
+        service_account_info = dict(st.secrets["gcp_service_account"])
+        creds = Credentials.from_service_account_info(service_account_info, scopes=SCOPES_SHEETS)
+    except:
+        creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES_SHEETS)
     return gspread.authorize(creds)
+Then scroll down and click Commit changes — Streamlit will automatically redeploy!
 
 @st.cache_data(ttl=300)
 def load_sheet_data(tab_name):
