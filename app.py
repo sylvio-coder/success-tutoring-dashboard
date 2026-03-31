@@ -197,13 +197,14 @@ st.markdown(f"""
 @st.cache_resource
 def get_sheets_client():
     try:
+        # Streamlit Cloud — read from secrets
         import json
         service_account_info = dict(st.secrets["gcp_service_account"])
         creds = Credentials.from_service_account_info(service_account_info, scopes=SCOPES_SHEETS)
     except:
+        # Local — read from file
         creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES_SHEETS)
     return gspread.authorize(creds)
-
 @st.cache_data(ttl=300)
 def load_sheet_data(tab_name):
     client = get_sheets_client()
@@ -259,6 +260,7 @@ def load_permissions():
             "tabs": tabs,
             "gpm_filter": gpm_filter,
             "access_level": access_level,
+            "pin": str(row.get("pin","")).strip(),
         }
     return permissions
 def log_access(email, name, action):
@@ -294,7 +296,7 @@ def get_allowed_tabs(user_email):
 def get_user_permissions(user_email):
     permissions = load_permissions()
     return permissions.get(user_email.strip().lower(), {
-        "tabs": [], "gpm_filter": "", "access_level": "gpm"
+        "tabs": [], "gpm_filter": "", "access_level": "gpm", "pin": ""
     })
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -1303,7 +1305,7 @@ def login_section():
         import urllib.parse
         CLIENT_ID = "507985856717-srjmjg07sdde13anpr20io14ln46n9sf.apps.googleusercontent.com"
         CLIENT_SECRET = "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"
-        REDIRECT_URI = "https://j7ky6kl5hwlbrjpxtuk8ce.streamlit.app"
+        REDIRECT_URI = "http://localhost:8501"
         AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
         TOKEN_URL = "https://oauth2.googleapis.com/token"
         USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
@@ -1372,17 +1374,24 @@ def login_section():
         with st.expander("🔐 Sign in with email instead", expanded=False):
             email_input = st.text_input("Email",placeholder="you@successtutoring.com",
                                          label_visibility="collapsed", key="email_fallback")
+            pin_input = st.text_input("PIN", placeholder="Enter your PIN",
+                                      type="password", key="pin_fallback")
             if st.button("Login with Email", use_container_width=True):
                 if email_input and "@successtutoring.com" in email_input:
-                    allowed = get_allowed_tabs(email_input)
-                    if allowed:
+                    perms = get_user_permissions(email_input)
+                    if perms["tabs"] and str(pin_input).strip() == perms["pin"]:
+                        name_fb = email_input.split("@")[0].replace("."," ").title()
                         st.session_state["logged_in"] = True
                         st.session_state["user_email"] = email_input.lower().strip()
-                        st.session_state["user_name"] = email_input.split("@")[0].replace("."," ").title()
+                        st.session_state["user_name"] = name_fb
+                        st.session_state["access_level"] = perms["access_level"]
+                        st.session_state["gpm_filter"] = perms["gpm_filter"]
+                        log_access(email_input.lower().strip(), name_fb, "Login")
                         st.empty()
                         st.rerun()
                     else:
-                        st.error("⛔ Your email is not authorised.")
+                        flag_unknown_user(email_input.lower().strip())
+                        st.error("⛔ Invalid email or PIN.")
                 else:
                     st.error("Please enter a valid @successtutoring.com email.")
         st.caption("🔒 Only approved team members can access this dashboard.")
