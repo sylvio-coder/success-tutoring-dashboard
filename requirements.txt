@@ -1,0 +1,12 @@
+streamlit
+gspread
+pandas
+matplotlib
+numpy
+scipy
+plotly
+streamlit-echarts
+google-auth
+anthropic
+python-dotenv
+httpx
