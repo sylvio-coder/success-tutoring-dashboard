@@ -1319,12 +1319,13 @@ def login_section():
         import urllib.parse
         CLIENT_ID = "507985856717-srjmjg07sdde13anpr20io14ln46n9sf.apps.googleusercontent.com"
         CLIENT_SECRET = "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"
-        REDIRECT_URI = "https://j7ky6kl5hwlbrjpxtuk8ce.streamlit.app"
+        REDIRECT_URI = "https://j7ky6kl5hwlbrjpxtuk8ce.streamlit.app/"
         AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
         TOKEN_URL = "https://oauth2.googleapis.com/token"
         USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
         params = st.query_params
-        if "code" in params and not st.session_state.get("logged_in"):
+        if "code" in params and not st.session_state.get("logged_in") and not st.session_state.get("oauth_processing"):
+            st.session_state["oauth_processing"] = True
             import httpx
             code = params["code"]
             try:
@@ -1355,6 +1356,8 @@ def login_section():
                         flag_unknown_user(email)
                         st.error(f"⛔ {email} is not authorised. Contact your administrator.")
                 else:
+                    st.session_state["oauth_processing"] = False
+                    st.query_params.clear()
                     st.error(f"Google auth failed: {token_data.get('error_description','Unknown error')}")
             except Exception as ex:
                 st.error(f"Auth error: {ex}")
