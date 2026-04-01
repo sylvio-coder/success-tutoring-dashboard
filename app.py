@@ -843,9 +843,9 @@ def report_age_combined(df_wm):
                          use_container_width=True,hide_index=True)
     st.markdown("<br>",unsafe_allow_html=True)
     st.markdown('<div class="section-header">Age Group Trends — Last 13 Months</div>',unsafe_allow_html=True)
-    df_wm_f=report_filters(df_wm.copy(),key_prefix="r3wm",show_date=False,
+  df_wm_f=report_filters(df_wm.copy(),key_prefix="r3wm",show_date=False,
                             show_country=True,show_state=True,show_stage=False,show_gpm=True,show_status=True)
-    max_date=df_wm["Date"].max(); cutoff=max_date-pd.DateOffset(months=13)
+    max_date=df_wm_f["Date"].max(); cutoff=max_date-pd.DateOffset(months=13)
     df_chart=df_wm_f[df_wm_f["Date"]>=cutoff].copy()
     age_map=vl.set_index(loc_col)["Age (Months)"].to_dict() if loc_col in vl.columns else {}
     df_chart["Age (Months)"]=df_chart[loc_col].map(age_map)
@@ -872,7 +872,21 @@ def report_age_combined(df_wm):
         fig_age.update_layout(**std_layout(
             f"Avg {metric_name} by Location Age — Last 13 Months", f"Avg {metric_name}", 500))
         st.plotly_chart(fig_age,use_container_width=True)
-
+ # ── Avg membership by Region ──
+    st.markdown('<div class="section-header">Avg Active Members by Region — Last 13 Months</div>', unsafe_allow_html=True)
+    if "Region" in df_chart.columns and "# Active members" in df_chart.columns:
+        regions = sorted(df_chart["Region"].dropna().unique().tolist())
+        sel_regions = st.multiselect("Select regions:", regions, default=regions, key="r3_regions")
+        region_colors = [BI_ACCENT,BI_BLUE,BI_ORANGE,BI_RED,BI_PURPLE,BI_YELLOW,"#00b4d8","#e91e8c","#33cc99","#ff6b6b"]
+        fig_region = go.Figure()
+        for i, region in enumerate(sel_regions):
+            reg_df = df_chart[df_chart["Region"]==region].groupby("Date")["# Active members"].mean().reset_index().sort_values("Date")
+            if reg_df.empty: continue
+            std_traces(fig_region, reg_df, "Date", "# Active members",
+                      region_colors[i%len(region_colors)], region)
+        fig_region.update_layout(**std_layout(
+            "Avg Active Members by Region — Last 13 Months", "Avg Active Members", 500))
+        st.plotly_chart(fig_region, use_container_width=True)
 # ══════════════════════════════════════════════════════════════════════════════
 # Generic trend report helper
 # ══════════════════════════════════════════════════════════════════════════════
