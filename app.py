@@ -843,7 +843,7 @@ def report_age_combined(df_wm):
                          use_container_width=True,hide_index=True)
     st.markdown("<br>",unsafe_allow_html=True)
     st.markdown('<div class="section-header">Age Group Trends — Last 13 Months</div>',unsafe_allow_html=True)
-  df_wm_f=report_filters(df_wm.copy(),key_prefix="r3wm",show_date=False,
+    df_wm_f=report_filters(df_wm.copy(),key_prefix="r3wm",show_date=False,
                             show_country=True,show_state=True,show_stage=False,show_gpm=True,show_status=True)
     max_date=df_wm_f["Date"].max(); cutoff=max_date-pd.DateOffset(months=13)
     df_chart=df_wm_f[df_wm_f["Date"]>=cutoff].copy()
