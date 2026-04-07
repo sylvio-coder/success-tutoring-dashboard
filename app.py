@@ -469,20 +469,16 @@ def plotly_dual_axis(weekly_df, date_col, member_series, title, height=520):
     fig.update_layout(**layout)
     return fig
 def apply_gpm_filter(df):
-    """Silently filter data based on logged-in user's GPM and access level."""
-    gpm_filter = st.session_state.get("gpm_filter", "")
+    """Filter data based on logged-in user's allowed locations."""
     access_level = st.session_state.get("access_level", "admin")
-    loc_col = "Success Tutoring - Business name"
-    if access_level == "gpm" and gpm_filter:
-        vl = load_vlookup()
-        if not vl.empty and "GPM" in vl.columns:
-            # Only show their locations, exclude Leasing stage
-            allowed_locs = vl[
-                (vl["GPM"] == gpm_filter) &
-                (vl["Stage"] != "Leasing")
-            ][loc_col].tolist()
-            if loc_col in df.columns:
-                df = df[df[loc_col].isin(allowed_locs)]
+    allowed_locations = st.session_state.get("allowed_locations", [])
+
+    wm_loc_col = "Success Tutoring - Business name"
+
+    if access_level == "gpm" and allowed_locations:
+        if wm_loc_col in df.columns:
+            df = df[df[wm_loc_col].isin(allowed_locations)]
+
     return df
 def get_13m_filtered(df_wm, df_filtered):
     loc_col = "Success Tutoring - Business name"
@@ -1422,6 +1418,7 @@ def login_section():
                         st.session_state["user_name"] = name_fb
                         st.session_state["access_level"] = perms["access_level"]
                         st.session_state["gpm_filter"] = perms["gpm_filter"]
+                        st.session_state["allowed_locations"] = perms.get("allowed_locations", [])
                         log_access(email_input.lower().strip(), name_fb, "Login")
                         st.empty()
                         st.rerun()
