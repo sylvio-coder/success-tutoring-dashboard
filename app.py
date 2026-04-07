@@ -295,9 +295,27 @@ def get_allowed_tabs(user_email):
 
 def get_user_permissions(user_email):
     permissions = load_permissions()
-    return permissions.get(user_email.strip().lower(), {
+    perms = permissions.get(user_email.strip().lower(), {
         "tabs": [], "gpm_filter": "", "access_level": "gpm", "pin": ""
     })
+
+    # If GPM, derive their allowed locations from Vlookup sheet automatically
+    if perms.get("access_level") == "gpm":
+        gpm_name = perms.get("gpm_filter", "").strip()
+        if gpm_name:
+            try:
+                vl = load_vlookup()
+                allowed_locs = vl[
+                    (vl["GPM"] == gpm_name) &
+                    (vl["Stage"] != "Leasing")
+                ]["Location"].tolist()
+                perms["allowed_locations"] = allowed_locs
+            except Exception:
+                perms["allowed_locations"] = []
+        else:
+            perms["allowed_locations"] = []
+
+    return perms
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def churn_rate(cancelled, active):
@@ -1349,6 +1367,7 @@ def login_section():
                         st.session_state["user_name"] = name
                         st.session_state["access_level"] = perms["access_level"]
                         st.session_state["gpm_filter"] = perms["gpm_filter"]
+                        st.session_state["allowed_locations"] = perms.get("allowed_locations", [])
                         log_access(email, name, "Login")
                         st.rerun()
                     else:
