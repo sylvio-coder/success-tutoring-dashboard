@@ -161,11 +161,11 @@ st.markdown(f"""
     }}
     hr {{ border-color: {BI_BORDER}; margin: 12px 0; }}
     .stDataFrame {{ border: 1px solid {BI_BORDER}; border-radius: 2px; }}
-    div[data-baseweb="select"] label {{ color: white !important; }}
-    div[data-baseweb="select"] p {{ color: white !important; }}
-    div[data-testid="stSelectbox"] label {{ color: white !important; }}
-    div[data-testid="stSelectbox"] p {{ color: white !important; }}
-    div[data-testid="stSelectbox"] [data-testid="stWidgetLabel"] * {{ color: white !important; }}
+        div[data-baseweb="select"] label,
+    div[data-testid="stSelectbox"] label,
+    div[data-testid="stSelectbox"] [data-testid="stWidgetLabel"] * {
+        color: white !important;
+    }
     div[data-testid="stCheckbox"] label {{ color: white !important; }}
     div[data-testid="stCheckbox"] label p {{ color: white !important; }}
     div[data-testid="stCheckbox"] span {{ color: white !important; }}
@@ -175,21 +175,58 @@ st.markdown(f"""
     .stMarkdown p {{ color: white !important; }}
     .stMarkdown {{ color: white !important; }}
     summary {{ color: white !important; }}
-    details[data-testid="stExpander"] [data-baseweb="select"] > div {{ background-color: #1a2744 !important; color: white !important; }}
-    details[data-testid="stExpander"] [data-baseweb="select"] > div > div {{ background-color: #1a2744 !important; color: white !important; }}
-    details[data-testid="stExpander"] [data-baseweb="select"] span {{ color: white !important; background-color: #1a2744 !important; }}
-    details[data-testid="stExpander"] [data-baseweb="select"] div {{ background-color: #1a2744 !important; color: white !important; }}
-    details[data-testid="stExpander"] [data-baseweb="select"] {{ background-color: #1a2744 !important; }}
-.stSelectbox > div > div {{ background-color: #1a2744 !important; color: white !important; }}
-    .stSelectbox div[data-baseweb="select"] {{ background-color: #1a2744 !important; }}
-.stSelectbox > div > div {{ background-color: #1a2744 !important; color: white !important; }}
-    .stSelectbox div[data-baseweb="select"] {{ background-color: #1a2744 !important; }}
-[data-baseweb="select"] > div {{ background-color: #1a2744 !important; }}
-    [data-baseweb="select"] > div > div {{ background-color: #1a2744 !important; color: white !important; }}
-    [data-baseweb="input"] {{ background-color: #1a2744 !important; }}
-    input {{ background-color: #1a2744 !important; color: white !important; }}
-    [class*="ValueContainer"] {{ background-color: #1a2744 !important; }}
-    [class*="control"] {{ background-color: #1a2744 !important; border-color: #2d3748 !important; }}
+
+    /* === SELECTBOX DARK THEME FIX (Streamlit 1.55) === */
+    .stSelectbox div[data-baseweb="select"],
+    [data-baseweb="select"] > div,
+    .stSelectbox > div > div > div,
+    div[data-baseweb="select"] > div:first-child {
+        background-color: #1a2744 !important;
+        color: white !important;
+        border-color: #2d3748 !important;
+    }
+
+    /* Value container & selected text */
+    div[data-baseweb="select"] [class*="ValueContainer"],
+    div[data-baseweb="select"] span[class*="SingleValue"],
+    .stSelectbox [class*="control"] {
+        background-color: #1a2744 !important;
+        color: white !important;
+    }
+
+    /* Dropdown menu (opened list) */
+    div[data-baseweb="select"] ul,
+    div[role="listbox"],
+    div[data-baseweb="popover"] div[role="listbox"] {
+        background-color: #1a2744 !important;
+        color: white !important;
+    }
+
+    /* Dropdown items */
+    div[role="listbox"] li,
+    div[data-baseweb="select"] li {
+        background-color: #1a2744 !important;
+        color: white !important;
+    }
+
+    div[role="listbox"] li:hover,
+    div[data-baseweb="select"] li:hover {
+        background-color: #23395d !important;
+        color: white !important;
+    }
+
+    /* Inside expanders */
+    details[data-testid="stExpander"] [data-baseweb="select"] * {
+        background-color: #1a2744 !important;
+        color: white !important;
+    }
+
+    /* General input fallback */
+    [data-baseweb="input"] input,
+    input[type="text"], input[type="password"] {
+        background-color: #1a2744 !important;
+        color: white !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
