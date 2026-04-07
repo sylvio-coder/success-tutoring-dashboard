@@ -1515,7 +1515,7 @@ with st.spinner("Loading data..."):
 
 if df_wm.empty:
     st.warning("Weekly Membership sheet is empty."); st.stop()
-
+df_wm = apply_gpm_filter(df_wm)
 if selected_report=="1 · Campus Locations":           report_locations(df_wm)
 elif selected_report=="2 · Membership":               report_membership(df_wm)
 elif selected_report=="3 · Membership by Age":        report_age_combined(df_wm)
