@@ -1531,6 +1531,16 @@ with st.spinner("Loading data..."):
 
 if df_wm.empty:
     st.warning("Weekly Membership sheet is empty."); st.stop()
+    # DEBUG - remove after fixing
+st.write("Access level:", st.session_state.get("access_level"))
+st.write("Allowed locations:", st.session_state.get("allowed_locations"))
+st.write("GPM filter:", st.session_state.get("gpm_filter"))
+st.write("df_wm columns:", df_wm.columns.tolist())
+st.write("df_wm rows before filter:", len(df_wm))
+
+df_wm = apply_gpm_filter(df_wm)
+
+st.write("df_wm rows after filter:", len(df_wm))
 df_wm = apply_gpm_filter(df_wm)
 if selected_report=="1 · Campus Locations":           report_locations(df_wm)
 elif selected_report=="2 · Membership":               report_membership(df_wm)
