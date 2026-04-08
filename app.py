@@ -294,6 +294,7 @@ def get_allowed_tabs(user_email):
     return entry["tabs"]
 
 def get_user_permissions(user_email):
+    st.cache_data.clear()
     permissions = load_permissions()
     perms = permissions.get(user_email.strip().lower(), {
         "tabs": [], "gpm_filter": "", "access_level": "gpm", "pin": ""
@@ -1360,6 +1361,7 @@ def login_section():
                     user_info = user_resp.json()
                     email = user_info.get("email","").lower().strip()
                     name = user_info.get("name", email.split("@")[0].title())
+                    st.cache_data.clear()
                     perms = get_user_permissions(email)
                     if perms["tabs"]:
                         st.query_params.clear()
