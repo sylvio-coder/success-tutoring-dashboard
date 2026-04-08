@@ -311,7 +311,7 @@ def get_user_permissions(user_email):
                 allowed_locs = vl[
                     (vl["GPM"] == gpm_name) &
                     (vl["Stage"] != "Leasing")
-                ]["Location"].tolist()
+                ]["Success Tutoring - Business name"].tolist()
                 st.write("Allowed locs found:", allowed_locs)
                 perms["allowed_locations"] = allowed_locs
             except Exception as ex:
