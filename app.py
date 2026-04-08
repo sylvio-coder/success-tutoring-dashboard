@@ -1308,32 +1308,32 @@ st.dataframe(
 )
 st.markdown("<br>", unsafe_allow_html=True)
 
-col1, col2 = st.columns(2)
-with col1:
+    col1, col2 = st.columns(2)
+    with col1:
     show_ranked(loc_latest, "Active",          "🥇 Top 5 — Active Members",        n=5, ascending=False)
     show_ranked(loc_latest, "New",             "🥇 Top 5 — New Members",           n=5, ascending=False)
     show_ranked(loc_latest, "Net Growth Rate %","🥇 Top 5 — Net Growth Rate %",    n=5, ascending=False)
     show_all(loc_latest[loc_latest["Active"] < 50].sort_values("Active"),
                  "⚠️ All Locations — Active Members Below 50")
 
-with col2:
+    with col2:
     show_ranked(loc_latest, "Churn Rate %",    "🔴 Top 5 — Highest Churn Rate %",  n=5, ascending=False)
     show_ranked(loc_latest, "Net Growth Rate %","🔴 Bottom 5 — Lowest Net Growth Rate %",      n=5, ascending=True)
     show_outliers(loc_latest, "New",            "📊 Outliers — New Members (2σ)")
     show_outliers(loc_latest, "Net Growth Rate %","📊 Outliers — Net Growth Rate % (2σ)")
     show_outliers(loc_latest, "Churn Rate %",   "📊 Outliers — Churn Rate % (2σ)")
 
-if not ANTHROPIC_KEY:
-    st.warning("No Anthropic API key found — AI narrative unavailable.")
-    return
+    if not ANTHROPIC_KEY:
+        st.warning("No Anthropic API key found — AI narrative unavailable.")
+        return
 
-if st.button("🤖 Generate Claude AI Narrative", use_container_width=True):
-    def tbl(df_sub, sort_col, n=5, asc=False):
+    if st.button("🤖 Generate Claude AI Narrative", use_container_width=True):
+        def tbl(df_sub, sort_col, n=5, asc=False):
         cols = [c for c in [loc_col,"Active","New","Churn Rate %","Net Growth Rate %","Stage"] if c in df_sub.columns]
         return df_sub.sort_values(sort_col, ascending=asc).head(n)[cols].rename(
             columns={loc_col:"Location"}).to_string(index=False)
 
-    prompt = f"""You are a sharp business analyst for Success Tutoring, an Australian tutoring franchise.
+        prompt = f"""You are a sharp business analyst for Success Tutoring, an Australian tutoring franchise.
 Use Australian English. Data is for the latest week only: {latest_date.strftime('%d %b %Y')}.
 
 NETWORK SUMMARY:
