@@ -300,7 +300,7 @@ def get_user_permissions(user_email):
     })
 
     # If GPM, derive their allowed locations from Vlookup sheet automatically
-  if perms.get("access_level") == "gpm":
+    if perms.get("access_level") == "gpm":
         gpm_name = perms.get("gpm_filter", "").strip()
         if gpm_name:
             try:
