@@ -1354,8 +1354,8 @@ Provide a concise narrative covering:
         client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
         with st.spinner("🤖 Claude is analysing..."):
             message = client.messages.create(
-            model="claude-sonnet-4-20250514", max_tokens=1500,
-            messages=[{"role":"user","content":prompt}])
+                model="claude-sonnet-4-20250514", max_tokens=1500,
+                messages=[{"role":"user","content":prompt}])
         st.markdown(message.content[0].text)
 
 # ══════════════════════════════════════════════════════════════════════════════
