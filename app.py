@@ -306,8 +306,8 @@ def get_user_permissions(user_email):
         if gpm_name:
             try:
                 vl = load_vlookup()
-                    (vl["GPM"] == gpm_name) &
-                    (vl["Stage"] != "Leasing")
+                (vl["GPM"] == gpm_name) &
+                (vl["Stage"] != "Leasing")
                 ]["Success Tutoring - Business name"].tolist()
                 st.write("Allowed locs found:", allowed_locs)
                 perms["allowed_locations"] = allowed_locs
