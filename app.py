@@ -300,31 +300,22 @@ def get_user_permissions(user_email):
     })
 
     # If GPM, derive their allowed locations from Vlookup sheet automatically
-    if perms.get("access_level") == "gpm":
+  if perms.get("access_level") == "gpm":
         gpm_name = perms.get("gpm_filter", "").strip()
         if gpm_name:
             try:
                 vl = load_vlookup()
-                vl = load_vlookup()
-    st.write("Vlookup columns:", vl.columns.tolist())
-    st.write("GPM name being searched:", repr(gpm_name))
-    st.write("GPM values in Vlookup:", vl["GPM"].unique().tolist() if "GPM" in vl.columns else "NO GPM COLUMN")
-    allowed_locs = vl[
-        (vl["GPM"] == gpm_name) &
-        (vl["Stage"] != "Leasing")
-    ]["Location"].tolist()
-    st.write("Allowed locs found:", allowed_locs)
-    perms["allowed_locations"] = allowed_locs
-except Exception as ex:
-    st.write("ERROR in get_user_permissions:", ex)
-    perms["allowed_locations"] = []
-
+                st.write("Vlookup columns:", vl.columns.tolist())
+                st.write("GPM name being searched:", repr(gpm_name))
+                st.write("GPM values in Vlookup:", vl["GPM"].unique().tolist() if "GPM" in vl.columns else "NO GPM COLUMN")
                 allowed_locs = vl[
                     (vl["GPM"] == gpm_name) &
                     (vl["Stage"] != "Leasing")
                 ]["Location"].tolist()
+                st.write("Allowed locs found:", allowed_locs)
                 perms["allowed_locations"] = allowed_locs
-            except Exception:
+            except Exception as ex:
+                st.write("ERROR in get_user_permissions:", ex)
                 perms["allowed_locations"] = []
         else:
             perms["allowed_locations"] = []
