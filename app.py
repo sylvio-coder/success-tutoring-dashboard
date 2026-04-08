@@ -1351,6 +1351,7 @@ Provide a concise narrative covering:
 ## ⚠️ Locations Needing Attention
 ## 🔴 Critical — Below 50 Members
 ## 💡 Leadership Recommendations — 4 actions this week"""
+
         client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
         with st.spinner("🤖 Claude is analysing..."):
             message = client.messages.create(
