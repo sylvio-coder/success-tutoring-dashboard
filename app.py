@@ -1261,34 +1261,79 @@ def report_claude_outliers(df_wm):
                 f'Avg NGR: <b>{loc_latest["Net Growth Rate %"].mean():.1f}%</b> &nbsp;|&nbsp; '
                 f'Avg Churn: <b>{loc_latest["Churn Rate %"].mean():.1f}%</b>'
                 f'</div>', unsafe_allow_html=True)
+# ── Weekly Summary Table ───────────────────────────────────────────────
+st.markdown('<div class="section-header">📅 Weekly Network Summary — All Weeks</div>',
+            unsafe_allow_html=True)
+weekly_summary = []
+for dt in sorted(df["Date"].unique(), reverse=True):
+    week_df = df[df["Date"] == dt]
+    for c in ["# Active members","# New members","# Cancelled members","# Suspended members"]:
+        if c in week_df.columns:
+            week_df = week_df.copy()
+            week_df[c] = pd.to_numeric(week_df[c], errors="coerce").fillna(0)
+    active = week_df["# Active members"].sum()
+    new = week_df["# New members"].sum()
+    cancelled = week_df["# Cancelled members"].sum()
+    suspended = week_df["# Suspended members"].sum()
+    locations = week_df[loc_col].nunique()
+    avg_active = round(active / locations, 1) if locations > 0 else 0
+    churn = round(cancelled / active * 100, 1) if active > 0 else 0.0
+    ngr = round((new - cancelled) / active * 100, 1) if active > 0 else 0.0
+    weekly_summary.append({
+        "Week": dt.strftime("%d %b %Y"),
+        "Locations": locations,
+        "Total Active": int(active),
+        "Avg Active": avg_active,
+        "New": int(new),
+        "Cancelled": int(cancelled),
+        "Suspended": int(suspended),
+        "Avg NGR %": ngr,
+        "Avg Churn %": churn,
+    })
 
-    col1, col2 = st.columns(2)
+df_summary = pd.DataFrame(weekly_summary)
+st.dataframe(
+    df_summary.style.set_properties(**{
+        'background-color': '#fffde7',
+        'color': '#1a1a2e',
+        'border': '1px solid #f0e68c',
+        'font-size': '0.85em',
+    }).format({
+        "Avg Active": "{:.1f}",
+        "Avg NGR %": "{:.1f}%",
+        "Avg Churn %": "{:.1f}%",
+    }),
+    use_container_width=True,
+    hide_index=True,
+)
+st.markdown("<br>", unsafe_allow_html=True)
 
-    with col1:
-        show_ranked(loc_latest, "Active",          "🥇 Top 5 — Active Members",        n=5, ascending=False)
-        show_ranked(loc_latest, "New",             "🥇 Top 5 — New Members",           n=5, ascending=False)
-        show_ranked(loc_latest, "Net Growth Rate %","🥇 Top 5 — Net Growth Rate %",    n=5, ascending=False)
-        show_all(loc_latest[loc_latest["Active"] < 50].sort_values("Active"),
+col1, col2 = st.columns(2)
+with col1:
+    show_ranked(loc_latest, "Active",          "🥇 Top 5 — Active Members",        n=5, ascending=False)
+    show_ranked(loc_latest, "New",             "🥇 Top 5 — New Members",           n=5, ascending=False)
+    show_ranked(loc_latest, "Net Growth Rate %","🥇 Top 5 — Net Growth Rate %",    n=5, ascending=False)
+    show_all(loc_latest[loc_latest["Active"] < 50].sort_values("Active"),
                  "⚠️ All Locations — Active Members Below 50")
 
-    with col2:
-        show_ranked(loc_latest, "Churn Rate %",    "🔴 Top 5 — Highest Churn Rate %",  n=5, ascending=False)
-        show_ranked(loc_latest, "Net Growth Rate %","🔴 Bottom 5 — Lowest Net Growth Rate %",      n=5, ascending=True)
-        show_outliers(loc_latest, "New",            "📊 Outliers — New Members (2σ)")
-        show_outliers(loc_latest, "Net Growth Rate %","📊 Outliers — Net Growth Rate % (2σ)")
-        show_outliers(loc_latest, "Churn Rate %",   "📊 Outliers — Churn Rate % (2σ)")
+with col2:
+    show_ranked(loc_latest, "Churn Rate %",    "🔴 Top 5 — Highest Churn Rate %",  n=5, ascending=False)
+    show_ranked(loc_latest, "Net Growth Rate %","🔴 Bottom 5 — Lowest Net Growth Rate %",      n=5, ascending=True)
+    show_outliers(loc_latest, "New",            "📊 Outliers — New Members (2σ)")
+    show_outliers(loc_latest, "Net Growth Rate %","📊 Outliers — Net Growth Rate % (2σ)")
+    show_outliers(loc_latest, "Churn Rate %",   "📊 Outliers — Churn Rate % (2σ)")
 
-    if not ANTHROPIC_KEY:
-        st.warning("No Anthropic API key found — AI narrative unavailable.")
-        return
+if not ANTHROPIC_KEY:
+    st.warning("No Anthropic API key found — AI narrative unavailable.")
+    return
 
-    if st.button("🤖 Generate Claude AI Narrative", use_container_width=True):
-        def tbl(df_sub, sort_col, n=5, asc=False):
-            cols = [c for c in [loc_col,"Active","New","Churn Rate %","Net Growth Rate %","Stage"] if c in df_sub.columns]
-            return df_sub.sort_values(sort_col, ascending=asc).head(n)[cols].rename(
-                columns={loc_col:"Location"}).to_string(index=False)
+if st.button("🤖 Generate Claude AI Narrative", use_container_width=True):
+    def tbl(df_sub, sort_col, n=5, asc=False):
+        cols = [c for c in [loc_col,"Active","New","Churn Rate %","Net Growth Rate %","Stage"] if c in df_sub.columns]
+        return df_sub.sort_values(sort_col, ascending=asc).head(n)[cols].rename(
+            columns={loc_col:"Location"}).to_string(index=False)
 
-        prompt = f"""You are a sharp business analyst for Success Tutoring, an Australian tutoring franchise.
+    prompt = f"""You are a sharp business analyst for Success Tutoring, an Australian tutoring franchise.
 Use Australian English. Data is for the latest week only: {latest_date.strftime('%d %b %Y')}.
 
 NETWORK SUMMARY:
