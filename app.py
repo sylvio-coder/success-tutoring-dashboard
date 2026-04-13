@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
-ANTHROPIC_KEY = os.getenv("ANTHROPIC_API_KEY")
+ANTHROPIC_KEY = st.secrets.get("ANTHROPIC_API_KEY", "") or os.getenv("ANTHROPIC_API_KEY", "")
 SERVICE_ACCOUNT_FILE = "service_account.json"
 SCOPES_SHEETS = [
     "https://www.googleapis.com/auth/spreadsheets.readonly",
