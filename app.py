@@ -1274,11 +1274,13 @@ def report_claude_outliers(df_wm):
         avg_active = round(active / locations, 1) if locations > 0 else 0
         churn = round(cancelled / active * 100, 1) if active > 0 else 0.0
         ngr = round((new - cancelled) / active * 100, 1) if active > 0 else 0.0
+        median_active = round(pd.to_numeric(week_df["# Active members"], errors="coerce").fillna(0).median(), 1)
         weekly_summary.append({
             "Week": dt.strftime("%d %b %Y"),
             "Locations": int(locations),
             "Total Active": int(active),
             "Avg Active": avg_active,
+            "Median Active": median_active,
             "New": int(new),
             "Cancelled": int(cancelled),
             "Suspended": int(suspended),
@@ -1293,6 +1295,7 @@ def report_claude_outliers(df_wm):
             "border": "1px solid #f0e68c",
         }).format({
             "Avg Active": "{:.1f}",
+            "Median Active": "{:.1f}",
             "Avg NGR %": "{:.1f}%",
             "Avg Churn %": "{:.1f}%",
         }),
