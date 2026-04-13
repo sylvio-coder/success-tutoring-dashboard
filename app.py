@@ -1330,24 +1330,109 @@ def report_claude_outliers(df_wm):
             return df_sub.sort_values(sort_col, ascending=asc).head(n)[cols].rename(
                 columns={loc_col:"Location"}).to_string(index=False)
 
+        # Build last 6 weeks of data
+        last_6_dates = sorted(df["Date"].unique())[-6:]
+        df_6w = df[df["Date"].isin(last_6_dates)].copy()
+
+        # Weekly network summary for last 6 weeks
+        weekly_rows = []
+        for dt in sorted(last_6_dates):
+            wdf = df_6w[df_6w["Date"] == dt].copy()
+            active = pd.to_numeric(wdf["# Active members"], errors="coerce").fillna(0).sum()
+            new = pd.to_numeric(wdf["# New members"], errors="coerce").fillna(0).sum()
+            cancelled = pd.to_numeric(wdf["# Cancelled members"], errors="coerce").fillna(0).sum()
+            locs = wdf[loc_col].nunique()
+            churn = round(cancelled / active * 100, 1) if active > 0 else 0
+            ngr = round((new - cancelled) / active * 100, 1) if active > 0 else 0
+            weekly_rows.append(f"{dt.strftime('%d %b %Y')} | Locations: {locs} | Active: {int(active)} | New: {int(new)} | Cancelled: {int(cancelled)} | NGR: {ngr}% | Churn: {churn}%")
+        weekly_trend_str = "\n".join(weekly_rows)
+
+        # Location trends over last 6 weeks
+        loc_trend = df_6w.groupby([loc_col, "Date"]).agg(
+            Active=("# Active members","sum"),
+            New=("# New members","sum"),
+            Cancelled=("# Cancelled members","sum"),
+        ).reset_index()
+        loc_trend["NGR %"] = loc_trend.apply(
+            lambda r: round((r["New"] - r["Cancelled"]) / r["Active"] * 100, 1) if r["Active"] > 0 else 0, axis=1)
+
+        # Region trends over last 6 weeks
+        region_trend_str = ""
+        country_trend_str = ""
+        if "Region" in df_6w.columns and "Country" in df_6w.columns:
+            region_trend = df_6w.groupby(["Region", "Date"]).agg(
+                Active=("# Active members","sum"),
+                New=("# New members","sum"),
+                Cancelled=("# Cancelled members","sum"),
+            ).reset_index()
+            region_trend["NGR %"] = region_trend.apply(
+                lambda r: round((r["New"] - r["Cancelled"]) / r["Active"] * 100, 1) if r["Active"] > 0 else 0, axis=1)
+            region_summary = region_trend.groupby("Region").agg(
+                Avg_Active=("Active","mean"),
+                Avg_NGR=("NGR %","mean"),
+                Avg_New=("New","mean"),
+            ).round(1).reset_index()
+            region_trend_str = region_summary.to_string(index=False)
+
+            country_trend = df_6w.groupby(["Country", "Date"]).agg(
+                Active=("# Active members","sum"),
+                New=("# New members","sum"),
+                Cancelled=("# Cancelled members","sum"),
+            ).reset_index()
+            country_trend["NGR %"] = country_trend.apply(
+                lambda r: round((r["New"] - r["Cancelled"]) / r["Active"] * 100, 1) if r["Active"] > 0 else 0, axis=1)
+            country_summary = country_trend.groupby("Country").agg(
+                Avg_Active=("Active","mean"),
+                Avg_NGR=("NGR %","mean"),
+                Avg_New=("New","mean"),
+            ).round(1).reset_index()
+            country_trend_str = country_summary.to_string(index=False)
+
+        # Top/bottom performing locations over 6 weeks
+        loc_6w_summary = loc_trend.groupby(loc_col).agg(
+            Avg_Active=("Active","mean"),
+            Avg_NGR=("NGR %","mean"),
+            Avg_New=("New","mean"),
+        ).round(1).reset_index()
+        if "Stage" in loc_latest.columns:
+            loc_6w_summary = loc_6w_summary.merge(loc_latest[[loc_col,"Stage","Region","Country"]] if "Region" in loc_latest.columns else loc_latest[[loc_col,"Stage"]], on=loc_col, how="left")
+        top_locs = loc_6w_summary.sort_values("Avg_NGR", ascending=False).head(5).to_string(index=False)
+        bot_locs = loc_6w_summary.sort_values("Avg_NGR", ascending=True).head(5).to_string(index=False)
+
         prompt = f"""You are a sharp business analyst for Success Tutoring, an Australian tutoring franchise.
-Use Australian English. Data is for the latest week only: {latest_date.strftime('%d %b %Y')}.
+Use Australian English. Analyse TRENDS across the last 6 weeks of data ending {latest_date.strftime('%d %b %Y')}.
+Focus on movement and momentum — is performance improving, declining, or flat? Be specific with numbers.
 
-NETWORK SUMMARY:
-Locations: {len(loc_latest)} | Avg Active: {loc_latest['Active'].mean():.0f} | Avg New: {loc_latest['New'].mean():.1f} | Avg Churn: {loc_latest['Churn Rate %'].mean():.1f}% | Avg NGR: {loc_latest['Net Growth Rate %'].mean():.1f}%
+NETWORK TREND — LAST 6 WEEKS (newest last):
+{weekly_trend_str}
 
-TOP 5 ACTIVE: {tbl(loc_latest,'Active')}
-TOP 5 NEW: {tbl(loc_latest,'New')}
-TOP 5 NGR: {tbl(loc_latest,'Net Growth Rate %')}
-LOW ACTIVE (<50): {loc_latest[loc_latest['Active']<50][['Active','Stage']].to_string()}
-TOP 5 CHURN: {tbl(loc_latest,'Churn Rate %')}
-BOTTOM 5 NGR: {tbl(loc_latest,'Net Growth Rate %',asc=True)}
+TOP 5 LOCATIONS BY AVG NET GROWTH RATE % (6 weeks):
+{top_locs}
 
-Provide a concise narrative covering:
-## 🌟 Strong Performers
-## ⚠️ Locations Needing Attention
-## 🔴 Critical — Below 50 Members
-## 💡 Leadership Recommendations — 4 actions this week"""
+BOTTOM 5 LOCATIONS BY AVG NET GROWTH RATE % (6 weeks):
+{bot_locs}
+
+REGION SUMMARY (6 week averages):
+{region_trend_str}
+
+COUNTRY SUMMARY (6 week averages):
+{country_trend_str}
+
+Provide a trend-focused narrative with these exact sections:
+## 🌐 Overall Network Trend
+Summarise the 6-week trajectory. Is the network growing, declining or flat? Call out the most significant week-on-week movements.
+
+## 📍 Location Performance
+Highlight the top 3 overperforming and top 3 underperforming locations based on NGR % trend. Be specific about which locations are improving vs declining.
+
+## 🗺️ Region Performance
+Which regions are leading and which are lagging? Note any regions showing strong momentum or concerning decline.
+
+## 🌏 Country Performance
+Compare Australia, New Zealand and any other countries. Which is performing best and why?
+
+## 💡 Leadership Recommendations
+4 specific actions for this week based on the trend data. Be direct and actionable."""
 
         client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
         with st.spinner("🤖 Claude is analysing..."):
