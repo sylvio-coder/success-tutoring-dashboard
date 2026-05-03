@@ -1209,20 +1209,40 @@ def report_revenue(df_rv):
     st.markdown('<div class="report-subtitle">Source: Revenue — weekly revenue and session metrics by location</div>', unsafe_allow_html=True)
 
     df_rv = apply_gpm_filter(df_rv)
-
     loc_col = "Success Tutoring - Business name"
-    df = report_filters(df_rv.copy(), key_prefix="r10rv", show_date=False,
-                        show_country=True, show_state=True, show_stage=True,
-                        show_gpm=True, show_status=True)
+
+    # ── Filters on one line ───────────────────────────────────────────────
+    f1, f2, f3, f4, f5, f6 = st.columns(6)
+    all_countries = ["All"] + sorted(df_rv["Country"].dropna().unique().tolist()) if "Country" in df_rv.columns else ["All"]
+    all_states    = ["All"] + sorted(df_rv["Region"].dropna().unique().tolist()) if "Region" in df_rv.columns else ["All"]
+    all_stages    = ["All"] + sorted(df_rv["Stage"].dropna().unique().tolist()) if "Stage" in df_rv.columns else ["All"]
+    all_gpms      = ["All"] + sorted(df_rv["GPM"].dropna().unique().tolist()) if "GPM" in df_rv.columns else ["All"]
+    all_statuses  = ["All"] + sorted(df_rv["Status"].dropna().unique().tolist()) if "Status" in df_rv.columns else ["All"]
+    all_locs      = ["All Locations"] + sorted(df_rv[loc_col].dropna().unique().tolist()) if loc_col in df_rv.columns else ["All Locations"]
+
+    with f1: sel_country = st.selectbox("🌍 Country", all_countries, key="rv_country")
+    with f2: sel_state   = st.selectbox("📍 State", all_states, key="rv_state")
+    with f3: sel_stage   = st.selectbox("🏫 Stage", all_stages, key="rv_stage")
+    with f4: sel_gpm     = st.selectbox("👤 GPM", all_gpms, key="rv_gpm")
+    with f5: sel_status  = st.selectbox("🔵 Status", all_statuses, key="rv_status")
+    with f6: sel_loc     = st.selectbox("📌 Location", all_locs, key="rv_loc")
+
+    df = df_rv.copy()
+    if sel_country != "All" and "Country" in df.columns:    df = df[df["Country"] == sel_country]
+    if sel_state   != "All" and "Region" in df.columns:     df = df[df["Region"] == sel_state]
+    if sel_stage   != "All" and "Stage" in df.columns:      df = df[df["Stage"] == sel_stage]
+    if sel_gpm     != "All" and "GPM" in df.columns:        df = df[df["GPM"] == sel_gpm]
+    if sel_status  != "All" and "Status" in df.columns:     df = df[df["Status"] == sel_status]
+    if sel_loc     != "All Locations" and loc_col in df.columns: df = df[df[loc_col] == sel_loc]
 
     if df.empty:
-        st.warning("No revenue data available."); return
+        st.warning("No revenue data available for selected filters."); return
 
     all_dates = sorted(df["Date"].dropna().unique())
     if not all_dates:
         st.warning("No dates found in Revenue data."); return
 
-    # Default to latest 2 weeks
+    # ── Week selector ─────────────────────────────────────────────────────
     default_dates = all_dates[-2:] if len(all_dates) >= 2 else all_dates
     with st.expander("📅 Select Weeks to Display", expanded=True):
         st.markdown('<p style="color:#718096;font-size:0.85em">Newest first. Default is latest 2 weeks.</p>', unsafe_allow_html=True)
@@ -1239,7 +1259,7 @@ def report_revenue(df_rv):
 
     df_filtered = df[df["Date"].isin(selected_dates)].copy()
     latest_date = max(selected_dates)
-    prev_dates = [d for d in selected_dates if d != latest_date]
+    prev_dates  = [d for d in selected_dates if d != latest_date]
 
     metrics = [
         ("Gross Revenue", "$"),
@@ -1250,25 +1270,25 @@ def report_revenue(df_rv):
         ("Sessions per Student", ""),
         ("Student per Session", ""),
     ]
+    metric_names = [m for m, _ in metrics if m in df.columns]
 
     # ── KPI Cards ─────────────────────────────────────────────────────────
     st.markdown('<div class="section-header">📊 Latest Week vs Prior Week</div>', unsafe_allow_html=True)
     df_latest = df[df["Date"] == latest_date]
-    df_prior = df[df["Date"] == max(prev_dates)] if prev_dates else pd.DataFrame()
+    df_prior  = df[df["Date"] == max(prev_dates)] if prev_dates else pd.DataFrame()
 
-    cols = st.columns(4)
+    kpi_cols = st.columns(4)
     for i, (metric, prefix) in enumerate(metrics):
         if metric not in df_latest.columns: continue
         val = pd.to_numeric(df_latest[metric], errors="coerce").sum()
-        with cols[i % 4]:
+        with kpi_cols[i % 4]:
             if not df_prior.empty and metric in df_prior.columns:
-                prev_val = pd.to_numeric(df_prior[metric], errors="coerce").sum()
-                delta = val - prev_val
-                delta_str = f"▲ {prefix}{delta:,.1f} vs prev week" if delta >= 0 else f"▼ {prefix}{abs(delta):,.1f} vs prev week"
+                prev_val   = pd.to_numeric(df_prior[metric], errors="coerce").sum()
+                delta      = val - prev_val
+                delta_str  = f"▲ {prefix}{abs(delta):,.1f} vs prev week" if delta >= 0 else f"▼ {prefix}{abs(delta):,.1f} vs prev week"
                 delta_color = BI_ACCENT if delta >= 0 else BI_RED
             else:
-                delta_str = ""
-                delta_color = BI_SUBTEXT
+                delta_str, delta_color = "", BI_SUBTEXT
             st.markdown(f"""
             <div style="background:{BI_CARD};border:1px solid {BI_BORDER};border-radius:8px;padding:16px;margin-bottom:12px">
                 <div style="color:{BI_SUBTEXT};font-size:0.72em;font-weight:700;text-transform:uppercase;letter-spacing:0.8px">{metric}</div>
@@ -1279,61 +1299,82 @@ def report_revenue(df_rv):
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── Charts ────────────────────────────────────────────────────────────
-    chart_metrics = [
-        ("Gross Revenue", "$", "💰 Gross Revenue"),
-        ("# Active Students", "", "👥 Active Students"),
-        ("Total Sessions", "", "📚 Total Sessions"),
-        ("Revenue per Session", "$", "💵 Revenue per Session"),
-        ("Student per Session", "", "🎓 Students per Session"),
-        ("Revenue per Student", "$", "💳 Revenue per Student"),
-        ("Sessions per Student", "", "📖 Sessions per Student"),
-    ]
+    # ── Location Bar Chart ────────────────────────────────────────────────
+    st.markdown('<div class="section-header">📍 Performance by Location</div>', unsafe_allow_html=True)
+    bc1, bc2 = st.columns([3, 1])
+    with bc1:
+        bar_metric = st.selectbox("Select metric:", metric_names, index=0, key="rv_bar_metric")
+    with bc2:
+        bar_scope = st.selectbox("Show:", ["Latest week only", "All selected weeks combined"], key="rv_bar_scope")
 
-    for metric, prefix, title in chart_metrics:
-        if metric not in df_filtered.columns: continue
-        st.markdown(f'<div class="section-header">{title}</div>', unsafe_allow_html=True)
-        trend = df_filtered.groupby("Date")[metric].sum().reset_index().sort_values("Date")
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=trend["Date"].dt.strftime("%d %b %Y"),
-            y=trend[metric],
-            mode="lines+markers",
-            line=dict(color=BI_ACCENT, width=3),
-            marker=dict(size=8, color=BI_ACCENT),
-            fill="tozeroy",
-            fillcolor=f"rgba(1,184,170,0.08)",
-        ))
-        fig.update_layout(
-            plot_bgcolor=BI_CARD, paper_bgcolor=BI_CARD,
-            font=dict(color=BI_TEXT),
-            xaxis=dict(showgrid=False, color=BI_SUBTEXT),
-            yaxis=dict(showgrid=True, gridcolor=BI_BORDER, color=BI_SUBTEXT,
-                      tickprefix=prefix),
-            margin=dict(l=40, r=20, t=20, b=40),
-            height=280,
-        )
-        st.plotly_chart(fig, use_container_width=True)
+    df_bar = df[df["Date"] == latest_date] if bar_scope == "Latest week only" else df_filtered
+    bar_data = df_bar.groupby(loc_col)[bar_metric].sum().reset_index()
+    bar_data = bar_data.sort_values(bar_metric, ascending=False)
+    prefix_bar = next((p for m, p in metrics if m == bar_metric), "")
+
+    fig_bar = go.Figure(go.Bar(
+        x=bar_data[loc_col],
+        y=bar_data[bar_metric],
+        marker_color=BI_ACCENT,
+        text=[f"{prefix_bar}{v:,.1f}" for v in bar_data[bar_metric]],
+        textposition="outside",
+    ))
+    fig_bar.update_layout(
+        plot_bgcolor=BI_CARD, paper_bgcolor=BI_CARD,
+        font=dict(color=BI_TEXT),
+        xaxis=dict(showgrid=False, color=BI_SUBTEXT, tickangle=-45),
+        yaxis=dict(showgrid=True, gridcolor=BI_BORDER, color=BI_SUBTEXT, tickprefix=prefix_bar),
+        margin=dict(l=40, r=20, t=30, b=120),
+        height=400,
+    )
+    st.plotly_chart(fig_bar, use_container_width=True)
+
+    # ── 13 Month Trend ────────────────────────────────────────────────────
+    st.markdown('<div class="section-header">📈 13-Month Trend</div>', unsafe_allow_html=True)
+    trend_metric = st.selectbox("Select metric for trend:", metric_names, index=0, key="rv_trend_metric")
+
+    cutoff_13m = df["Date"].max() - pd.DateOffset(months=13)
+    df_trend   = df[df["Date"] >= cutoff_13m].copy()
+    trend_data = df_trend.groupby("Date")[trend_metric].sum().reset_index().sort_values("Date")
+    prefix_trend = next((p for m, p in metrics if m == trend_metric), "")
+
+    fig_trend = go.Figure()
+    fig_trend.add_trace(go.Scatter(
+        x=trend_data["Date"].dt.strftime("%d %b %Y"),
+        y=trend_data[trend_metric],
+        mode="lines+markers",
+        line=dict(color=BI_ACCENT, width=3),
+        marker=dict(size=8, color=BI_ACCENT),
+        fill="tozeroy",
+        fillcolor="rgba(1,184,170,0.08)",
+    ))
+    fig_trend.update_layout(
+        plot_bgcolor=BI_CARD, paper_bgcolor=BI_CARD,
+        font=dict(color=BI_TEXT),
+        xaxis=dict(showgrid=False, color=BI_SUBTEXT, tickangle=-45),
+        yaxis=dict(showgrid=True, gridcolor=BI_BORDER, color=BI_SUBTEXT, tickprefix=prefix_trend),
+        margin=dict(l=40, r=20, t=20, b=80),
+        height=320,
+    )
+    st.plotly_chart(fig_trend, use_container_width=True)
 
     # ── Table ─────────────────────────────────────────────────────────────
     st.markdown('<div class="section-header">📋 All Metrics by Location</div>', unsafe_allow_html=True)
-    table_cols = [loc_col] + [m for m, _ in metrics if m in df_filtered.columns]
-    df_table = df_filtered.groupby(loc_col)[
-        [m for m, _ in metrics if m in df_filtered.columns]
-    ].sum().reset_index()
+    df_table = df_filtered.groupby(loc_col)[metric_names].sum().reset_index()
     df_table = df_table.rename(columns={loc_col: "Location"})
     df_table = df_table.sort_values("Gross Revenue", ascending=False).reset_index(drop=True)
 
+    fmt = {
+        "Gross Revenue": "${:,.0f}",
+        "# Active Students": "{:,.0f}",
+        "Total Sessions": "{:,.0f}",
+        "Revenue per Session": "${:,.2f}",
+        "Revenue per Student": "${:,.2f}",
+        "Sessions per Student": "{:,.2f}",
+        "Student per Session": "{:,.2f}",
+    }
     st.dataframe(
-        df_table.style.format({
-            "Gross Revenue": "${:,.0f}",
-            "# Active Students": "{:,.0f}",
-            "Total Sessions": "{:,.0f}",
-            "Revenue per Session": "${:,.2f}",
-            "Revenue per Student": "${:,.2f}",
-            "Sessions per Student": "{:,.2f}",
-            "Student per Session": "{:,.2f}",
-        }),
+        df_table.style.format({k: v for k, v in fmt.items() if k in df_table.columns}),
         use_container_width=True,
         hide_index=True,
     )
