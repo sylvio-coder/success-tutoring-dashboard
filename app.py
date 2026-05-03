@@ -226,6 +226,23 @@ def load_weekly_membership():
             df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
     return df
 
+
+@st.cache_data(ttl=300)
+def load_revenue():
+    try:
+        df = load_sheet_data("Revenue")
+        df = df.rename(columns={"Location": "Success Tutoring - Business name"})
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+        for c in ["# Active Students","Total Sessions","Gross Revenue",
+                  "Revenue per Session","Revenue per Student",
+                  "Sessions per Student","Student per Session"]:
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c].astype(str).str.replace("[$,]","",regex=True), errors="coerce").fillna(0)
+        return df
+    except Exception as e:
+        st.error(f"Could not load Revenue sheet: {e}")
+        return pd.DataFrame()
+
 @st.cache_data(ttl=300)
 def load_vlookup():
     try:
