@@ -1597,7 +1597,8 @@ REPORTS=[
     "7 · Membership Churn",
     "8 · Net Growth Rate %",
     "9 · Onboarding Progress",
-    "10 · AI Outlier Analysis",
+    "10 · Revenue",
+    "11 · AI Outlier Analysis",
 ]
 
 with st.sidebar:
@@ -1692,4 +1693,5 @@ elif selected_report=="6 · Cancelled Members":
 elif selected_report=="7 · Membership Churn":         report_churn_combined(df_wm)
 elif selected_report=="8 · Net Growth Rate %":          report_net_growth(df_wm)
 elif selected_report=="9 · Onboarding Progress":      report_onboarding(df_wm)
-elif selected_report=="10 · AI Outlier Analysis":     report_claude_outliers(df_wm)
+elif selected_report=="10 · Revenue":                 report_revenue(df_rv)
+elif selected_report=="11 · AI Outlier Analysis":     report_claude_outliers(df_wm)
