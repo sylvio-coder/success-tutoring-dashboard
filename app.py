@@ -1674,6 +1674,10 @@ with st.spinner("Loading data..."):
         df_wm=load_weekly_membership()
     except Exception as e:
         st.error(f"Could not load Weekly Membership: {e}"); st.stop()
+    try:
+        df_rv=load_revenue()
+    except Exception as e:
+        st.error(f"Could not load Revenue: {e}"); st.stop()
 
 if df_wm.empty:
     st.warning("Weekly Membership sheet is empty."); st.stop()
