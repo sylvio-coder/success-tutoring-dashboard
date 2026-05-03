@@ -1202,7 +1202,143 @@ def report_onboarding(df_wm):
                      use_container_width=True,hide_index=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# REPORT 10 — AI Data Analysis
+# REPORT 10 — Revenue
+# ══════════════════════════════════════════════════════════════════════════════
+def report_revenue(df_rv):
+    st.markdown('<div class="report-title">10 · Revenue</div>', unsafe_allow_html=True)
+    st.markdown('<div class="report-subtitle">Source: Revenue — weekly revenue and session metrics by location</div>', unsafe_allow_html=True)
+
+    df_rv = apply_gpm_filter(df_rv)
+
+    loc_col = "Success Tutoring - Business name"
+    df = report_filters(df_rv.copy(), key_prefix="r10rv", show_date=False,
+                        show_country=True, show_state=True, show_stage=True,
+                        show_gpm=True, show_status=True)
+
+    if df.empty:
+        st.warning("No revenue data available."); return
+
+    all_dates = sorted(df["Date"].dropna().unique())
+    if not all_dates:
+        st.warning("No dates found in Revenue data."); return
+
+    # Default to latest 2 weeks
+    default_dates = all_dates[-2:] if len(all_dates) >= 2 else all_dates
+    with st.expander("📅 Select Weeks to Display", expanded=True):
+        st.markdown('<p style="color:#718096;font-size:0.85em">Newest first. Default is latest 2 weeks.</p>', unsafe_allow_html=True)
+        selected_dates = st.multiselect(
+            "Select one or more weeks:",
+            options=sorted(all_dates, reverse=True),
+            default=sorted(default_dates, reverse=True),
+            format_func=lambda d: d.strftime("%d %b %Y"),
+            key="r10rv_dates"
+        )
+
+    if not selected_dates:
+        st.warning("Please select at least one week."); return
+
+    df_filtered = df[df["Date"].isin(selected_dates)].copy()
+    latest_date = max(selected_dates)
+    prev_dates = [d for d in selected_dates if d != latest_date]
+
+    metrics = [
+        ("Gross Revenue", "$"),
+        ("# Active Students", ""),
+        ("Total Sessions", ""),
+        ("Revenue per Session", "$"),
+        ("Revenue per Student", "$"),
+        ("Sessions per Student", ""),
+        ("Student per Session", ""),
+    ]
+
+    # ── KPI Cards ─────────────────────────────────────────────────────────
+    st.markdown('<div class="section-header">📊 Latest Week vs Prior Week</div>', unsafe_allow_html=True)
+    df_latest = df[df["Date"] == latest_date]
+    df_prior = df[df["Date"] == max(prev_dates)] if prev_dates else pd.DataFrame()
+
+    cols = st.columns(4)
+    for i, (metric, prefix) in enumerate(metrics):
+        if metric not in df_latest.columns: continue
+        val = pd.to_numeric(df_latest[metric], errors="coerce").sum()
+        with cols[i % 4]:
+            if not df_prior.empty and metric in df_prior.columns:
+                prev_val = pd.to_numeric(df_prior[metric], errors="coerce").sum()
+                delta = val - prev_val
+                delta_str = f"▲ {prefix}{delta:,.1f} vs prev week" if delta >= 0 else f"▼ {prefix}{abs(delta):,.1f} vs prev week"
+                delta_color = BI_ACCENT if delta >= 0 else BI_RED
+            else:
+                delta_str = ""
+                delta_color = BI_SUBTEXT
+            st.markdown(f"""
+            <div style="background:{BI_CARD};border:1px solid {BI_BORDER};border-radius:8px;padding:16px;margin-bottom:12px">
+                <div style="color:{BI_SUBTEXT};font-size:0.72em;font-weight:700;text-transform:uppercase;letter-spacing:0.8px">{metric}</div>
+                <div style="color:{BI_TEXT};font-size:1.8em;font-weight:700;margin:4px 0">{prefix}{val:,.1f}</div>
+                <div style="color:{delta_color};font-size:0.8em">{delta_str}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── Charts ────────────────────────────────────────────────────────────
+    chart_metrics = [
+        ("Gross Revenue", "$", "💰 Gross Revenue"),
+        ("# Active Students", "", "👥 Active Students"),
+        ("Total Sessions", "", "📚 Total Sessions"),
+        ("Revenue per Session", "$", "💵 Revenue per Session"),
+        ("Student per Session", "", "🎓 Students per Session"),
+        ("Revenue per Student", "$", "💳 Revenue per Student"),
+        ("Sessions per Student", "", "📖 Sessions per Student"),
+    ]
+
+    for metric, prefix, title in chart_metrics:
+        if metric not in df_filtered.columns: continue
+        st.markdown(f'<div class="section-header">{title}</div>', unsafe_allow_html=True)
+        trend = df_filtered.groupby("Date")[metric].sum().reset_index().sort_values("Date")
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=trend["Date"].dt.strftime("%d %b %Y"),
+            y=trend[metric],
+            mode="lines+markers",
+            line=dict(color=BI_ACCENT, width=3),
+            marker=dict(size=8, color=BI_ACCENT),
+            fill="tozeroy",
+            fillcolor=f"rgba(1,184,170,0.08)",
+        ))
+        fig.update_layout(
+            plot_bgcolor=BI_CARD, paper_bgcolor=BI_CARD,
+            font=dict(color=BI_TEXT),
+            xaxis=dict(showgrid=False, color=BI_SUBTEXT),
+            yaxis=dict(showgrid=True, gridcolor=BI_BORDER, color=BI_SUBTEXT,
+                      tickprefix=prefix),
+            margin=dict(l=40, r=20, t=20, b=40),
+            height=280,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    # ── Table ─────────────────────────────────────────────────────────────
+    st.markdown('<div class="section-header">📋 All Metrics by Location</div>', unsafe_allow_html=True)
+    table_cols = [loc_col] + [m for m, _ in metrics if m in df_filtered.columns]
+    df_table = df_filtered.groupby(loc_col)[
+        [m for m, _ in metrics if m in df_filtered.columns]
+    ].sum().reset_index()
+    df_table = df_table.rename(columns={loc_col: "Location"})
+    df_table = df_table.sort_values("Gross Revenue", ascending=False).reset_index(drop=True)
+
+    st.dataframe(
+        df_table.style.format({
+            "Gross Revenue": "${:,.0f}",
+            "# Active Students": "{:,.0f}",
+            "Total Sessions": "{:,.0f}",
+            "Revenue per Session": "${:,.2f}",
+            "Revenue per Student": "${:,.2f}",
+            "Sessions per Student": "{:,.2f}",
+            "Student per Session": "{:,.2f}",
+        }),
+        use_container_width=True,
+        hide_index=True,
+    )
+# ══════════════════════════════════════════════════════════════════════════════
+# REPORT 11 — AI Data Analysis
 # ══════════════════════════════════════════════════════════════════════════════
 def report_claude_outliers(df_wm):
     st.markdown('<div class="report-title">10 · AI Data Analysis</div>', unsafe_allow_html=True)
