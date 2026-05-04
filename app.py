@@ -1366,9 +1366,17 @@ def report_revenue(df_rv):
 
     if selected_metrics:
         cols_plot = [(m, color, label) for m, _, color, label in selected_metrics if m in df_13m.columns]
-        weekly_13m = df_13m.groupby("Date")[
-            [m for m, _, _ in cols_plot]
-        ].sum().reset_index().sort_values("Date")
+        sum_metrics = ["Gross Revenue", "# Active Students", "Total Sessions"]
+        agg_dict = {m: "sum" if m in sum_metrics else "mean" for m, _, _ in cols_plot if m in df_13m.columns}
+        weekly_13m = df_13m.groupby("Date").agg(agg_dict).reset_index().sort_values("Date")
+        # Recalculate ratio metrics from totals to match KPI tile logic
+        if "Gross Revenue" in weekly_13m and "Total Sessions" in weekly_13m:
+            weekly_13m["Revenue per Session"] = (weekly_13m["Gross Revenue"] / weekly_13m["Total Sessions"]).round(2)
+        if "Gross Revenue" in weekly_13m and "# Active Students" in weekly_13m:
+            weekly_13m["Revenue per Student"] = (weekly_13m["Gross Revenue"] / weekly_13m["# Active Students"]).round(2)
+        if "Total Sessions" in weekly_13m and "# Active Students" in weekly_13m:
+            weekly_13m["Sessions per Student"] = (weekly_13m["Total Sessions"] / weekly_13m["# Active Students"]).round(2)
+            weekly_13m["Student per Session"] = (weekly_13m["# Active Students"] / weekly_13m["Total Sessions"]).round(2)
         fig_trend = plotly_line(
             weekly_13m, "Date",
             cols_plot,
@@ -1390,7 +1398,9 @@ def report_revenue(df_rv):
         loc_series = []
         loc_df = pd.DataFrame()
         for i, loc in enumerate(sel_locs):
-            loc_data = df_13m[df_13m[loc_col] == loc].groupby("Date")[loc_metric].sum().reset_index()
+            sum_metrics = ["Gross Revenue", "# Active Students", "Total Sessions"]
+            loc_agg = "sum" if loc_metric in sum_metrics else "mean"
+            loc_data = df_13m[df_13m[loc_col] == loc].groupby("Date")[loc_metric].agg(loc_agg).reset_index()
             col_name = loc.replace("Success Tutoring - ", "")
             loc_data = loc_data.rename(columns={loc_metric: col_name})
             if loc_df.empty:
