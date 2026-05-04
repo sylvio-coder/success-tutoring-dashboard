@@ -1291,9 +1291,11 @@ def report_revenue(df_rv):
     max_date = df_13m_base["Date"].max()
     cutoff_13m = max_date - pd.DateOffset(months=13)
     df_13m = df_13m_base[df_13m_base["Date"] >= cutoff_13m].copy()
-    for metric, _, _ in metrics:
-        if metric in df_13m.columns:
-            df_13m[metric] = pd.to_numeric(df_13m[metric], errors="coerce").fillna(0)
+    for metric in ["Gross Revenue","# Active Students","Total Sessions",
+               "Revenue per Session","Revenue per Student",
+               "Sessions per Student","Student per Session"]:
+    if metric in df_13m.columns:
+        df_13m[metric] = pd.to_numeric(df_13m[metric], errors="coerce").fillna(0)
     
     mc1, mc2, mc3, mc4 = st.columns(4)
     show_gr  = mc1.checkbox("Gross Revenue",        value=True,  key="rv_gr")
