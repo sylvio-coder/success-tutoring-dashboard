@@ -1249,28 +1249,39 @@ def report_revenue(df_rv):
     latest_date = all_dates[-1]
     prev_date   = all_dates[-2] if len(all_dates) >= 2 else None
 
-    def get_week_totals(date_val):
-            if date_val is None: return {}
-            w = df[df["Date"] == date_val]
-            rev  = pd.to_numeric(w["Gross Revenue"],     errors="coerce").sum() if "Gross Revenue"     in w.columns else 0
-            stud = pd.to_numeric(w["# Active Students"], errors="coerce").sum() if "# Active Students" in w.columns else 0
-            sess = pd.to_numeric(w["Total Sessions"],    errors="coerce").sum() if "Total Sessions"    in w.columns else 0
-            return {
-                "Gross Revenue":        rev,
-                "# Active Students":    stud,
-                "Total Sessions":       sess,
-                "Revenue per Session":  round(rev / sess, 2)  if sess > 0 else 0,
-                "Revenue per Student":  round(rev / stud, 2)  if stud > 0 else 0,
-                "Sessions per Student": round(sess / stud, 2) if stud > 0 else 0,
-                "Student per Session":  round(stud / sess, 2) if sess > 0 else 0,
-            }
-
-            latest_totals = get_week_totals(latest_date)
-            prior_totals  = get_week_totals(prev_date)
-
+    # ── KPI Cards ─────────────────────────────────────────────────────────
     st.markdown('<div class="section-header">📊 Latest Week vs Prior Week</div>', unsafe_allow_html=True)
+
+    def get_week_totals(date_val):
+        if date_val is None: return {}
+        w = df[df["Date"] == date_val]
+        rev  = pd.to_numeric(w["Gross Revenue"],     errors="coerce").sum() if "Gross Revenue"     in w.columns else 0
+        stud = pd.to_numeric(w["# Active Students"], errors="coerce").sum() if "# Active Students" in w.columns else 0
+        sess = pd.to_numeric(w["Total Sessions"],    errors="coerce").sum() if "Total Sessions"    in w.columns else 0
+        return {
+            "Gross Revenue":        rev,
+            "# Active Students":    stud,
+            "Total Sessions":       sess,
+            "Revenue per Session":  round(rev / sess, 2)  if sess > 0 else 0,
+            "Revenue per Student":  round(rev / stud, 2)  if stud > 0 else 0,
+            "Sessions per Student": round(sess / stud, 2) if stud > 0 else 0,
+            "Student per Session":  round(stud / sess, 2) if sess > 0 else 0,
+        }
+
+    latest_totals = get_week_totals(latest_date)
+    prior_totals  = get_week_totals(prev_date)
+
+    kpi_list = [
+        ("Gross Revenue",        "$",  "green"),
+        ("# Active Students",    "",   "blue"),
+        ("Total Sessions",       "",   "blue"),
+        ("Revenue per Session",  "$",  "green"),
+        ("Revenue per Student",  "$",  "green"),
+        ("Sessions per Student", "",   "blue"),
+        ("Student per Session",  "",   "blue"),
+    ]
     kpi_cols = st.columns(4)
-    for metric, prefix, color in [("Gross Revenue","$","green"),("# Active Students","","blue"),("Total Sessions","","blue"),("Revenue per Session","$","green"),("Revenue per Student","$","green"),("Sessions per Student","","blue"),("Student per Session","","blue")]:
+    for i, (metric, prefix, color) in enumerate(kpi_list):
         val  = latest_totals.get(metric, 0)
         prev = prior_totals.get(metric, 0)
         with kpi_cols[i % 4]:
