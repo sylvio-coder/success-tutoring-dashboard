@@ -1449,7 +1449,7 @@ def report_revenue(df_rv):
     # ── Table ─────────────────────────────────────────────────────────────
     st.markdown('<div class="section-header">📋 All Metrics by Location</div>', unsafe_allow_html=True)
     metric_names = [m for m in ["Gross Revenue","# Active Students","Total Sessions","Revenue per Session","Revenue per Student","Sessions per Student","Student per Session"] if m in df.columns]
-    df_table = df.groupby(loc_col)[metric_names].sum().reset_index()
+    df_table = df[df["Date"] == latest_date].groupby(loc_col)[metric_names].sum().reset_index()
     df_table = df_table.rename(columns={loc_col: "Location"})
     df_table["Location"] = df_table["Location"].str.replace("Success Tutoring - ", "", regex=False)
     df_table = df_table.sort_values("Gross Revenue", ascending=False).reset_index(drop=True)
