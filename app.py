@@ -1277,9 +1277,17 @@ def report_revenue(df_rv):
     # ── 13 Month Trend — metric checkboxes ───────────────────────────────
     st.markdown('<div class="section-header">📈 Revenue Trend — Last 13 Months</div>', unsafe_allow_html=True)
 
-    max_date = df["Date"].max()
+    # Apply all filters except date for 13 month trend
+    df_13m_base = df_rv.copy()
+    if sel_country != "All"           and "Country" in df_13m_base.columns: df_13m_base = df_13m_base[df_13m_base["Country"] == sel_country]
+    if sel_state   != "All"           and "Region"  in df_13m_base.columns: df_13m_base = df_13m_base[df_13m_base["Region"]  == sel_state]
+    if sel_stage   != "All"           and "Stage"   in df_13m_base.columns: df_13m_base = df_13m_base[df_13m_base["Stage"]   == sel_stage]
+    if sel_gpm     != "All"           and "GPM"     in df_13m_base.columns: df_13m_base = df_13m_base[df_13m_base["GPM"]     == sel_gpm]
+    if sel_status  != "All"           and "Status"  in df_13m_base.columns: df_13m_base = df_13m_base[df_13m_base["Status"]  == sel_status]
+    if sel_loc     != "All Locations" and loc_col   in df_13m_base.columns: df_13m_base = df_13m_base[df_13m_base[loc_col]   == sel_loc]
+    max_date = df_13m_base["Date"].max()
     cutoff_13m = max_date - pd.DateOffset(months=13)
-    df_13m = df[df["Date"] >= cutoff_13m].copy()
+    df_13m = df_13m_base[df_13m_base["Date"] >= cutoff_13m].copy()
     for metric, _, _ in metrics:
         if metric in df_13m.columns:
             df_13m[metric] = pd.to_numeric(df_13m[metric], errors="coerce").fillna(0)
