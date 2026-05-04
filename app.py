@@ -1160,17 +1160,38 @@ def report_onboarding(df_wm):
         bar_colors=[gpm_color_map.get(str(row.get("GPM","")),BI_ACCENT) for _,row in onb_w.iterrows()]
         fig,ax=bi_fig(14,max(6,len(onb_w)*0.45))
         bars=ax.barh(onb_w[loc_col],onb_w["Onboarding week"],color=bar_colors,height=0.6)
+        # Dual labels: week number INSIDE bar, pre-sale members OUTSIDE
+        has_members = "Onboarding Members" in onb_w.columns
         for bar,(_,row) in zip(bars,onb_w.iterrows()):
-            ax.text(bar.get_width()+0.1,bar.get_y()+bar.get_height()/2,
-                    str(int(row["Onboarding week"])),va="center",color=BI_TEXT,fontsize=8)
-        milestones={"Pre Sale":2,"Fit Out":5,"Assessment":12,"50 Members":15,"Grand Opening":22}
-        m_colors={"Pre Sale":BI_BLUE,"Fit Out":BI_ORANGE,"Assessment":BI_BLUE,"50 Members":BI_RED,"Grand Opening":BI_ACCENT}
+            bar_w = bar.get_width()
+            bar_y = bar.get_y() + bar.get_height()/2
+            week_val = int(row["Onboarding week"])
+            # Week number inside the bar (white, right-aligned)
+            if bar_w > 1.5:
+                ax.text(bar_w - 0.2, bar_y, str(week_val),
+                        va="center", ha="right", color="white",
+                        fontsize=8, fontweight="bold")
+            # Pre-sale member count outside bar
+            if has_members:
+                members_val = int(row.get("Onboarding Members", 0))
+                ax.text(bar_w + 0.2, bar_y,
+                        f"{members_val} members",
+                        va="center", ha="left", color=BI_SUBTEXT,
+                        fontsize=7.5)
+
+        # Updated milestones
+        milestones={"Pre-Sale":0,"Assessments":7,"Soft Open":9,"Grand Opening":16}
+        m_colors={"Pre-Sale":BI_BLUE,"Assessments":BI_ORANGE,"Soft Open":BI_PURPLE,"Grand Opening":BI_ACCENT}
         for name,week in milestones.items():
             ax.axvline(x=week,color=m_colors[name],linestyle="--",linewidth=1.2,alpha=0.9)
             ax.text(week+0.1,len(onb_w)-0.5,name,color=m_colors[name],fontsize=7,rotation=90,va="top")
+
         ax.set_xlabel("Onboarding Week",color=BI_TEXT,fontsize=9)
         ax.set_title("Onboarding Status by Week",color=BI_TEXT,fontsize=11,fontweight="bold")
         ax.invert_yaxis()
+        # Extra right padding so "X members" labels aren't clipped
+        x_max = onb_w["Onboarding week"].max()
+        ax.set_xlim(right=x_max + (5 if has_members else 2))
         if gpm_list:
             patches=[mpatches.Patch(color=gpm_color_map[g],label=g) for g in gpm_list]
             ax.legend(handles=patches,loc="center right",bbox_to_anchor=(1.18,0.5),
