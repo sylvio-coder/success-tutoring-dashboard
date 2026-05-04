@@ -188,8 +188,19 @@ st.markdown(f"""
     [data-baseweb="select"] > div > div {{ background-color: #1a2744 !important; color: white !important; }}
     [data-baseweb="input"] {{ background-color: #1a2744 !important; }}
     input {{ background-color: #1a2744 !important; color: white !important; }}
-    [class*="ValueContainer"] {{ background-color: #1a2744 !important; }}
+    [class*="ValueContainer"] {{ background-color: #1a2744 !important; color: white !important; }}
     [class*="control"] {{ background-color: #1a2744 !important; border-color: #2d3748 !important; }}
+    [class*="singleValue"] {{ color: white !important; }}
+    [class*="placeholder"] {{ color: #a0aec0 !important; }}
+    [class*="Input"] input {{ background-color: #1a2744 !important; color: white !important; }}
+    [class*="MenuList"] {{ background-color: #1a2744 !important; }}
+    [class*="option"] {{ background-color: #1a2744 !important; color: white !important; }}
+    [class*="option"]:hover {{ background-color: #2d3f6e !important; }}
+    [data-baseweb="select"] span {{ color: white !important; }}
+    [data-baseweb="select"] div {{ background-color: #1a2744 !important; color: white !important; }}
+    div[data-testid="stMultiSelect"] > div {{ background-color: #1a2744 !important; }}
+    div[data-testid="stMultiSelect"] span {{ color: white !important; }}
+    div[data-testid="stMultiSelect"] div {{ background-color: #1a2744 !important; color: white !important; }}
 </style>
 """, unsafe_allow_html=True)
 
