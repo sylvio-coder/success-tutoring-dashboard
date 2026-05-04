@@ -1265,15 +1265,15 @@ def report_revenue(df_rv):
                 "Student per Session":  round(stud / sess, 2) if sess > 0 else 0,
             }
 
-        latest_totals = get_week_totals(latest_date)
-        prior_totals  = get_week_totals(prev_date)
+            latest_totals = get_week_totals(latest_date)
+            prior_totals  = get_week_totals(prev_date)
 
-        kpi_cols = st.columns(4)
-        for i, (metric, prefix, color) in enumerate(metrics):
-            val  = latest_totals.get(metric, 0)
-            prev = prior_totals.get(metric, 0)
-            with kpi_cols[i % 4]:
-                metric_card(metric, f"{prefix}{val:,.1f}", val - prev, color)
+            kpi_cols = st.columns(4)
+            for i, (metric, prefix, color) in enumerate(metrics):
+                val  = latest_totals.get(metric, 0)
+                prev = prior_totals.get(metric, 0)
+                with kpi_cols[i % 4]:
+                    metric_card(metric, f"{prefix}{val:,.1f}", val - prev, color)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
