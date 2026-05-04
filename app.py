@@ -1333,7 +1333,7 @@ def report_revenue(df_rv):
 
     # ── Location Trend ────────────────────────────────────────────────────
     st.markdown('<div class="section-header">📍 Trend by Location</div>', unsafe_allow_html=True)
-    loc_metric = st.selectbox("Metric:", [m for m, _, _ in metrics if m in df_13m.columns], key="rv_loc_metric")
+    loc_metric = st.selectbox("Metric:", [m for m in ["Gross Revenue","# Active Students","Total Sessions","Revenue per Session","Revenue per Student","Sessions per Student","Student per Session"] if m in df_13m.columns], key="rv_loc_metric")
     all_loc_opts = sorted(df_13m[loc_col].dropna().unique().tolist()) if loc_col in df_13m.columns else []
     sel_locs = st.multiselect("Select locations to compare:", all_loc_opts, default=all_loc_opts[:3] if len(all_loc_opts) >= 3 else all_loc_opts, key="rv_sel_locs")
 
@@ -1359,7 +1359,7 @@ def report_revenue(df_rv):
     # ── Location Bar Chart ────────────────────────────────────────────────
     st.markdown('<div class="section-header">📊 Performance by Location</div>', unsafe_allow_html=True)
     bc1, bc2 = st.columns([3, 1])
-    with bc1: bar_metric = st.selectbox("Metric:", [m for m, _, _ in metrics if m in df.columns], key="rv_bar_metric")
+    with bc1: bar_metric = st.selectbox("Metric:", [m for m in ["Gross Revenue","# Active Students","Total Sessions","Revenue per Session","Revenue per Student","Sessions per Student","Student per Session"] if m in df.columns], key="rv_bar_metric")
     with bc2: bar_scope  = st.selectbox("Show:", ["Latest week only", "All selected weeks combined"], key="rv_bar_scope")
 
     df_bar   = df[df["Date"] == latest_date] if bar_scope == "Latest week only" else df
@@ -1385,7 +1385,7 @@ def report_revenue(df_rv):
 
     # ── Table ─────────────────────────────────────────────────────────────
     st.markdown('<div class="section-header">📋 All Metrics by Location</div>', unsafe_allow_html=True)
-    metric_names = [m for m, _, _ in metrics if m in df.columns]
+    metric_names = [m for m in ["Gross Revenue","# Active Students","Total Sessions","Revenue per Session","Revenue per Student","Sessions per Student","Student per Session"] if m in df.columns]
     df_table = df.groupby(loc_col)[metric_names].sum().reset_index()
     df_table = df_table.rename(columns={loc_col: "Location"})
     df_table["Location"] = df_table["Location"].str.replace("Success Tutoring - ", "", regex=False)
