@@ -1197,30 +1197,10 @@ def report_onboarding(df_wm):
             ax.legend(handles=patches,loc="center right",bbox_to_anchor=(1.18,0.5),
                       facecolor=BI_CARD,edgecolor=BI_BORDER,labelcolor=BI_TEXT,fontsize=10)
         plt.tight_layout(); st.pyplot(fig); plt.close()
-    st.markdown("<br>",unsafe_allow_html=True)
-    st.markdown('<div class="section-header">Pre-Sale Members by Location</div>',unsafe_allow_html=True)
-    if "Onboarding Members" in onb.columns:
-        onb_m=onb.sort_values("Onboarding Members")
-        country_colors={"Australia":BI_ACCENT,"New Zealand":BI_BLUE,"Canada":BI_RED}
-        bar_colors=[country_colors.get(str(row.get("Country","")),BI_GRAY) for _,row in onb_m.iterrows()]
-        fig,ax=bi_fig(14,max(6,len(onb_m)*0.45))
-        bars=ax.barh(onb_m[loc_col],onb_m["Onboarding Members"],color=bar_colors,height=0.6)
-        for bar,(_,row) in zip(bars,onb_m.iterrows()):
-            ax.text(bar.get_width()+0.2,bar.get_y()+bar.get_height()/2,
-                    str(int(row["Onboarding Members"])),va="center",color=BI_TEXT,fontsize=8)
-        ax.axvline(x=50,color=BI_RED,linestyle="--",linewidth=1.5)
-        ax.text(50.5,len(onb_m)-0.5,"Target (50)",color=BI_RED,fontsize=8,rotation=90,va="top")
-        ax.set_xlabel("Total Presale Members",color=BI_TEXT,fontsize=9)
-        ax.set_title("Pre-Sale Members by Location",color=BI_TEXT,fontsize=11,fontweight="bold")
-        ax.invert_yaxis()
-        patches=[mpatches.Patch(color=v,label=k) for k,v in country_colors.items()]
-        ax.legend(handles=patches,loc="center right",bbox_to_anchor=(1.18,0.5),
-                  facecolor=BI_CARD,edgecolor=BI_BORDER,labelcolor=BI_TEXT,fontsize=10)
-        plt.tight_layout(); st.pyplot(fig); plt.close()
     with st.expander("📋 Onboarding Location Detail",expanded=False):
-        show_cols=[c for c in [loc_col,"Onboarding week","Onboarding Members","GPM","Country","Region","Age (Months)"] if c in onb.columns]
-        st.dataframe(onb[show_cols].sort_values("Onboarding week").reset_index(drop=True),
-                     use_container_width=True,hide_index=True)
+            show_cols=[c for c in [loc_col,"Onboarding week","Onboarding Members","GPM","Country","Region","Age (Months)"] if c in onb.columns]
+            st.dataframe(onb[show_cols].sort_values("Onboarding week").reset_index(drop=True),
+                         use_container_width=True,hide_index=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # REPORT 10 — Revenue
