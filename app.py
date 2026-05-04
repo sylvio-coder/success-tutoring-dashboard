@@ -1249,28 +1249,31 @@ def report_revenue(df_rv):
     latest_date = all_dates[-1]
     prev_date   = all_dates[-2] if len(all_dates) >= 2 else None
 
-    def ws(d, col):
-        if d is None or col not in df.columns: return 0
-        return df[df["Date"] == d][col].sum()
+    def get_week_totals(date_val):
+            if date_val is None: return {}
+            w = df[df["Date"] == date_val]
+            rev  = pd.to_numeric(w["Gross Revenue"],     errors="coerce").sum() if "Gross Revenue"     in w.columns else 0
+            stud = pd.to_numeric(w["# Active Students"], errors="coerce").sum() if "# Active Students" in w.columns else 0
+            sess = pd.to_numeric(w["Total Sessions"],    errors="coerce").sum() if "Total Sessions"    in w.columns else 0
+            return {
+                "Gross Revenue":        rev,
+                "# Active Students":    stud,
+                "Total Sessions":       sess,
+                "Revenue per Session":  round(rev / sess, 2)  if sess > 0 else 0,
+                "Revenue per Student":  round(rev / stud, 2)  if stud > 0 else 0,
+                "Sessions per Student": round(sess / stud, 2) if stud > 0 else 0,
+                "Student per Session":  round(stud / sess, 2) if sess > 0 else 0,
+            }
 
-    # ── KPI Cards ─────────────────────────────────────────────────────────
-    metrics = [
-        ("Gross Revenue",       "$",  "green"),
-        ("# Active Students",   "",   "blue"),
-        ("Total Sessions",      "",   "blue"),
-        ("Revenue per Session", "$",  "green"),
-        ("Revenue per Student", "$",  "green"),
-        ("Sessions per Student","",   "blue"),
-        ("Student per Session", "",   "blue"),
-    ]
+        latest_totals = get_week_totals(latest_date)
+        prior_totals  = get_week_totals(prev_date)
 
-    kpi_cols = st.columns(4)
-    for i, (metric, prefix, color) in enumerate(metrics):
-        if metric not in df.columns: continue
-        val  = ws(latest_date, metric)
-        prev = ws(prev_date,   metric)
-        with kpi_cols[i % 4]:
-            metric_card(metric, f"{prefix}{val:,.1f}", val - prev, color)
+        kpi_cols = st.columns(4)
+        for i, (metric, prefix, color) in enumerate(metrics):
+            val  = latest_totals.get(metric, 0)
+            prev = prior_totals.get(metric, 0)
+            with kpi_cols[i % 4]:
+                metric_card(metric, f"{prefix}{val:,.1f}", val - prev, color)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
