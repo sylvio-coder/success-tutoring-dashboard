@@ -46,6 +46,30 @@ BI_GRID     = "#2d3748"
 
 st.markdown(f"""
 <style>
+* {{ box-sizing: border-box; }}
+    [data-baseweb="select"] * {{ 
+        background-color: #1a2744 !important; 
+        color: white !important; 
+    }}
+    [data-baseweb="select"] [role="option"] {{
+        background-color: #1a2744 !important;
+        color: white !important;
+    }}
+    [data-baseweb="select"] [aria-selected="true"] {{
+        background-color: #2d3f6e !important;
+    }}
+    [data-baseweb="popover"] * {{
+        background-color: #1a2744 !important;
+        color: white !important;
+    }}
+    [data-baseweb="base-input"] * {{
+        background-color: #1a2744 !important;
+        color: white !important;
+    }}
+    [data-baseweb="tag"] {{
+        background-color: #2d3f6e !important;
+        color: white !important;
+    }}
     html, body, [class*="css"] {{
         font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
         color: {BI_TEXT};
