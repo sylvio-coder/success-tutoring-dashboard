@@ -1277,12 +1277,13 @@ def report_revenue(df_rv):
     # ── 13 Month Trend — metric checkboxes ───────────────────────────────
     st.markdown('<div class="section-header">📈 Revenue Trend — Last 13 Months</div>', unsafe_allow_html=True)
 
-    cutoff_13m = df["Date"].max() - pd.DateOffset(months=13)
-    df_13m = df[df["Date"] >= cutoff_13m].copy()
+    max_date = df_rv["Date"].max()
+    cutoff_13m = max_date - pd.DateOffset(months=13)
+    df_13m = df_rv[df_rv["Date"] >= cutoff_13m].copy()
     for metric, _, _ in metrics:
         if metric in df_13m.columns:
             df_13m[metric] = pd.to_numeric(df_13m[metric], errors="coerce").fillna(0)
-
+    
     mc1, mc2, mc3, mc4 = st.columns(4)
     show_gr  = mc1.checkbox("Gross Revenue",        value=True,  key="rv_gr")
     show_as  = mc2.checkbox("# Active Students",    value=False, key="rv_as")
@@ -1303,25 +1304,15 @@ def report_revenue(df_rv):
     if show_stu and "Student per Session"  in df_13m.columns: selected_metrics.append(("Student per Session",  "",   "#34d399",  "Student per Session"))
 
     if selected_metrics:
-        fig_trend = go.Figure()
-        for metric, prefix, color, label in selected_metrics:
-            trend = df_13m.groupby("Date")[metric].sum().reset_index().sort_values("Date")
-            fig_trend.add_trace(go.Scatter(
-                x=trend["Date"],
-                y=trend[metric],
-                mode="lines+markers",
-                name=label,
-                line=dict(color=color, width=3),
-                marker=dict(size=7, color=color),
-            ))
-        fig_trend.update_layout(
-            plot_bgcolor=BI_CARD, paper_bgcolor=BI_CARD,
-            font=dict(color=BI_TEXT),
-            xaxis=dict(showgrid=False, color=BI_SUBTEXT),
-            yaxis=dict(showgrid=True, gridcolor=BI_BORDER, color=BI_SUBTEXT),
-            legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5),
-            margin=dict(l=40, r=20, t=20, b=80),
-            height=400,
+        cols_plot = [(m, label) for m, _, _, label in selected_metrics if m in df_13m.columns]
+        weekly_13m = df_13m.groupby("Date")[
+            [m for m, _ in cols_plot]
+        ].sum().reset_index().sort_values("Date")
+        fig_trend = plotly_line(
+            weekly_13m, "Date",
+            [(m, label) for m, label in cols_plot],
+            "Revenue Trend — Last 13 Months",
+            height=500
         )
         st.plotly_chart(fig_trend, use_container_width=True)
     else:
