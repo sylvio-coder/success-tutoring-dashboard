@@ -1294,8 +1294,8 @@ def report_revenue(df_rv):
     for metric in ["Gross Revenue","# Active Students","Total Sessions",
                "Revenue per Session","Revenue per Student",
                "Sessions per Student","Student per Session"]:
-    if metric in df_13m.columns:
-        df_13m[metric] = pd.to_numeric(df_13m[metric], errors="coerce").fillna(0)
+        if metric in df_13m.columns:
+            df_13m[metric] = pd.to_numeric(df_13m[metric], errors="coerce").fillna(0)
     
     mc1, mc2, mc3, mc4 = st.columns(4)
     show_gr  = mc1.checkbox("Gross Revenue",        value=True,  key="rv_gr")
