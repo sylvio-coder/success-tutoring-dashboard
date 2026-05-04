@@ -1304,13 +1304,13 @@ def report_revenue(df_rv):
     if show_stu and "Student per Session"  in df_13m.columns: selected_metrics.append(("Student per Session",  "",   "#34d399",  "Student per Session"))
 
     if selected_metrics:
-        cols_plot = [(m, label) for m, _, _, label in selected_metrics if m in df_13m.columns]
+        cols_plot = [(m, color, label) for m, _, color, label in selected_metrics if m in df_13m.columns]
         weekly_13m = df_13m.groupby("Date")[
-            [m for m, _ in cols_plot]
+            [m for m, _, _ in cols_plot]
         ].sum().reset_index().sort_values("Date")
         fig_trend = plotly_line(
             weekly_13m, "Date",
-            [(m, label) for m, label in cols_plot],
+            cols_plot,
             "Revenue Trend — Last 13 Months",
             height=500
         )
