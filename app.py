@@ -1277,9 +1277,9 @@ def report_revenue(df_rv):
     # ── 13 Month Trend — metric checkboxes ───────────────────────────────
     st.markdown('<div class="section-header">📈 Revenue Trend — Last 13 Months</div>', unsafe_allow_html=True)
 
-    max_date = df_rv["Date"].max()
+    max_date = df["Date"].max()
     cutoff_13m = max_date - pd.DateOffset(months=13)
-    df_13m = df_rv[df_rv["Date"] >= cutoff_13m].copy()
+    df_13m = df[df["Date"] >= cutoff_13m].copy()
     for metric, _, _ in metrics:
         if metric in df_13m.columns:
             df_13m[metric] = pd.to_numeric(df_13m[metric], errors="coerce").fillna(0)
@@ -1326,26 +1326,19 @@ def report_revenue(df_rv):
 
     if sel_locs:
         colors = [BI_ACCENT, BI_BLUE, BI_ORANGE, BI_RED, "#a78bfa", "#f472b6", "#34d399", "#fbbf24"]
-        fig_loc = go.Figure()
+        loc_series = []
+        loc_df = pd.DataFrame()
         for i, loc in enumerate(sel_locs):
-            loc_data = df_13m[df_13m[loc_col] == loc].groupby("Date")[loc_metric].sum().reset_index().sort_values("Date")
-            fig_loc.add_trace(go.Scatter(
-                x=loc_data["Date"],
-                y=loc_data[loc_metric],
-                mode="lines+markers",
-                name=loc.replace("Success Tutoring - ", ""),
-                line=dict(color=colors[i % len(colors)], width=2),
-                marker=dict(size=6),
-            ))
-        fig_loc.update_layout(
-            plot_bgcolor=BI_CARD, paper_bgcolor=BI_CARD,
-            font=dict(color=BI_TEXT),
-            xaxis=dict(showgrid=False, color=BI_SUBTEXT),
-            yaxis=dict(showgrid=True, gridcolor=BI_BORDER, color=BI_SUBTEXT),
-            legend=dict(orientation="h", yanchor="bottom", y=-0.4, xanchor="center", x=0.5),
-            margin=dict(l=40, r=20, t=20, b=100),
-            height=420,
-        )
+            loc_data = df_13m[df_13m[loc_col] == loc].groupby("Date")[loc_metric].sum().reset_index()
+            col_name = loc.replace("Success Tutoring - ", "")
+            loc_data = loc_data.rename(columns={loc_metric: col_name})
+            if loc_df.empty:
+                loc_df = loc_data
+            else:
+                loc_df = loc_df.merge(loc_data, on="Date", how="outer")
+            loc_series.append((col_name, colors[i % len(colors)], col_name))
+        loc_df = loc_df.sort_values("Date")
+        fig_loc = plotly_line(loc_df, "Date", loc_series, f"{loc_metric} by Location — Last 13 Months", height=450)
         st.plotly_chart(fig_loc, use_container_width=True)
     else:
         st.info("Please select at least one location.")
