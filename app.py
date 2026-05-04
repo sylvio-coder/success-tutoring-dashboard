@@ -1268,13 +1268,13 @@ def report_revenue(df_rv):
             latest_totals = get_week_totals(latest_date)
             prior_totals  = get_week_totals(prev_date)
 
-            st.markdown('<div class="section-header">📊 Latest Week vs Prior Week</div>', unsafe_allow_html=True)
-            kpi_cols = st.columns(4)
-            for metric, prefix, color in [("Gross Revenue","$","green"),("# Active Students","","blue"),("Total Sessions","","blue"),("Revenue per Session","$","green"),("Revenue per Student","$","green"),("Sessions per Student","","blue"),("Student per Session","","blue")]:
-                val  = latest_totals.get(metric, 0)
-                prev = prior_totals.get(metric, 0)
-                with kpi_cols[i % 4]:
-                    metric_card(metric, f"{prefix}{val:,.1f}", val - prev, color)
+    st.markdown('<div class="section-header">📊 Latest Week vs Prior Week</div>', unsafe_allow_html=True)
+    kpi_cols = st.columns(4)
+    for metric, prefix, color in [("Gross Revenue","$","green"),("# Active Students","","blue"),("Total Sessions","","blue"),("Revenue per Session","$","green"),("Revenue per Student","$","green"),("Sessions per Student","","blue"),("Student per Session","","blue")]:
+        val  = latest_totals.get(metric, 0)
+        prev = prior_totals.get(metric, 0)
+        with kpi_cols[i % 4]:
+            metric_card(metric, f"{prefix}{val:,.1f}", val - prev, color)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
