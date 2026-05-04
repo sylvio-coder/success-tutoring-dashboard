@@ -1411,7 +1411,9 @@ def report_revenue(df_rv):
     with bc2: bar_scope  = st.selectbox("Show:", ["Latest week only", "All selected weeks combined"], key="rv_bar_scope")
 
     df_bar   = df[df["Date"] == latest_date] if bar_scope == "Latest week only" else df
-    bar_data = df_bar.groupby(loc_col)[bar_metric].sum().reset_index().sort_values(bar_metric, ascending=False)
+    sum_metrics = ["Gross Revenue", "# Active Students", "Total Sessions"]
+    bar_agg = "sum" if bar_metric in sum_metrics else "mean"
+    bar_data = df_bar.groupby(loc_col)[bar_metric].agg(bar_agg).reset_index().sort_values(bar_metric, ascending=False)
     prefix_map = {"Gross Revenue": "$", "Revenue per Session": "$", "Revenue per Student": "$"}
     prefix_bar = prefix_map.get(bar_metric, "")
 
@@ -1425,8 +1427,10 @@ def report_revenue(df_rv):
     fig_bar.update_layout(
         plot_bgcolor=BI_CARD, paper_bgcolor=BI_CARD,
         font=dict(color=BI_TEXT),
-        xaxis=dict(showgrid=False, color=BI_SUBTEXT, tickangle=-45),
-        yaxis=dict(showgrid=True, gridcolor=BI_BORDER, color=BI_SUBTEXT, tickprefix=prefix_bar),
+        xaxis=dict(showgrid=False, color=BI_SUBTEXT, tickangle=-45,
+                   title=dict(text="Location", font=dict(color=BI_SUBTEXT, size=11))),
+        yaxis=dict(showgrid=True, gridcolor=BI_BORDER, color=BI_SUBTEXT, tickprefix=prefix_bar,
+                   title=dict(text=bar_metric, font=dict(color=BI_SUBTEXT, size=11))),
         margin=dict(l=40, r=20, t=30, b=160),
         height=450,
     )
