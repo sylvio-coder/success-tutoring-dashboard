@@ -1269,7 +1269,7 @@ def report_revenue(df_rv):
             prior_totals  = get_week_totals(prev_date)
 
             kpi_cols = st.columns(4)
-            for i, (metric, prefix, color) in enumerate(metrics):
+            for metric, prefix, color in [("Gross Revenue","$","green"),("# Active Students","","blue"),("Total Sessions","","blue"),("Revenue per Session","$","green"),("Revenue per Student","$","green"),("Sessions per Student","","blue"),("Student per Session","","blue")]:
                 val  = latest_totals.get(metric, 0)
                 prev = prior_totals.get(metric, 0)
                 with kpi_cols[i % 4]:
@@ -1364,7 +1364,8 @@ def report_revenue(df_rv):
 
     df_bar   = df[df["Date"] == latest_date] if bar_scope == "Latest week only" else df
     bar_data = df_bar.groupby(loc_col)[bar_metric].sum().reset_index().sort_values(bar_metric, ascending=False)
-    prefix_bar = next((p for m, p, _ in metrics if m == bar_metric), "")
+    prefix_map = {"Gross Revenue": "$", "Revenue per Session": "$", "Revenue per Student": "$"}
+    prefix_bar = prefix_map.get(bar_metric, "")
 
     fig_bar = go.Figure(go.Bar(
         x=bar_data[loc_col].str.replace("Success Tutoring - ", "", regex=False),
