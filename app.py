@@ -268,7 +268,7 @@ def load_revenue():
         df = load_sheet_data("Revenue")
         df = df.rename(columns={"Location": "Success Tutoring - Business name"})
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-        for c in ["# Active Students","Total Sessions","Gross Revenue",
+        for c in ["# Active Students","Total Sessions","Gross Revenue","Net Revenue",
                   "Revenue per Session","Revenue per Student",
                   "Sessions per Student","Student per Session"]:
             if c in df.columns:
@@ -1291,7 +1291,7 @@ def report_revenue(df_rv):
     def get_week_totals(date_val):
         if date_val is None: return {}
         w = df[df["Date"] == date_val]
-        rev  = pd.to_numeric(w["Gross Revenue"],     errors="coerce").sum() if "Gross Revenue"     in w.columns else 0
+        rev  = pd.to_numeric(w["Net Revenue"],     errors="coerce").sum() if "Net Revenue"     in w.columns else 0
         stud = pd.to_numeric(w["# Active Students"], errors="coerce").sum() if "# Active Students" in w.columns else 0
         sess = pd.to_numeric(w["Total Sessions"],    errors="coerce").sum() if "Total Sessions"    in w.columns else 0
         return {
@@ -1308,7 +1308,7 @@ def report_revenue(df_rv):
     prior_totals  = get_week_totals(prev_date)
 
     kpi_list = [
-        ("Gross Revenue",        "$",  "green"),
+        ("Net Revenue",        "$",  "green"),
         ("# Active Students",    "",   "blue"),
         ("Total Sessions",       "",   "blue"),
         ("Revenue per Session",  "$",  "green"),
@@ -1346,7 +1346,7 @@ def report_revenue(df_rv):
             df_13m[metric] = pd.to_numeric(df_13m[metric], errors="coerce").fillna(0)
     
     mc1, mc2, mc3, mc4 = st.columns(4)
-    show_gr  = mc1.checkbox("Gross Revenue",        value=True,  key="rv_gr")
+    show_gr  = mc1.checkbox("Net Revenue",        value=True,  key="rv_gr")
     show_as  = mc2.checkbox("# Active Students",    value=False, key="rv_as")
     show_ts  = mc3.checkbox("Total Sessions",       value=False, key="rv_ts")
     show_rps = mc4.checkbox("Revenue per Session",  value=False, key="rv_rps")
@@ -1356,7 +1356,7 @@ def report_revenue(df_rv):
     show_stu = mc7.checkbox("Student per Session",  value=False, key="rv_stu")
 
     selected_metrics = []
-    if show_gr  and "Gross Revenue"        in df_13m.columns: selected_metrics.append(("Gross Revenue",        "$",  BI_ACCENT,  "Gross Revenue"))
+    if show_gr  and "Net Revenue"          in df_13m.columns: selected_metrics.append(("Net Revenue",          "$",  BI_ACCENT,  "Net Revenue"))
     if show_as  and "# Active Students"    in df_13m.columns: selected_metrics.append(("# Active Students",    "",   BI_BLUE,    "Active Students"))
     if show_ts  and "Total Sessions"       in df_13m.columns: selected_metrics.append(("Total Sessions",       "",   BI_ORANGE,  "Total Sessions"))
     if show_rps and "Revenue per Session"  in df_13m.columns: selected_metrics.append(("Revenue per Session",  "$",  BI_RED,     "Rev per Session"))
@@ -1370,10 +1370,10 @@ def report_revenue(df_rv):
         agg_dict = {m: "sum" if m in sum_metrics else "mean" for m, _, _ in cols_plot if m in df_13m.columns}
         weekly_13m = df_13m.groupby("Date").agg(agg_dict).reset_index().sort_values("Date")
         # Recalculate ratio metrics from totals to match KPI tile logic
-        if "Gross Revenue" in weekly_13m and "Total Sessions" in weekly_13m:
-            weekly_13m["Revenue per Session"] = (weekly_13m["Gross Revenue"] / weekly_13m["Total Sessions"]).round(2)
-        if "Gross Revenue" in weekly_13m and "# Active Students" in weekly_13m:
-            weekly_13m["Revenue per Student"] = (weekly_13m["Gross Revenue"] / weekly_13m["# Active Students"]).round(2)
+        if "Net Revenue" in weekly_13m and "Total Sessions" in weekly_13m:
+            weekly_13m["Revenue per Session"] = (weekly_13m["Net Revenue"] / weekly_13m["Total Sessions"]).round(2)
+        if "Net Revenue" in weekly_13m and "# Active Students" in weekly_13m:
+            weekly_13m["Revenue per Student"] = (weekly_13m["Net Revenue"] / weekly_13m["# Active Students"]).round(2)
         if "Total Sessions" in weekly_13m and "# Active Students" in weekly_13m:
             weekly_13m["Sessions per Student"] = (weekly_13m["Total Sessions"] / weekly_13m["# Active Students"]).round(2)
             weekly_13m["Student per Session"] = (weekly_13m["# Active Students"] / weekly_13m["Total Sessions"]).round(2)
@@ -1448,14 +1448,14 @@ def report_revenue(df_rv):
 
     # ── Table ─────────────────────────────────────────────────────────────
     st.markdown('<div class="section-header">📋 All Metrics by Location</div>', unsafe_allow_html=True)
-    metric_names = [m for m in ["Gross Revenue","# Active Students","Total Sessions","Revenue per Session","Revenue per Student","Sessions per Student","Student per Session"] if m in df.columns]
+    metric_names = [m for m in ["Net Revenue","# Active Students","Total Sessions","Revenue per Session","Revenue per Student","Sessions per Student","Student per Session"] if m in df.columns]
     df_table = df[df["Date"] == latest_date].groupby(loc_col)[metric_names].sum().reset_index()
     df_table = df_table.rename(columns={loc_col: "Location"})
     df_table["Location"] = df_table["Location"].str.replace("Success Tutoring - ", "", regex=False)
-    df_table = df_table.sort_values("Gross Revenue", ascending=False).reset_index(drop=True)
+    df_table = df_table.sort_values("Net Revenue", ascending=False).reset_index(drop=True)
 
     fmt = {
-        "Gross Revenue":        "${:,.0f}",
+        "Net Revenue":        "${:,.0f}",
         "# Active Students":    "{:,.0f}",
         "Total Sessions":       "{:,.0f}",
         "Revenue per Session":  "${:,.2f}",
