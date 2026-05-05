@@ -1417,7 +1417,7 @@ def report_revenue(df_rv):
     # ── Location Bar Chart ────────────────────────────────────────────────
     st.markdown('<div class="section-header">📊 Performance by Location</div>', unsafe_allow_html=True)
     bc1, bc2 = st.columns([3, 1])
-    with bc1: bar_metric = st.selectbox("Metric:", [m for m in ["Gross Revenue","# Active Students","Total Sessions","Revenue per Session","Revenue per Student","Sessions per Student","Student per Session"] if m in df.columns], key="rv_bar_metric")
+    with bc1: bar_metric = st.selectbox("Metric:", [m for m in ["Net Revenue","# Active Students","Total Sessions","Revenue per Session","Revenue per Student","Sessions per Student","Student per Session"] if m in df.columns], key="rv_bar_metric")
     with bc2: bar_scope  = st.selectbox("Show:", ["Latest week only", "All selected weeks combined"], key="rv_bar_scope")
 
     df_bar   = df[df["Date"] == latest_date] if bar_scope == "Latest week only" else df
