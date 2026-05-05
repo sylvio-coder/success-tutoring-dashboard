@@ -1421,9 +1421,18 @@ def report_revenue(df_rv):
     with bc2: bar_scope  = st.selectbox("Show:", ["Latest week only", "All selected weeks combined"], key="rv_bar_scope")
 
     df_bar   = df[df["Date"] == latest_date] if bar_scope == "Latest week only" else df
-    sum_metrics = ["Gross Revenue", "# Active Students", "Total Sessions"]
-    bar_agg = "sum" if bar_metric in sum_metrics else "mean"
-    bar_data = df_bar.groupby(loc_col)[bar_metric].agg(bar_agg).reset_index().sort_values(bar_metric, ascending=False)
+    sum_metrics = ["Net Revenue", "# Active Students", "Total Sessions"]
+    bar_base = df_bar.groupby(loc_col).agg(
+        net_rev=("Net Revenue", "sum"),
+        students=("# Active Students", "sum"),
+        sessions=("Total Sessions", "sum")
+    ).reset_index()
+    bar_base["Revenue per Session"]  = (bar_base["net_rev"] / bar_base["sessions"]).round(2).where(bar_base["sessions"] > 0, 0)
+    bar_base["Revenue per Student"]  = (bar_base["net_rev"] / bar_base["students"]).round(2).where(bar_base["students"] > 0, 0)
+    bar_base["Sessions per Student"] = (bar_base["sessions"] / bar_base["students"]).round(2).where(bar_base["students"] > 0, 0)
+    bar_base["Student per Session"]  = (bar_base["students"] / bar_base["sessions"]).round(2).where(bar_base["sessions"] > 0, 0)
+    bar_base = bar_base.rename(columns={"net_rev": "Net Revenue", "students": "# Active Students", "sessions": "Total Sessions"})
+    bar_data = bar_base[[loc_col, bar_metric]].sort_values(bar_metric, ascending=False)
     prefix_map = {"Gross Revenue": "$", "Revenue per Session": "$", "Revenue per Student": "$"}
     prefix_bar = prefix_map.get(bar_metric, "")
 
