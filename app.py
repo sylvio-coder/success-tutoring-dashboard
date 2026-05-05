@@ -1291,11 +1291,11 @@ def report_revenue(df_rv):
     def get_week_totals(date_val):
         if date_val is None: return {}
         w = df[df["Date"] == date_val]
-        rev  = pd.to_numeric(w["Net Revenue"],     errors="coerce").sum() if "Net Revenue"     in w.columns else 0
+        rev  = pd.to_numeric(w["Net Revenue"],       errors="coerce").sum() if "Net Revenue"       in w.columns else 0
         stud = pd.to_numeric(w["# Active Students"], errors="coerce").sum() if "# Active Students" in w.columns else 0
         sess = pd.to_numeric(w["Total Sessions"],    errors="coerce").sum() if "Total Sessions"    in w.columns else 0
         return {
-            "Gross Revenue":        rev,
+            "Net Revenue":          rev,
             "# Active Students":    stud,
             "Total Sessions":       sess,
             "Revenue per Session":  round(rev / sess, 2)  if sess > 0 else 0,
