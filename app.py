@@ -1733,6 +1733,298 @@ Compare Australia, New Zealand and any other countries. Which is performing best
                 model="claude-sonnet-4-20250514", max_tokens=1500,
                 messages=[{"role":"user","content":prompt}])
         st.markdown(message.content[0].text)
+        # ══════════════════════════════════════════════════════════════════════════════
+# REPORT 12 — Location Performance Analysis
+# ══════════════════════════════════════════════════════════════════════════════
+def report_location_performance(df_wm, df_rv):
+    st.markdown('<div class="report-title">12 · Location Performance Analysis</div>', unsafe_allow_html=True)
+    st.markdown('<div class="report-subtitle">Consolidated metrics for a single location across all reports</div>', unsafe_allow_html=True)
+
+    df_wm = apply_gpm_filter(df_wm)
+    df_rv = apply_gpm_filter(df_rv)
+    loc_col = "Success Tutoring - Business name"
+    vl = load_vlookup()
+
+    # ── Location filter ───────────────────────────────────────────────────
+    all_locs = sorted(df_wm[loc_col].dropna().unique().tolist()) if loc_col in df_wm.columns else []
+    if not all_locs:
+        st.warning("No locations found."); return
+
+    sel_loc = st.selectbox("📌 Select Location", all_locs, key="r12_loc")
+
+    # ── Pull data for selected location ───────────────────────────────────
+    wm_loc = df_wm[df_wm[loc_col] == sel_loc].copy()
+    rv_loc = df_rv[df_rv[loc_col] == sel_loc].copy() if loc_col in df_rv.columns else pd.DataFrame()
+
+    for c in ["# Active members","# New members","# Suspended members","# Cancelled members"]:
+        if c in wm_loc.columns:
+            wm_loc[c] = pd.to_numeric(wm_loc[c], errors="coerce").fillna(0)
+
+    for c in ["Net Revenue","# Active Students","Total Sessions","Revenue per Session",
+              "Revenue per Student","Sessions per Student","Student per Session"]:
+        if c in rv_loc.columns:
+            rv_loc[c] = pd.to_numeric(rv_loc[c], errors="coerce").fillna(0)
+
+    latest_date = wm_loc["Date"].max() if not wm_loc.empty else None
+    prev_date   = sorted(wm_loc["Date"].dropna().unique())[-2] if len(wm_loc["Date"].dropna().unique()) >= 2 else None
+
+    # ── Location metadata ─────────────────────────────────────────────────
+    meta = vl[vl[loc_col] == sel_loc].iloc[0] if not vl.empty and loc_col in vl.columns and not vl[vl[loc_col] == sel_loc].empty else {}
+
+    if not meta.empty if hasattr(meta, 'empty') else not meta:
+        m1, m2, m3, m4, m5 = st.columns(5)
+        with m1: st.markdown(f'<div class="metric-card blue"><div class="metric-label">Stage</div><div class="metric-value" style="font-size:1.2em">{meta.get("Stage","—")}</div></div>', unsafe_allow_html=True)
+        with m2: st.markdown(f'<div class="metric-card blue"><div class="metric-label">GPM</div><div class="metric-value" style="font-size:1.2em">{meta.get("GPM","—")}</div></div>', unsafe_allow_html=True)
+        with m3: st.markdown(f'<div class="metric-card blue"><div class="metric-label">Country</div><div class="metric-value" style="font-size:1.2em">{meta.get("Country","—")}</div></div>', unsafe_allow_html=True)
+        with m4: st.markdown(f'<div class="metric-card blue"><div class="metric-label">Region</div><div class="metric-value" style="font-size:1.2em">{meta.get("Region","—")}</div></div>', unsafe_allow_html=True)
+        with m5: st.markdown(f'<div class="metric-card blue"><div class="metric-label">Age (Months)</div><div class="metric-value" style="font-size:1.2em">{int(meta.get("Age (Months)",0))}</div></div>', unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ══════════════════════════════════════════════════════════════════════
+    # SECTION 1 — Metrics Table (latest week)
+    # ══════════════════════════════════════════════════════════════════════
+    st.markdown('<div class="section-header">📋 All Metrics — Latest Week</div>', unsafe_allow_html=True)
+
+    if latest_date is not None:
+        lw_wm = wm_loc[wm_loc["Date"] == latest_date]
+        lw_rv = rv_loc[rv_loc["Date"] == latest_date] if not rv_loc.empty and "Date" in rv_loc.columns else pd.DataFrame()
+
+        active    = lw_wm["# Active members"].sum() if "# Active members" in lw_wm.columns else 0
+        new_mem   = lw_wm["# New members"].sum() if "# New members" in lw_wm.columns else 0
+        suspended = lw_wm["# Suspended members"].sum() if "# Suspended members" in lw_wm.columns else 0
+        cancelled = lw_wm["# Cancelled members"].sum() if "# Cancelled members" in lw_wm.columns else 0
+        churn     = round(cancelled / active * 100, 1) if active > 0 else 0
+        ngr       = round((new_mem - cancelled) / active * 100, 2) if active > 0 else 0
+
+        net_rev   = lw_rv["Net Revenue"].sum() if not lw_rv.empty and "Net Revenue" in lw_rv.columns else 0
+        students  = lw_rv["# Active Students"].sum() if not lw_rv.empty and "# Active Students" in lw_rv.columns else 0
+        sessions  = lw_rv["Total Sessions"].sum() if not lw_rv.empty and "Total Sessions" in lw_rv.columns else 0
+        rev_sess  = round(net_rev / sessions, 2) if sessions > 0 else 0
+        rev_stud  = round(net_rev / students, 2) if students > 0 else 0
+        sess_stud = round(sessions / students, 2) if students > 0 else 0
+        stud_sess = round(students / sessions, 2) if sessions > 0 else 0
+
+        metrics_table = pd.DataFrame([
+            {"Category": "Membership", "Metric": "Active Members",        "Value": f"{active:,.0f}"},
+            {"Category": "Membership", "Metric": "New Members",           "Value": f"{new_mem:,.0f}"},
+            {"Category": "Membership", "Metric": "Suspended Members",     "Value": f"{suspended:,.0f}"},
+            {"Category": "Membership", "Metric": "Cancelled Members",     "Value": f"{cancelled:,.0f}"},
+            {"Category": "Membership", "Metric": "Churn Rate %",          "Value": f"{churn:.1f}%"},
+            {"Category": "Membership", "Metric": "Net Growth Rate %",     "Value": f"{ngr:.2f}%"},
+            {"Category": "Revenue",    "Metric": "Net Revenue",           "Value": f"${net_rev:,.2f}"},
+            {"Category": "Revenue",    "Metric": "Active Students",       "Value": f"{students:,.0f}"},
+            {"Category": "Revenue",    "Metric": "Total Sessions",        "Value": f"{sessions:,.0f}"},
+            {"Category": "Revenue",    "Metric": "Revenue per Session",   "Value": f"${rev_sess:,.2f}"},
+            {"Category": "Revenue",    "Metric": "Revenue per Student",   "Value": f"${rev_stud:,.2f}"},
+            {"Category": "Revenue",    "Metric": "Sessions per Student",  "Value": f"{sess_stud:.2f}"},
+            {"Category": "Revenue",    "Metric": "Student per Session",   "Value": f"{stud_sess:.2f}"},
+        ])
+        st.dataframe(metrics_table, use_container_width=True, hide_index=True)
+
+    # ══════════════════════════════════════════════════════════════════════
+    # SECTION 2 — 13 Month Trend Chart
+    # ══════════════════════════════════════════════════════════════════════
+    st.markdown('<div class="section-header">📈 13 Month Trend</div>', unsafe_allow_html=True)
+
+    max_date = wm_loc["Date"].max()
+    cutoff   = max_date - pd.DateOffset(months=13)
+    wm_13m   = wm_loc[wm_loc["Date"] >= cutoff].copy()
+    rv_13m   = rv_loc[rv_loc["Date"] >= cutoff].copy() if not rv_loc.empty and "Date" in rv_loc.columns else pd.DataFrame()
+
+    # Checkbox metric selection
+    cc1, cc2, cc3, cc4, cc5, cc6 = st.columns(6)
+    show_active   = cc1.checkbox("Active Members",   value=True,  key="r12_active")
+    show_new      = cc2.checkbox("New Members",      value=False, key="r12_new")
+    show_canc     = cc3.checkbox("Cancelled",        value=False, key="r12_canc")
+    show_churn    = cc4.checkbox("Churn Rate %",     value=True,  key="r12_churn")
+    show_ngr      = cc5.checkbox("Net Growth Rate %",value=True,  key="r12_ngr")
+    show_rev      = cc6.checkbox("Net Revenue",      value=False, key="r12_rev")
+    cc7, cc8 = st.columns(8)[:2]
+    show_rps      = cc7.checkbox("Rev per Session",  value=False, key="r12_rps")
+    show_rpu      = cc8.checkbox("Rev per Student",  value=False, key="r12_rpu")
+
+    # Build base trend df from membership
+    trend_wm = wm_13m.groupby("Date").agg(
+        Active=("# Active members","sum"),
+        New=("# New members","sum"),
+        Cancelled=("# Cancelled members","sum"),
+        Suspended=("# Suspended members","sum"),
+    ).reset_index().sort_values("Date")
+    trend_wm["Churn Rate %"]     = trend_wm.apply(lambda r: round(r["Cancelled"]/r["Active"]*100,1) if r["Active"]>0 else 0, axis=1)
+    trend_wm["Net Growth Rate %"] = trend_wm.apply(lambda r: round((r["New"]-r["Cancelled"])/r["Active"]*100,2) if r["Active"]>0 else 0, axis=1)
+
+    # Merge revenue if available
+    if not rv_13m.empty:
+        trend_rv = rv_13m.groupby("Date").agg(
+            net_rev=("Net Revenue","sum"),
+            students=("# Active Students","sum"),
+            sessions=("Total Sessions","sum"),
+        ).reset_index()
+        trend_rv["Net Revenue"]         = trend_rv["net_rev"]
+        trend_rv["Revenue per Session"] = (trend_rv["net_rev"]/trend_rv["sessions"]).round(2).where(trend_rv["sessions"]>0,0)
+        trend_rv["Revenue per Student"] = (trend_rv["net_rev"]/trend_rv["students"]).round(2).where(trend_rv["students"]>0,0)
+        trend_wm = trend_wm.merge(trend_rv[["Date","Net Revenue","Revenue per Session","Revenue per Student"]], on="Date", how="left")
+
+    # Comparison locations
+    st.markdown(f'<div style="color:{BI_SUBTEXT};font-size:0.82em;margin-bottom:4px">Compare with other locations (optional):</div>', unsafe_allow_html=True)
+    other_locs = [l for l in all_locs if l != sel_loc]
+    comp_locs  = st.multiselect("Compare locations:", other_locs, default=[], max_selections=4, key="r12_comp")
+
+    fig_trend = go.Figure()
+
+    # Primary location traces
+    series_map = []
+    if show_active: series_map.append(("Active", BI_ACCENT, "Active Members"))
+    if show_new:    series_map.append(("New", BI_BLUE, "New Members"))
+    if show_canc:   series_map.append(("Cancelled", BI_RED, "Cancelled"))
+    if show_churn:  series_map.append(("Churn Rate %", BI_ORANGE, "Churn Rate %"))
+    if show_ngr:    series_map.append(("Net Growth Rate %", BI_PURPLE, "Net Growth Rate %"))
+    if show_rev and "Net Revenue" in trend_wm.columns:     series_map.append(("Net Revenue", "#34d399", "Net Revenue"))
+    if show_rps and "Revenue per Session" in trend_wm.columns: series_map.append(("Revenue per Session", "#f472b6", "Rev/Session"))
+    if show_rpu and "Revenue per Student" in trend_wm.columns: series_map.append(("Revenue per Student", "#fbbf24", "Rev/Student"))
+
+    loc_short = sel_loc.replace("Success Tutoring - ", "")
+    for col, color, label in series_map:
+        if col not in trend_wm.columns: continue
+        std_traces(fig_trend, trend_wm, "Date", col, color, f"{loc_short} — {label}")
+
+    # Comparison location traces
+    comp_colors = [BI_BLUE, BI_RED, BI_YELLOW, "#00b4d8"]
+    for i, comp_loc in enumerate(comp_locs):
+        comp_wm = df_wm[df_wm[loc_col]==comp_loc].copy()
+        comp_wm = comp_wm[comp_wm["Date"]>=cutoff]
+        for c in ["# Active members","# New members","# Cancelled members"]:
+            if c in comp_wm.columns: comp_wm[c]=pd.to_numeric(comp_wm[c],errors="coerce").fillna(0)
+        comp_trend = comp_wm.groupby("Date").agg(
+            Active=("# Active members","sum"),
+            New=("# New members","sum"),
+            Cancelled=("# Cancelled members","sum"),
+        ).reset_index().sort_values("Date")
+        comp_trend["Churn Rate %"]      = comp_trend.apply(lambda r: round(r["Cancelled"]/r["Active"]*100,1) if r["Active"]>0 else 0, axis=1)
+        comp_trend["Net Growth Rate %"] = comp_trend.apply(lambda r: round((r["New"]-r["Cancelled"])/r["Active"]*100,2) if r["Active"]>0 else 0, axis=1)
+        comp_short = comp_loc.replace("Success Tutoring - ","")
+        for col, _, label in series_map:
+            if col not in comp_trend.columns: continue
+            std_traces(fig_trend, comp_trend, "Date", col, comp_colors[i%len(comp_colors)], f"{comp_short} — {label}")
+
+    fig_trend.update_layout(**std_layout(f"{loc_short} — 13 Month Trend", "", 520))
+    st.plotly_chart(fig_trend, use_container_width=True)
+
+    # ══════════════════════════════════════════════════════════════════════
+    # SECTION 3 — AI Analysis
+    # ══════════════════════════════════════════════════════════════════════
+    st.markdown('<div class="section-header">🤖 AI Performance Analysis</div>', unsafe_allow_html=True)
+
+    if not ANTHROPIC_KEY:
+        st.warning("No Anthropic API key found — AI analysis unavailable.")
+        return
+
+    if st.button("🤖 Generate AI Analysis", use_container_width=True, key="r12_ai"):
+
+        # Build network averages for outlier comparison
+        latest_wm_all = df_wm[df_wm["Date"]==latest_date].copy() if latest_date else pd.DataFrame()
+        for c in ["# Active members","# New members","# Cancelled members","# Suspended members"]:
+            if c in latest_wm_all.columns: latest_wm_all[c]=pd.to_numeric(latest_wm_all[c],errors="coerce").fillna(0)
+
+        network_stats = {}
+        outliers = []
+        if not latest_wm_all.empty and loc_col in latest_wm_all.columns:
+            loc_agg = latest_wm_all.groupby(loc_col).agg(
+                Active=("# Active members","sum"),
+                New=("# New members","sum"),
+                Cancelled=("# Cancelled members","sum"),
+            ).reset_index()
+            loc_agg["Churn %"] = loc_agg.apply(lambda r: round(r["Cancelled"]/r["Active"]*100,1) if r["Active"]>0 else 0, axis=1)
+            loc_agg["NGR %"]   = loc_agg.apply(lambda r: round((r["New"]-r["Cancelled"])/r["Active"]*100,2) if r["Active"]>0 else 0, axis=1)
+
+            for metric in ["Active","New","Cancelled","Churn %","NGR %"]:
+                mean = loc_agg[metric].mean()
+                std  = loc_agg[metric].std()
+                loc_val = loc_agg[loc_agg[loc_col]==sel_loc][metric].values
+                if len(loc_val) > 0:
+                    val = loc_val[0]
+                    network_stats[metric] = {"mean": round(mean,1), "std": round(std,1), "location": round(val,1)}
+                    if abs(val - mean) > 2*std:
+                        direction = "above" if val > mean else "below"
+                        outliers.append(f"{metric}: {val} ({direction} mean of {mean:.1f}, std {std:.1f})")
+
+        # Build 6-week trend string
+        last_6 = sorted(wm_loc["Date"].dropna().unique())[-6:]
+        trend_rows = []
+        for dt in last_6:
+            w = wm_loc[wm_loc["Date"]==dt]
+            a = w["# Active members"].sum() if "# Active members" in w.columns else 0
+            n = w["# New members"].sum() if "# New members" in w.columns else 0
+            c = w["# Cancelled members"].sum() if "# Cancelled members" in w.columns else 0
+            ch = round(c/a*100,1) if a>0 else 0
+            ng = round((n-c)/a*100,2) if a>0 else 0
+            rv_w = rv_loc[rv_loc["Date"]==dt] if not rv_loc.empty and "Date" in rv_loc.columns else pd.DataFrame()
+            nr = rv_w["Net Revenue"].sum() if not rv_w.empty and "Net Revenue" in rv_w.columns else 0
+            trend_rows.append(f"{dt.strftime('%d %b %Y')} | Active: {int(a)} | New: {int(n)} | Cancelled: {int(c)} | Churn: {ch}% | NGR: {ng}% | Net Revenue: ${nr:,.0f}")
+        trend_str = "\n".join(trend_rows)
+
+        outlier_str = "\n".join(outliers) if outliers else "No metrics outside 2 standard deviations from network mean."
+        network_str = "\n".join([f"{k}: location={v['location']}, network mean={v['mean']}, std={v['std']}" for k,v in network_stats.items()])
+
+        prompt = f"""You are a sharp business analyst for Success Tutoring, an Australian tutoring franchise.
+Use Australian English. You are analysing the performance of {loc_short}.
+
+LOCATION METADATA:
+Stage: {meta.get('Stage','Unknown') if hasattr(meta,'get') else 'Unknown'}
+GPM: {meta.get('GPM','Unknown') if hasattr(meta,'get') else 'Unknown'}
+Age (Months): {int(meta.get('Age (Months)',0)) if hasattr(meta,'get') else 'Unknown'}
+Region: {meta.get('Region','Unknown') if hasattr(meta,'get') else 'Unknown'}
+
+LATEST WEEK METRICS:
+Active Members: {active}
+New Members: {new_mem}
+Cancelled Members: {cancelled}
+Suspended Members: {suspended}
+Churn Rate: {churn}%
+Net Growth Rate: {ngr}%
+Net Revenue: ${net_rev:,.2f}
+Active Students: {students}
+Total Sessions: {sessions}
+Revenue per Session: ${rev_sess:,.2f}
+Revenue per Student: ${rev_stud:,.2f}
+Sessions per Student: {sess_stud}
+
+6-WEEK TREND (oldest to newest):
+{trend_str}
+
+NETWORK COMPARISON (latest week):
+{network_str}
+
+OUTLIERS (metrics outside 2 standard deviations from network mean):
+{outlier_str}
+
+Provide a detailed analysis with these exact sections:
+
+## 📍 Location Overview
+Brief summary of this location — stage, age, GPM, and overall health in 2-3 sentences.
+
+## 📊 Membership Performance
+Analyse active members, new members, churn and NGR. Is the location growing or declining? What is the trend over 6 weeks?
+
+## 💰 Financial Performance
+Analyse net revenue, revenue per session, revenue per student. How is the financial health of this location?
+
+## 📈 Trend Analysis
+What is the 6-week trajectory? Is momentum improving or declining? Call out specific week-on-week movements.
+
+## ⚠️ Outliers & Alerts
+List any metrics outside 2 standard deviations from the network mean. Explain what this means for the location.
+
+## 💡 Recommendations
+3-4 specific, actionable recommendations for the GPM based on the data. Be direct."""
+
+        client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
+        with st.spinner(f"🤖 Analysing {loc_short}..."):
+            message = client.messages.create(
+                model="claude-sonnet-4-20250514", max_tokens=1500,
+                messages=[{"role":"user","content":prompt}])
+        st.markdown(message.content[0].text)
 # ══════════════════════════════════════════════════════════════════════════════
 # LOGIN
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1875,6 +2167,7 @@ REPORTS=[
     "9 · Onboarding Progress",
     "10 · Revenue",
     "11 · AI Outlier Analysis",
+    "12 · Location Performance Analysis",
 ]
 
 with st.sidebar:
@@ -1975,3 +2268,4 @@ elif selected_report=="8 · Net Growth Rate %":          report_net_growth(df_wm
 elif selected_report=="9 · Onboarding Progress":      report_onboarding(df_wm)
 elif selected_report=="10 · Revenue":                 report_revenue(df_rv)
 elif selected_report=="11 · AI Outlier Analysis":     report_claude_outliers(df_wm)
+elif selected_report=="12 · Location Performance Analysis": report_location_performance(df_wm, df_rv)
