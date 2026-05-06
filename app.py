@@ -1788,7 +1788,16 @@ def report_location_performance(df_wm, df_rv):
 
     if latest_date is not None:
         lw_wm = wm_loc[wm_loc["Date"] == latest_date]
-        lw_rv = rv_loc[rv_loc["Date"] == latest_date] if not rv_loc.empty and "Date" in rv_loc.columns else pd.DataFrame()
+        # Revenue sheet may use a different date — find the closest date to latest_date
+        if not rv_loc.empty and "Date" in rv_loc.columns:
+            rv_dates = rv_loc["Date"].dropna().unique()
+            if len(rv_dates) > 0:
+                closest_rv_date = min(rv_dates, key=lambda d: abs((d - latest_date).days))
+                lw_rv = rv_loc[rv_loc["Date"] == closest_rv_date]
+            else:
+                lw_rv = pd.DataFrame()
+        else:
+            lw_rv = pd.DataFrame()
 
         active    = lw_wm["# Active members"].sum() if "# Active members" in lw_wm.columns else 0
         new_mem   = lw_wm["# New members"].sum() if "# New members" in lw_wm.columns else 0
