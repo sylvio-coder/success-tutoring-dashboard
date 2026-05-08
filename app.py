@@ -1784,9 +1784,23 @@ def report_location_performance(df_wm, df_rv):
     # ══════════════════════════════════════════════════════════════════════
     # SECTION 1 — Weekly Metrics Table (one row per week)
     # ══════════════════════════════════════════════════════════════════════
-    st.markdown('<div class="section-header">📋 Weekly Metrics — All Weeks</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header">📋 Weekly Metrics</div>', unsafe_allow_html=True)
 
-    all_wm_dates = sorted(wm_loc["Date"].dropna().unique(), reverse=True)
+    # Period filter
+    period_sel = st.selectbox("📅 Period", ["Last Week","Last Month","Last Quarter","Last Year","All Time"], key="r12_period")
+    max_wm_date = wm_loc["Date"].max()
+    if period_sel == "Last Week":
+        wm_loc_f = wm_loc[wm_loc["Date"] == max_wm_date]
+    elif period_sel == "Last Month":
+        wm_loc_f = wm_loc[wm_loc["Date"] >= max_wm_date - pd.DateOffset(months=1)]
+    elif period_sel == "Last Quarter":
+        wm_loc_f = wm_loc[wm_loc["Date"] >= max_wm_date - pd.DateOffset(months=3)]
+    elif period_sel == "Last Year":
+        wm_loc_f = wm_loc[wm_loc["Date"] >= max_wm_date - pd.DateOffset(years=1)]
+    else:
+        wm_loc_f = wm_loc.copy()
+
+    all_wm_dates = sorted(wm_loc_f["Date"].dropna().unique(), reverse=True)
     weekly_rows = []
 
     for dt in all_wm_dates:
@@ -1850,8 +1864,31 @@ def report_location_performance(df_wm, df_rv):
         stud_sess = latest_row["Student per Session"]
 
     df_weekly = pd.DataFrame(weekly_rows)
-    st.dataframe(df_weekly, use_container_width=True, hide_index=True)
 
+    # Averages row
+    if not df_weekly.empty:
+        avg_row = {"Week": f"── AVG ({period_sel}) ──"}
+        for col in df_weekly.columns:
+            if col == "Week":
+                continue
+            elif col in ["Net Revenue","Rev per Session","Rev per Student"]:
+                # Strip $ and commas to average, then reformat
+                try:
+                    vals = df_weekly[col].str.replace("$","",regex=False).str.replace(",","",regex=False).astype(float)
+                    avg_row[col] = f"${vals.mean():,.2f}"
+                except:
+                    avg_row[col] = "—"
+            else:
+                try:
+                    avg_row[col] = round(pd.to_numeric(df_weekly[col], errors="coerce").mean(), 2)
+                except:
+                    avg_row[col] = "—"
+
+        df_display = pd.concat([df_weekly, pd.DataFrame([avg_row])], ignore_index=True)
+    else:
+        df_display = df_weekly
+
+    st.dataframe(df_display, use_container_width=True, hide_index=True)
     # ══════════════════════════════════════════════════════════════════════
     # SECTION 2 — 13 Month Trend Chart
     # ══════════════════════════════════════════════════════════════════════
