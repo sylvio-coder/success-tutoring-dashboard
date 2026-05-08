@@ -1782,22 +1782,15 @@ def report_location_performance(df_wm, df_rv):
     st.markdown("<br>", unsafe_allow_html=True)
 
     # ══════════════════════════════════════════════════════════════════════
-    # SECTION 1 — Metrics Table (latest week)
+    # SECTION 1 — Weekly Metrics Table (one row per week)
     # ══════════════════════════════════════════════════════════════════════
-    st.markdown('<div class="section-header">📋 All Metrics — Latest Week</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header">📋 Weekly Metrics — All Weeks</div>', unsafe_allow_html=True)
 
-    if latest_date is not None:
-        lw_wm = wm_loc[wm_loc["Date"] == latest_date]
-        # Revenue sheet may use a different date — find the closest date to latest_date
-        if not rv_loc.empty and "Date" in rv_loc.columns:
-            rv_dates = rv_loc["Date"].dropna().unique()
-            if len(rv_dates) > 0:
-                closest_rv_date = min(rv_dates, key=lambda d: abs((d - latest_date).days))
-                lw_rv = rv_loc[rv_loc["Date"] == closest_rv_date]
-            else:
-                lw_rv = pd.DataFrame()
-        else:
-            lw_rv = pd.DataFrame()
+    all_wm_dates = sorted(wm_loc["Date"].dropna().unique(), reverse=True)
+    weekly_rows = []
+
+    for dt in all_wm_dates:
+        lw_wm = wm_loc[wm_loc["Date"] == dt]
 
         active    = lw_wm["# Active members"].sum() if "# Active members" in lw_wm.columns else 0
         new_mem   = lw_wm["# New members"].sum() if "# New members" in lw_wm.columns else 0
@@ -1806,30 +1799,58 @@ def report_location_performance(df_wm, df_rv):
         churn     = round(cancelled / active * 100, 1) if active > 0 else 0
         ngr       = round((new_mem - cancelled) / active * 100, 2) if active > 0 else 0
 
-        net_rev   = lw_rv["Net Revenue"].sum() if not lw_rv.empty and "Net Revenue" in lw_rv.columns else 0
-        students  = lw_rv["# Active Students"].sum() if not lw_rv.empty and "# Active Students" in lw_rv.columns else 0
-        sessions  = lw_rv["Total Sessions"].sum() if not lw_rv.empty and "Total Sessions" in lw_rv.columns else 0
+        net_rev = students = sessions = 0
+        if not rv_loc.empty and "Date" in rv_loc.columns:
+            rv_dates = rv_loc["Date"].dropna().unique()
+            if len(rv_dates) > 0:
+                closest_rv_date = min(rv_dates, key=lambda d: abs((d - dt).days))
+                if abs((closest_rv_date - dt).days) <= 7:
+                    lw_rv = rv_loc[rv_loc["Date"] == closest_rv_date]
+                    net_rev  = lw_rv["Net Revenue"].sum() if "Net Revenue" in lw_rv.columns else 0
+                    students = lw_rv["# Active Students"].sum() if "# Active Students" in lw_rv.columns else 0
+                    sessions = lw_rv["Total Sessions"].sum() if "Total Sessions" in lw_rv.columns else 0
+
         rev_sess  = round(net_rev / sessions, 2) if sessions > 0 else 0
         rev_stud  = round(net_rev / students, 2) if students > 0 else 0
         sess_stud = round(sessions / students, 2) if students > 0 else 0
         stud_sess = round(students / sessions, 2) if sessions > 0 else 0
 
-        metrics_table = pd.DataFrame([
-            {"Category": "Membership", "Metric": "Active Members",        "Value": f"{active:,.0f}"},
-            {"Category": "Membership", "Metric": "New Members",           "Value": f"{new_mem:,.0f}"},
-            {"Category": "Membership", "Metric": "Suspended Members",     "Value": f"{suspended:,.0f}"},
-            {"Category": "Membership", "Metric": "Cancelled Members",     "Value": f"{cancelled:,.0f}"},
-            {"Category": "Membership", "Metric": "Churn Rate %",          "Value": f"{churn:.1f}%"},
-            {"Category": "Membership", "Metric": "Net Growth Rate %",     "Value": f"{ngr:.2f}%"},
-            {"Category": "Revenue",    "Metric": "Net Revenue",           "Value": f"${net_rev:,.2f}"},
-            {"Category": "Revenue",    "Metric": "Active Students",       "Value": f"{students:,.0f}"},
-            {"Category": "Revenue",    "Metric": "Total Sessions",        "Value": f"{sessions:,.0f}"},
-            {"Category": "Revenue",    "Metric": "Revenue per Session",   "Value": f"${rev_sess:,.2f}"},
-            {"Category": "Revenue",    "Metric": "Revenue per Student",   "Value": f"${rev_stud:,.2f}"},
-            {"Category": "Revenue",    "Metric": "Sessions per Student",  "Value": f"{sess_stud:.2f}"},
-            {"Category": "Revenue",    "Metric": "Student per Session",   "Value": f"{stud_sess:.2f}"},
-        ])
-        st.dataframe(metrics_table, use_container_width=True, hide_index=True)
+        weekly_rows.append({
+            "Week":                  dt.strftime("%d %b %Y"),
+            "Active Members":        int(active),
+            "New Members":           int(new_mem),
+            "Suspended":             int(suspended),
+            "Cancelled":             int(cancelled),
+            "Churn Rate %":          churn,
+            "Net Growth Rate %":     ngr,
+            "Net Revenue":           f"${net_rev:,.2f}",
+            "Active Students":       int(students),
+            "Total Sessions":        int(sessions),
+            "Rev per Session":       f"${rev_sess:,.2f}",
+            "Rev per Student":       f"${rev_stud:,.2f}",
+            "Sessions per Student":  sess_stud,
+            "Student per Session":   stud_sess,
+        })
+
+    # Set latest week values for AI section
+    if weekly_rows:
+        latest_row = weekly_rows[0]
+        active    = latest_row["Active Members"]
+        new_mem   = latest_row["New Members"]
+        suspended = latest_row["Suspended"]
+        cancelled = latest_row["Cancelled"]
+        churn     = latest_row["Churn Rate %"]
+        ngr       = latest_row["Net Growth Rate %"]
+        net_rev   = float(latest_row["Net Revenue"].replace("$","").replace(",",""))
+        students  = latest_row["Active Students"]
+        sessions  = latest_row["Total Sessions"]
+        rev_sess  = float(latest_row["Rev per Session"].replace("$","").replace(",",""))
+        rev_stud  = float(latest_row["Rev per Student"].replace("$","").replace(",",""))
+        sess_stud = latest_row["Sessions per Student"]
+        stud_sess = latest_row["Student per Session"]
+
+    df_weekly = pd.DataFrame(weekly_rows)
+    st.dataframe(df_weekly, use_container_width=True, hide_index=True)
 
     # ══════════════════════════════════════════════════════════════════════
     # SECTION 2 — 13 Month Trend Chart
