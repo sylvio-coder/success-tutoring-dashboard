@@ -270,7 +270,8 @@ def load_revenue():
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
         for c in ["# Active Students","Total Sessions","Gross Revenue","Net Revenue",
                   "Student Visits","Revenue per Session","Revenue per Student",
-                  "Sessions per Student","Student per Session"]:
+                  "Sessions per Student","Student per Session",
+                  "Sessions per Student Visit","Student Visits per Session"]:
             if c in df.columns:
                 df[c] = pd.to_numeric(df[c].astype(str).str.replace("[$,]","",regex=True), errors="coerce").fillna(0)
         return df
@@ -1286,7 +1287,8 @@ def report_revenue(df_rv):
     # ── Source columns ────────────────────────────────────────────────────
     # All metrics read directly from source — no recalculation
     SUM_METRICS   = ["Gross Revenue","Net Revenue","# Active Students","Total Sessions","Student Visits"]
-    RATIO_METRICS = ["Revenue per Session","Revenue per Student","Sessions per Student","Student per Session"]
+    RATIO_METRICS = ["Revenue per Session","Revenue per Student","Sessions per Student","Student per Session",
+                     "Sessions per Student Visit","Student Visits per Session"]
     ALL_METRICS   = SUM_METRICS + RATIO_METRICS
 
     def week_agg(df_sub, date_val):
@@ -1307,16 +1309,20 @@ def report_revenue(df_rv):
     st.markdown('<div class="section-header">📊 Latest Week vs Prior Week</div>', unsafe_allow_html=True)
 
     kpi_list = [
-        ("Net Revenue",          "$",  "green"),
-        ("Gross Revenue",        "$",  "green"),
-        ("# Active Students",    "",   "blue"),
-        ("Student Visits",       "",   "blue"),
-        ("Total Sessions",       "",   "blue"),
-        ("Revenue per Session",  "$",  "green"),
-        ("Revenue per Student",  "$",  "green"),
-        ("Sessions per Student", "",   "blue"),
-        ("Student per Session",  "",   "blue"),
+        ("Net Revenue",                "$",  "green"),
+        ("Gross Revenue",              "$",  "green"),
+        ("# Active Students",          "",   "blue"),
+        ("Student Visits",             "",   "blue"),
+        ("Total Sessions",             "",   "blue"),
+        ("Revenue per Session",        "$",  "green"),
+        ("Revenue per Student",        "$",  "green"),
+        ("Sessions per Student",       "",   "blue"),
+        ("Student per Session",        "",   "blue"),
+        ("Sessions per Student Visit", "",   "blue"),
+        ("Student Visits per Session", "",   "blue"),
     ]
+
+    kpi_cols = st.columns(4)
 
     kpi_cols = st.columns(5)
     for i, (metric, prefix, color) in enumerate(kpi_list):
@@ -1346,28 +1352,32 @@ def report_revenue(df_rv):
         if m in df_13m.columns:
             df_13m[m] = pd.to_numeric(df_13m[m], errors="coerce").fillna(0)
 
-    mc1, mc2, mc3, mc4, mc5 = st.columns(5)
-    show_nr  = mc1.checkbox("Net Revenue",          value=True,  key="rv_nr")
-    show_gr  = mc2.checkbox("Gross Revenue",         value=False, key="rv_gr")
-    show_as  = mc3.checkbox("# Active Students",     value=False, key="rv_as")
-    show_sv  = mc4.checkbox("Student Visits",        value=False, key="rv_sv")
-    show_ts  = mc5.checkbox("Total Sessions",        value=False, key="rv_ts")
-    mc6, mc7, mc8, mc9 = st.columns(4)
-    show_rps = mc6.checkbox("Revenue per Session",   value=False, key="rv_rps")
-    show_rpu = mc7.checkbox("Revenue per Student",   value=False, key="rv_rpu")
-    show_sps = mc8.checkbox("Sessions per Student",  value=False, key="rv_sps")
-    show_stu = mc9.checkbox("Student per Session",   value=False, key="rv_stu")
+    mc1, mc2, mc3, mc4, mc5, mc6 = st.columns(6)
+    show_nr  = mc1.checkbox("Net Revenue",                value=True,  key="rv_nr")
+    show_gr  = mc2.checkbox("Gross Revenue",              value=False, key="rv_gr")
+    show_as  = mc3.checkbox("# Active Students",          value=False, key="rv_as")
+    show_sv  = mc4.checkbox("Student Visits",             value=False, key="rv_sv")
+    show_ts  = mc5.checkbox("Total Sessions",             value=False, key="rv_ts")
+    show_rps = mc6.checkbox("Revenue per Session",        value=False, key="rv_rps")
+    mc7, mc8, mc9, mc10, mc11 = st.columns(5)
+    show_rpu  = mc7.checkbox("Revenue per Student",       value=False, key="rv_rpu")
+    show_sps  = mc8.checkbox("Sessions per Student",      value=False, key="rv_sps")
+    show_stu  = mc9.checkbox("Student per Session",       value=False, key="rv_stu")
+    show_spsv = mc10.checkbox("Sessions per Stud Visit",  value=False, key="rv_spsv")
+    show_svps = mc11.checkbox("Stud Visits per Session",  value=False, key="rv_svps")
 
     selected_metrics = []
-    if show_nr  and "Net Revenue"          in df_13m.columns: selected_metrics.append(("Net Revenue",          BI_ACCENT,  "Net Revenue"))
-    if show_gr  and "Gross Revenue"        in df_13m.columns: selected_metrics.append(("Gross Revenue",        BI_GREEN,   "Gross Revenue"))
-    if show_as  and "# Active Students"    in df_13m.columns: selected_metrics.append(("# Active Students",    BI_BLUE,    "Active Students"))
-    if show_sv  and "Student Visits"       in df_13m.columns: selected_metrics.append(("Student Visits",       BI_YELLOW,  "Student Visits"))
-    if show_ts  and "Total Sessions"       in df_13m.columns: selected_metrics.append(("Total Sessions",       BI_ORANGE,  "Total Sessions"))
-    if show_rps and "Revenue per Session"  in df_13m.columns: selected_metrics.append(("Revenue per Session",  BI_RED,     "Rev per Session"))
-    if show_rpu and "Revenue per Student"  in df_13m.columns: selected_metrics.append(("Revenue per Student",  BI_PURPLE,  "Rev per Student"))
-    if show_sps and "Sessions per Student" in df_13m.columns: selected_metrics.append(("Sessions per Student", "#f472b6",  "Sessions per Student"))
-    if show_stu and "Student per Session"  in df_13m.columns: selected_metrics.append(("Student per Session",  "#34d399",  "Student per Session"))
+    if show_nr   and "Net Revenue"                in df_13m.columns: selected_metrics.append(("Net Revenue",                BI_ACCENT,  "Net Revenue"))
+    if show_gr   and "Gross Revenue"              in df_13m.columns: selected_metrics.append(("Gross Revenue",              BI_GREEN,   "Gross Revenue"))
+    if show_as   and "# Active Students"          in df_13m.columns: selected_metrics.append(("# Active Students",          BI_BLUE,    "Active Students"))
+    if show_sv   and "Student Visits"             in df_13m.columns: selected_metrics.append(("Student Visits",             BI_YELLOW,  "Student Visits"))
+    if show_ts   and "Total Sessions"             in df_13m.columns: selected_metrics.append(("Total Sessions",             BI_ORANGE,  "Total Sessions"))
+    if show_rps  and "Revenue per Session"        in df_13m.columns: selected_metrics.append(("Revenue per Session",        BI_RED,     "Rev per Session"))
+    if show_rpu  and "Revenue per Student"        in df_13m.columns: selected_metrics.append(("Revenue per Student",        BI_PURPLE,  "Rev per Student"))
+    if show_sps  and "Sessions per Student"       in df_13m.columns: selected_metrics.append(("Sessions per Student",       "#f472b6",  "Sessions per Student"))
+    if show_stu  and "Student per Session"        in df_13m.columns: selected_metrics.append(("Student per Session",        "#34d399",  "Student per Session"))
+    if show_spsv and "Sessions per Student Visit" in df_13m.columns: selected_metrics.append(("Sessions per Student Visit", "#00b4d8",  "Sessions per Stud Visit"))
+    if show_svps and "Student Visits per Session" in df_13m.columns: selected_metrics.append(("Student Visits per Session", "#e91e8c",  "Stud Visits per Session"))
 
     if selected_metrics:
         agg_dict = {}
@@ -1450,15 +1460,17 @@ def report_revenue(df_rv):
                                      ascending=False).reset_index(drop=True)
 
     fmt = {
-        "Gross Revenue":        "${:,.0f}",
-        "Net Revenue":          "${:,.0f}",
-        "# Active Students":    "{:,.0f}",
-        "Student Visits":       "{:,.0f}",
-        "Total Sessions":       "{:,.0f}",
-        "Revenue per Session":  "${:,.2f}",
-        "Revenue per Student":  "${:,.2f}",
-        "Sessions per Student": "{:,.2f}",
-        "Student per Session":  "{:,.2f}",
+        "Gross Revenue":               "${:,.0f}",
+        "Net Revenue":                 "${:,.0f}",
+        "# Active Students":           "{:,.0f}",
+        "Student Visits":              "{:,.0f}",
+        "Total Sessions":              "{:,.0f}",
+        "Revenue per Session":         "${:,.2f}",
+        "Revenue per Student":         "${:,.2f}",
+        "Sessions per Student":        "{:,.2f}",
+        "Student per Session":         "{:,.2f}",
+        "Sessions per Student Visit":  "{:,.2f}",
+        "Student Visits per Session":  "{:,.2f}",
     }
     st.dataframe(
         df_table.style.format({k: v for k, v in fmt.items() if k in df_table.columns}),
