@@ -269,7 +269,7 @@ def load_revenue():
         df = df.rename(columns={"Location": "Success Tutoring - Business name"})
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
         for c in ["# Active Students","Total Sessions","Gross Revenue","Net Revenue",
-                  "Revenue per Session","Revenue per Student",
+                  "Student Visits","Revenue per Session","Revenue per Student",
                   "Sessions per Student","Student per Session"]:
             if c in df.columns:
                 df[c] = pd.to_numeric(df[c].astype(str).str.replace("[$,]","",regex=True), errors="coerce").fillna(0)
@@ -1242,12 +1242,12 @@ def report_onboarding(df_wm):
 # ══════════════════════════════════════════════════════════════════════════════
 def report_revenue(df_rv):
     st.markdown('<div class="report-title">10 · Revenue</div>', unsafe_allow_html=True)
-    st.markdown('<div class="report-subtitle">Source: Revenue — weekly revenue and session metrics by location</div>', unsafe_allow_html=True)
+    st.markdown('<div class="report-subtitle">Source: Revenue sheet — all metrics pulled directly from source</div>', unsafe_allow_html=True)
 
     df_rv = apply_gpm_filter(df_rv)
     loc_col = "Success Tutoring - Business name"
 
-    # ── Filters on one line ───────────────────────────────────────────────
+    # ── Filters ───────────────────────────────────────────────────────────
     f1, f2, f3, f4, f5, f6 = st.columns(6)
     all_countries = ["All"] + sorted(df_rv["Country"].dropna().unique().tolist()) if "Country" in df_rv.columns else ["All"]
     all_states    = ["All"] + sorted(df_rv["Region"].dropna().unique().tolist()) if "Region" in df_rv.columns else ["All"]
@@ -1264,71 +1264,72 @@ def report_revenue(df_rv):
     with f6: sel_loc     = st.selectbox("📌 Location", all_locs,      key="rv_loc")
 
     df = df_rv.copy()
-    if sel_country != "All"          and "Country" in df.columns: df = df[df["Country"] == sel_country]
-    if sel_state   != "All"          and "Region"  in df.columns: df = df[df["Region"]  == sel_state]
-    if sel_stage   != "All"          and "Stage"   in df.columns: df = df[df["Stage"]   == sel_stage]
-    if sel_gpm     != "All"          and "GPM"     in df.columns: df = df[df["GPM"]     == sel_gpm]
-    if sel_status  != "All"          and "Status"  in df.columns: df = df[df["Status"]  == sel_status]
-    if sel_loc     != "All Locations" and loc_col  in df.columns: df = df[df[loc_col]   == sel_loc]
+    if sel_country != "All"           and "Country" in df.columns: df = df[df["Country"] == sel_country]
+    if sel_state   != "All"           and "Region"  in df.columns: df = df[df["Region"]  == sel_state]
+    if sel_stage   != "All"           and "Stage"   in df.columns: df = df[df["Stage"]   == sel_stage]
+    if sel_gpm     != "All"           and "GPM"     in df.columns: df = df[df["GPM"]     == sel_gpm]
+    if sel_status  != "All"           and "Status"  in df.columns: df = df[df["Status"]  == sel_status]
+    if sel_loc     != "All Locations" and loc_col   in df.columns: df = df[df[loc_col]   == sel_loc]
 
     if df.empty:
         st.warning("No revenue data available for selected filters."); return
 
     # ── Date filter ───────────────────────────────────────────────────────
-    df_temp = df.copy()
-    df = checkbox_date_filter(df_temp, key_prefix="r10rv")
-
+    df = checkbox_date_filter(df.copy(), key_prefix="r10rv")
     all_dates = sorted(df["Date"].dropna().unique())
     if not all_dates:
-        st.warning("No dates found in Revenue data."); return
+        st.warning("No dates found."); return
 
     latest_date = all_dates[-1]
     prev_date   = all_dates[-2] if len(all_dates) >= 2 else None
 
-    # ── KPI Cards ─────────────────────────────────────────────────────────
+    # ── Source columns ────────────────────────────────────────────────────
+    # All metrics read directly from source — no recalculation
+    SUM_METRICS   = ["Gross Revenue","Net Revenue","# Active Students","Total Sessions","Student Visits"]
+    RATIO_METRICS = ["Revenue per Session","Revenue per Student","Sessions per Student","Student per Session"]
+    ALL_METRICS   = SUM_METRICS + RATIO_METRICS
+
+    def week_agg(df_sub, date_val):
+        """Aggregate one week — sum totals, mean ratios (from source)."""
+        if date_val is None: return {}
+        w = df_sub[df_sub["Date"] == date_val]
+        row = {}
+        for m in SUM_METRICS:
+            row[m] = pd.to_numeric(w[m], errors="coerce").sum() if m in w.columns else 0
+        for m in RATIO_METRICS:
+            row[m] = pd.to_numeric(w[m], errors="coerce").mean() if m in w.columns else 0
+        return row
+
+    latest_t = week_agg(df, latest_date)
+    prior_t  = week_agg(df, prev_date)
+
+    # ── KPI Tiles ─────────────────────────────────────────────────────────
     st.markdown('<div class="section-header">📊 Latest Week vs Prior Week</div>', unsafe_allow_html=True)
 
-    def get_week_totals(date_val):
-        if date_val is None: return {}
-        w = df[df["Date"] == date_val]
-        rev  = pd.to_numeric(w["Net Revenue"],       errors="coerce").sum() if "Net Revenue"       in w.columns else 0
-        stud = pd.to_numeric(w["# Active Students"], errors="coerce").sum() if "# Active Students" in w.columns else 0
-        sess = pd.to_numeric(w["Total Sessions"],    errors="coerce").sum() if "Total Sessions"    in w.columns else 0
-        return {
-            "Net Revenue":          rev,
-            "# Active Students":    stud,
-            "Total Sessions":       sess,
-            "Revenue per Session":  round(rev / sess, 2)  if sess > 0 else 0,
-            "Revenue per Student":  round(rev / stud, 2)  if stud > 0 else 0,
-            "Sessions per Student": round(sess / stud, 2) if stud > 0 else 0,
-            "Student per Session":  round(stud / sess, 2) if sess > 0 else 0,
-        }
-
-    latest_totals = get_week_totals(latest_date)
-    prior_totals  = get_week_totals(prev_date)
-
     kpi_list = [
-        ("Net Revenue",        "$",  "green"),
+        ("Net Revenue",          "$",  "green"),
+        ("Gross Revenue",        "$",  "green"),
         ("# Active Students",    "",   "blue"),
+        ("Student Visits",       "",   "blue"),
         ("Total Sessions",       "",   "blue"),
         ("Revenue per Session",  "$",  "green"),
         ("Revenue per Student",  "$",  "green"),
         ("Sessions per Student", "",   "blue"),
         ("Student per Session",  "",   "blue"),
     ]
-    kpi_cols = st.columns(4)
+
+    kpi_cols = st.columns(5)
     for i, (metric, prefix, color) in enumerate(kpi_list):
-        val  = latest_totals.get(metric, 0)
-        prev = prior_totals.get(metric, 0)
-        with kpi_cols[i % 4]:
+        val  = latest_t.get(metric, 0)
+        prev = prior_t.get(metric, 0)
+        with kpi_cols[i % 5]:
             metric_card(metric, f"{prefix}{val:,.1f}", val - prev, color)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── 13 Month Trend — metric checkboxes ───────────────────────────────
+    # ── 13 Month Trend ────────────────────────────────────────────────────
     st.markdown('<div class="section-header">📈 Revenue Trend — Last 13 Months</div>', unsafe_allow_html=True)
 
-    # Apply all filters except date for 13 month trend
     df_13m_base = df_rv.copy()
     if sel_country != "All"           and "Country" in df_13m_base.columns: df_13m_base = df_13m_base[df_13m_base["Country"] == sel_country]
     if sel_state   != "All"           and "Region"  in df_13m_base.columns: df_13m_base = df_13m_base[df_13m_base["Region"]  == sel_state]
@@ -1336,104 +1337,87 @@ def report_revenue(df_rv):
     if sel_gpm     != "All"           and "GPM"     in df_13m_base.columns: df_13m_base = df_13m_base[df_13m_base["GPM"]     == sel_gpm]
     if sel_status  != "All"           and "Status"  in df_13m_base.columns: df_13m_base = df_13m_base[df_13m_base["Status"]  == sel_status]
     if sel_loc     != "All Locations" and loc_col   in df_13m_base.columns: df_13m_base = df_13m_base[df_13m_base[loc_col]   == sel_loc]
-    max_date = df_13m_base["Date"].max()
+
+    max_date   = df_13m_base["Date"].max()
     cutoff_13m = max_date - pd.DateOffset(months=13)
-    df_13m = df_13m_base[df_13m_base["Date"] >= cutoff_13m].copy()
-    for metric in ["Gross Revenue","# Active Students","Total Sessions",
-               "Revenue per Session","Revenue per Student",
-               "Sessions per Student","Student per Session"]:
-        if metric in df_13m.columns:
-            df_13m[metric] = pd.to_numeric(df_13m[metric], errors="coerce").fillna(0)
-    
-    mc1, mc2, mc3, mc4 = st.columns(4)
-    show_gr  = mc1.checkbox("Net Revenue",        value=True,  key="rv_gr")
-    show_as  = mc2.checkbox("# Active Students",    value=False, key="rv_as")
-    show_ts  = mc3.checkbox("Total Sessions",       value=False, key="rv_ts")
-    show_rps = mc4.checkbox("Revenue per Session",  value=False, key="rv_rps")
-    mc5, mc6, mc7 = st.columns(3)
-    show_rpu = mc5.checkbox("Revenue per Student",  value=False, key="rv_rpu")
-    show_sps = mc6.checkbox("Sessions per Student", value=False, key="rv_sps")
-    show_stu = mc7.checkbox("Student per Session",  value=False, key="rv_stu")
+    df_13m     = df_13m_base[df_13m_base["Date"] >= cutoff_13m].copy()
+
+    for m in ALL_METRICS:
+        if m in df_13m.columns:
+            df_13m[m] = pd.to_numeric(df_13m[m], errors="coerce").fillna(0)
+
+    mc1, mc2, mc3, mc4, mc5 = st.columns(5)
+    show_nr  = mc1.checkbox("Net Revenue",          value=True,  key="rv_nr")
+    show_gr  = mc2.checkbox("Gross Revenue",         value=False, key="rv_gr")
+    show_as  = mc3.checkbox("# Active Students",     value=False, key="rv_as")
+    show_sv  = mc4.checkbox("Student Visits",        value=False, key="rv_sv")
+    show_ts  = mc5.checkbox("Total Sessions",        value=False, key="rv_ts")
+    mc6, mc7, mc8, mc9 = st.columns(4)
+    show_rps = mc6.checkbox("Revenue per Session",   value=False, key="rv_rps")
+    show_rpu = mc7.checkbox("Revenue per Student",   value=False, key="rv_rpu")
+    show_sps = mc8.checkbox("Sessions per Student",  value=False, key="rv_sps")
+    show_stu = mc9.checkbox("Student per Session",   value=False, key="rv_stu")
 
     selected_metrics = []
-    if show_gr  and "Net Revenue"          in df_13m.columns: selected_metrics.append(("Net Revenue",          "$",  BI_ACCENT,  "Net Revenue"))
-    if show_as  and "# Active Students"    in df_13m.columns: selected_metrics.append(("# Active Students",    "",   BI_BLUE,    "Active Students"))
-    if show_ts  and "Total Sessions"       in df_13m.columns: selected_metrics.append(("Total Sessions",       "",   BI_ORANGE,  "Total Sessions"))
-    if show_rps and "Revenue per Session"  in df_13m.columns: selected_metrics.append(("Revenue per Session",  "$",  BI_RED,     "Rev per Session"))
-    if show_rpu and "Revenue per Student"  in df_13m.columns: selected_metrics.append(("Revenue per Student",  "$",  "#a78bfa",  "Rev per Student"))
-    if show_sps and "Sessions per Student" in df_13m.columns: selected_metrics.append(("Sessions per Student", "",   "#f472b6",  "Sessions per Student"))
-    if show_stu and "Student per Session"  in df_13m.columns: selected_metrics.append(("Student per Session",  "",   "#34d399",  "Student per Session"))
+    if show_nr  and "Net Revenue"          in df_13m.columns: selected_metrics.append(("Net Revenue",          BI_ACCENT,  "Net Revenue"))
+    if show_gr  and "Gross Revenue"        in df_13m.columns: selected_metrics.append(("Gross Revenue",        BI_GREEN,   "Gross Revenue"))
+    if show_as  and "# Active Students"    in df_13m.columns: selected_metrics.append(("# Active Students",    BI_BLUE,    "Active Students"))
+    if show_sv  and "Student Visits"       in df_13m.columns: selected_metrics.append(("Student Visits",       BI_YELLOW,  "Student Visits"))
+    if show_ts  and "Total Sessions"       in df_13m.columns: selected_metrics.append(("Total Sessions",       BI_ORANGE,  "Total Sessions"))
+    if show_rps and "Revenue per Session"  in df_13m.columns: selected_metrics.append(("Revenue per Session",  BI_RED,     "Rev per Session"))
+    if show_rpu and "Revenue per Student"  in df_13m.columns: selected_metrics.append(("Revenue per Student",  BI_PURPLE,  "Rev per Student"))
+    if show_sps and "Sessions per Student" in df_13m.columns: selected_metrics.append(("Sessions per Student", "#f472b6",  "Sessions per Student"))
+    if show_stu and "Student per Session"  in df_13m.columns: selected_metrics.append(("Student per Session",  "#34d399",  "Student per Session"))
 
     if selected_metrics:
-        cols_plot = [(m, color, label) for m, _, color, label in selected_metrics if m in df_13m.columns]
-        sum_metrics = ["Gross Revenue", "# Active Students", "Total Sessions"]
-        agg_dict = {m: "sum" if m in sum_metrics else "mean" for m, _, _ in cols_plot if m in df_13m.columns}
+        agg_dict = {}
+        for m, _, _ in selected_metrics:
+            if m not in df_13m.columns: continue
+            agg_dict[m] = "sum" if m in SUM_METRICS else "mean"
         weekly_13m = df_13m.groupby("Date").agg(agg_dict).reset_index().sort_values("Date")
-        # Recalculate ratio metrics from totals to match KPI tile logic
-        if "Net Revenue" in weekly_13m and "Total Sessions" in weekly_13m:
-            weekly_13m["Revenue per Session"] = (weekly_13m["Net Revenue"] / weekly_13m["Total Sessions"]).round(2)
-        if "Net Revenue" in weekly_13m and "# Active Students" in weekly_13m:
-            weekly_13m["Revenue per Student"] = (weekly_13m["Net Revenue"] / weekly_13m["# Active Students"]).round(2)
-        if "Total Sessions" in weekly_13m and "# Active Students" in weekly_13m:
-            weekly_13m["Sessions per Student"] = (weekly_13m["Total Sessions"] / weekly_13m["# Active Students"]).round(2)
-            weekly_13m["Student per Session"] = (weekly_13m["# Active Students"] / weekly_13m["Total Sessions"]).round(2)
-        fig_trend = plotly_line(
-            weekly_13m, "Date",
-            cols_plot,
-            "Revenue Trend — Last 13 Months",
-            height=500
-        )
+        cols_plot  = [(m, color, label) for m, color, label in selected_metrics if m in weekly_13m.columns]
+        fig_trend  = plotly_line(weekly_13m, "Date", cols_plot, "Revenue Trend — Last 13 Months", height=500)
         st.plotly_chart(fig_trend, use_container_width=True)
     else:
         st.info("Please select at least one metric.")
 
-    # ── Location Trend ────────────────────────────────────────────────────
+    # ── Trend by Location ─────────────────────────────────────────────────
     st.markdown('<div class="section-header">📍 Trend by Location</div>', unsafe_allow_html=True)
-    loc_metric = st.selectbox("Metric:", [m for m in ["Net Revenue","# Active Students","Total Sessions","Revenue per Session","Revenue per Student","Sessions per Student","Student per Session"] if m in df_13m.columns], key="rv_loc_metric")
-    all_loc_opts = sorted(df_13m[loc_col].dropna().unique().tolist()) if loc_col in df_13m.columns else []
-    sel_locs = st.multiselect("Select locations to compare:", all_loc_opts, default=all_loc_opts[:3] if len(all_loc_opts) >= 3 else all_loc_opts, key="rv_sel_locs")
+    avail_metrics = [m for m in ALL_METRICS if m in df_13m.columns]
+    loc_metric    = st.selectbox("Metric:", avail_metrics, key="rv_loc_metric")
+    all_loc_opts  = sorted(df_13m[loc_col].dropna().unique().tolist()) if loc_col in df_13m.columns else []
+    sel_locs      = st.multiselect("Select locations to compare:", all_loc_opts,
+                                    default=all_loc_opts[:3] if len(all_loc_opts) >= 3 else all_loc_opts,
+                                    key="rv_sel_locs")
 
     if sel_locs:
-        colors = [BI_ACCENT, BI_BLUE, BI_ORANGE, BI_RED, "#a78bfa", "#f472b6", "#34d399", "#fbbf24"]
+        loc_agg   = "sum" if loc_metric in SUM_METRICS else "mean"
+        colors    = [BI_ACCENT, BI_BLUE, BI_ORANGE, BI_RED, BI_PURPLE, BI_YELLOW, "#00b4d8", "#f472b6"]
+        loc_df    = pd.DataFrame()
         loc_series = []
-        loc_df = pd.DataFrame()
         for i, loc in enumerate(sel_locs):
-            sum_metrics = ["Gross Revenue", "# Active Students", "Total Sessions"]
-            loc_agg = "sum" if loc_metric in sum_metrics else "mean"
             loc_data = df_13m[df_13m[loc_col] == loc].groupby("Date")[loc_metric].agg(loc_agg).reset_index()
             col_name = loc.replace("Success Tutoring - ", "")
             loc_data = loc_data.rename(columns={loc_metric: col_name})
-            if loc_df.empty:
-                loc_df = loc_data
-            else:
-                loc_df = loc_df.merge(loc_data, on="Date", how="outer")
+            loc_df   = loc_data if loc_df.empty else loc_df.merge(loc_data, on="Date", how="outer")
             loc_series.append((col_name, colors[i % len(colors)], col_name))
-        loc_df = loc_df.sort_values("Date")
-        fig_loc = plotly_line(loc_df, "Date", loc_series, f"{loc_metric} by Location — Last 13 Months", height=450)
+        loc_df    = loc_df.sort_values("Date")
+        fig_loc   = plotly_line(loc_df, "Date", loc_series, f"{loc_metric} by Location — Last 13 Months", height=450)
         st.plotly_chart(fig_loc, use_container_width=True)
     else:
         st.info("Please select at least one location.")
 
-    # ── Location Bar Chart ────────────────────────────────────────────────
+    # ── Performance Bar Chart ─────────────────────────────────────────────
     st.markdown('<div class="section-header">📊 Performance by Location</div>', unsafe_allow_html=True)
     bc1, bc2 = st.columns([3, 1])
-    with bc1: bar_metric = st.selectbox("Metric:", [m for m in ["Net Revenue","# Active Students","Total Sessions","Revenue per Session","Revenue per Student","Sessions per Student","Student per Session"] if m in df.columns], key="rv_bar_metric")
+    with bc1: bar_metric = st.selectbox("Metric:", [m for m in ALL_METRICS if m in df.columns], key="rv_bar_metric")
     with bc2: bar_scope  = st.selectbox("Show:", ["Latest week only", "All selected weeks combined"], key="rv_bar_scope")
 
     df_bar   = df[df["Date"] == latest_date] if bar_scope == "Latest week only" else df
-    sum_metrics = ["Net Revenue", "# Active Students", "Total Sessions"]
-    bar_base = df_bar.groupby(loc_col).agg(
-        net_rev=("Net Revenue", "sum"),
-        students=("# Active Students", "sum"),
-        sessions=("Total Sessions", "sum")
-    ).reset_index()
-    bar_base["Revenue per Session"]  = (bar_base["net_rev"] / bar_base["sessions"]).round(2).where(bar_base["sessions"] > 0, 0)
-    bar_base["Revenue per Student"]  = (bar_base["net_rev"] / bar_base["students"]).round(2).where(bar_base["students"] > 0, 0)
-    bar_base["Sessions per Student"] = (bar_base["sessions"] / bar_base["students"]).round(2).where(bar_base["students"] > 0, 0)
-    bar_base["Student per Session"]  = (bar_base["students"] / bar_base["sessions"]).round(2).where(bar_base["sessions"] > 0, 0)
-    bar_base = bar_base.rename(columns={"net_rev": "Net Revenue", "students": "# Active Students", "sessions": "Total Sessions"})
-    bar_data = bar_base[[loc_col, bar_metric]].sort_values(bar_metric, ascending=False)
-    prefix_map = {"Gross Revenue": "$", "Revenue per Session": "$", "Revenue per Student": "$"}
+    bar_agg  = "sum" if bar_metric in SUM_METRICS else "mean"
+    bar_data = df_bar.groupby(loc_col)[bar_metric].agg(bar_agg).reset_index().sort_values(bar_metric, ascending=False)
+
+    prefix_map = {"Net Revenue": "$", "Gross Revenue": "$", "Revenue per Session": "$", "Revenue per Student": "$"}
     prefix_bar = prefix_map.get(bar_metric, "")
 
     fig_bar = go.Figure(go.Bar(
@@ -1455,17 +1439,21 @@ def report_revenue(df_rv):
     )
     st.plotly_chart(fig_bar, use_container_width=True)
 
-    # ── Table ─────────────────────────────────────────────────────────────
-    st.markdown('<div class="section-header">📋 All Metrics by Location</div>', unsafe_allow_html=True)
-    metric_names = [m for m in ["Net Revenue","# Active Students","Total Sessions","Revenue per Session","Revenue per Student","Sessions per Student","Student per Session"] if m in df.columns]
-    df_table = df[df["Date"] == latest_date].groupby(loc_col)[metric_names].sum().reset_index()
+    # ── Table — all metrics by location ───────────────────────────────────
+    st.markdown('<div class="section-header">📋 All Metrics by Location — Latest Week</div>', unsafe_allow_html=True)
+    metric_names = [m for m in ALL_METRICS if m in df.columns]
+    agg_dict_tbl = {m: ("sum" if m in SUM_METRICS else "mean") for m in metric_names}
+    df_table = df[df["Date"] == latest_date].groupby(loc_col).agg(agg_dict_tbl).reset_index()
     df_table = df_table.rename(columns={loc_col: "Location"})
     df_table["Location"] = df_table["Location"].str.replace("Success Tutoring - ", "", regex=False)
-    df_table = df_table.sort_values("Net Revenue", ascending=False).reset_index(drop=True)
+    df_table = df_table.sort_values("Net Revenue" if "Net Revenue" in df_table.columns else metric_names[0],
+                                     ascending=False).reset_index(drop=True)
 
     fmt = {
-        "Net Revenue":        "${:,.0f}",
+        "Gross Revenue":        "${:,.0f}",
+        "Net Revenue":          "${:,.0f}",
         "# Active Students":    "{:,.0f}",
+        "Student Visits":       "{:,.0f}",
         "Total Sessions":       "{:,.0f}",
         "Revenue per Session":  "${:,.2f}",
         "Revenue per Student":  "${:,.2f}",
