@@ -1305,10 +1305,10 @@ def report_revenue(df_rv):
         visits   = row.get("Student Visits", 0)
         row["Revenue per Session"]        = round(net_rev  / sessions, 2) if sessions > 0 else 0
         row["Revenue per Student"]        = round(net_rev  / students, 2) if students > 0 else 0
-        row["Sessions per Student"]       = round(sessions / students, 2) if students > 0 else 0
-        row["Student per Session"]        = round(students / sessions, 2) if sessions > 0 else 0
-        row["Sessions per Student Visit"] = round(sessions / visits,   2) if visits   > 0 else 0
-        row["Student Visits per Session"] = round(visits   / sessions, 2) if sessions > 0 else 0
+        row["Sessions per Student"]       = round(sessions / students, 1) if students > 0 else 0
+        row["Student per Session"]        = round(students / sessions, 1) if sessions > 0 else 0
+        row["Sessions per Student Visit"] = round(sessions / visits,   1) if visits   > 0 else 0
+        row["Student Visits per Session"] = round(visits   / sessions, 1) if sessions > 0 else 0
         return row
 
     latest_t = week_agg(df, latest_date)
@@ -1331,14 +1331,26 @@ def report_revenue(df_rv):
         ("Student Visits per Session", "",   "blue"),
     ]
 
+    kpi_fmt = {
+        "Net Revenue":                 ("$", "{:,.0f}"),
+        "Gross Revenue":               ("$", "{:,.0f}"),
+        "# Active Students":           ("",  "{:,.0f}"),
+        "Student Visits":              ("",  "{:,.0f}"),
+        "Total Sessions":              ("",  "{:,.0f}"),
+        "Revenue per Session":         ("$", "{:,.2f}"),
+        "Revenue per Student":         ("$", "{:,.2f}"),
+        "Sessions per Student":        ("",  "{:,.1f}"),
+        "Student per Session":         ("",  "{:,.1f}"),
+        "Sessions per Student Visit":  ("",  "{:,.1f}"),
+        "Student Visits per Session":  ("",  "{:,.1f}"),
+    }
     kpi_cols = st.columns(4)
-
-    kpi_cols = st.columns(5)
     for i, (metric, prefix, color) in enumerate(kpi_list):
         val  = latest_t.get(metric, 0)
         prev = prior_t.get(metric, 0)
-        with kpi_cols[i % 5]:
-            metric_card(metric, f"{prefix}{val:,.1f}", val - prev, color)
+        pfx, fmt = kpi_fmt.get(metric, ("", "{:,.1f}"))
+        with kpi_cols[i % 4]:
+            metric_card(metric, f"{pfx}{fmt.format(val)}", val - prev, color)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -1476,10 +1488,10 @@ def report_revenue(df_rv):
         "Total Sessions":              "{:,.0f}",
         "Revenue per Session":         "${:,.2f}",
         "Revenue per Student":         "${:,.2f}",
-        "Sessions per Student":        "{:,.2f}",
-        "Student per Session":         "{:,.2f}",
-        "Sessions per Student Visit":  "{:,.2f}",
-        "Student Visits per Session":  "{:,.2f}",
+        "Sessions per Student":        "{:,.1f}",
+        "Student per Session":         "{:,.1f}",
+        "Sessions per Student Visit":  "{:,.1f}",
+        "Student Visits per Session":  "{:,.1f}",
     }
     st.dataframe(
         df_table.style.format({k: v for k, v in fmt.items() if k in df_table.columns}),
