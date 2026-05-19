@@ -1292,14 +1292,23 @@ def report_revenue(df_rv):
     ALL_METRICS   = SUM_METRICS + RATIO_METRICS
 
     def week_agg(df_sub, date_val):
-        """Aggregate one week — sum totals, mean ratios (from source)."""
+        """Aggregate one week — sum totals, derive ratios from network totals."""
         if date_val is None: return {}
         w = df_sub[df_sub["Date"] == date_val]
         row = {}
         for m in SUM_METRICS:
             row[m] = pd.to_numeric(w[m], errors="coerce").sum() if m in w.columns else 0
-        for m in RATIO_METRICS:
-            row[m] = pd.to_numeric(w[m], errors="coerce").mean() if m in w.columns else 0
+        # Derive ratios from network totals for accuracy
+        net_rev  = row.get("Net Revenue", 0)
+        students = row.get("# Active Students", 0)
+        sessions = row.get("Total Sessions", 0)
+        visits   = row.get("Student Visits", 0)
+        row["Revenue per Session"]        = round(net_rev  / sessions, 2) if sessions > 0 else 0
+        row["Revenue per Student"]        = round(net_rev  / students, 2) if students > 0 else 0
+        row["Sessions per Student"]       = round(sessions / students, 2) if students > 0 else 0
+        row["Student per Session"]        = round(students / sessions, 2) if sessions > 0 else 0
+        row["Sessions per Student Visit"] = round(sessions / visits,   2) if visits   > 0 else 0
+        row["Student Visits per Session"] = round(visits   / sessions, 2) if sessions > 0 else 0
         return row
 
     latest_t = week_agg(df, latest_date)
