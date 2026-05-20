@@ -1354,8 +1354,19 @@ def report_revenue(df_rv):
 
     st.markdown("<br>", unsafe_allow_html=True)
 # ── Country & Region summary tables ───────────────────────────────────
-    agg_dict_summary = {m: ("sum" if m in SUM_METRICS else "mean") for m in metric_names}
-
+    fmt = {
+        "Gross Revenue":               "${:,.0f}",
+        "Net Revenue":                 "${:,.0f}",
+        "# Active Students":           "{:,.0f}",
+        "Student Visits":              "{:,.0f}",
+        "Total Sessions":              "{:,.0f}",
+        "Revenue per Session":         "${:,.2f}",
+        "Revenue per Student":         "${:,.2f}",
+        "Sessions per Student":        "{:,.1f}",
+        "Student per Session":         "{:,.1f}",
+        "Sessions per Student Visit":  "{:,.1f}",
+        "Student Visits per Session":  "{:,.1f}",
+    }
     # Recompute ratio metrics from totals for accuracy
     def build_summary_table(df_src, group_col, label_col):
         if group_col not in df_src.columns: return pd.DataFrame()
@@ -1527,19 +1538,7 @@ def report_revenue(df_rv):
     df_table = df_table.sort_values("Net Revenue" if "Net Revenue" in df_table.columns else metric_names[0],
                                      ascending=False).reset_index(drop=True)
 
-    fmt = {
-        "Gross Revenue":               "${:,.0f}",
-        "Net Revenue":                 "${:,.0f}",
-        "# Active Students":           "{:,.0f}",
-        "Student Visits":              "{:,.0f}",
-        "Total Sessions":              "{:,.0f}",
-        "Revenue per Session":         "${:,.2f}",
-        "Revenue per Student":         "${:,.2f}",
-        "Sessions per Student":        "{:,.1f}",
-        "Student per Session":         "{:,.1f}",
-        "Sessions per Student Visit":  "{:,.1f}",
-        "Student Visits per Session":  "{:,.1f}",
-    }
+    
     st.dataframe(
         df_table.style.format({k: v for k, v in fmt.items() if k in df_table.columns}),
         use_container_width=True,
