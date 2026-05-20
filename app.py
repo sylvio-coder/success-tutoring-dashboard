@@ -1353,7 +1353,54 @@ def report_revenue(df_rv):
             metric_card(metric, f"{pfx}{fmt.format(val)}", val - prev, color)
 
     st.markdown("<br>", unsafe_allow_html=True)
+# ── Country & Region summary tables ───────────────────────────────────
+    agg_dict_summary = {m: ("sum" if m in SUM_METRICS else "mean") for m in metric_names}
 
+    # Recompute ratio metrics from totals for accuracy
+    def build_summary_table(df_src, group_col, label_col):
+        if group_col not in df_src.columns: return pd.DataFrame()
+        grp = df_src.groupby(group_col).agg(
+            **{m: (m, "sum") for m in SUM_METRICS if m in df_src.columns}
+        ).reset_index()
+        net  = grp.get("Net Revenue",       pd.Series([0]*len(grp)))
+        stud = grp.get("# Active Students", pd.Series([0]*len(grp)))
+        sess = grp.get("Total Sessions",    pd.Series([0]*len(grp)))
+        vis  = grp.get("Student Visits",    pd.Series([0]*len(grp)))
+        grp["Revenue per Session"]        = (net  / sess).round(2).where(sess > 0, 0)
+        grp["Revenue per Student"]        = (net  / stud).round(2).where(stud > 0, 0)
+        grp["Sessions per Student"]       = (sess / stud).round(1).where(stud > 0, 0)
+        grp["Student per Session"]        = (stud / sess).round(1).where(sess > 0, 0)
+        grp["Sessions per Student Visit"] = (sess / vis ).round(1).where(vis  > 0, 0)
+        grp["Student Visits per Session"] = (vis  / sess).round(1).where(sess > 0, 0)
+        grp = grp.rename(columns={group_col: label_col})
+        grp = grp.sort_values("Net Revenue" if "Net Revenue" in grp.columns else grp.columns[1],
+                               ascending=False).reset_index(drop=True)
+        return grp
+
+    df_latest_all = df_13m_base[df_13m_base["Date"] == df_13m_base["Date"].max()].copy()
+    for m in SUM_METRICS:
+        if m in df_latest_all.columns:
+            df_latest_all[m] = pd.to_numeric(df_latest_all[m], errors="coerce").fillna(0)
+
+    # Country table
+    st.markdown('<div class="section-header">🌏 All Metrics by Country — Latest Week</div>', unsafe_allow_html=True)
+    df_country = build_summary_table(df_latest_all, "Country", "Country")
+    if not df_country.empty:
+        st.dataframe(
+            df_country.style.format({k: v for k, v in fmt.items() if k in df_country.columns}),
+            use_container_width=True, hide_index=True)
+    else:
+        st.info("No country data available.")
+
+    # Region table
+    st.markdown('<div class="section-header">📍 All Metrics by Region — Latest Week</div>', unsafe_allow_html=True)
+    df_region = build_summary_table(df_latest_all, "Region", "Region")
+    if not df_region.empty:
+        st.dataframe(
+            df_region.style.format({k: v for k, v in fmt.items() if k in df_region.columns}),
+            use_container_width=True, hide_index=True)
+    else:
+        st.info("No region data available.")
     # ── 13 Month Trend ────────────────────────────────────────────────────
     st.markdown('<div class="section-header">📈 Revenue Trend — Last 13 Months</div>', unsafe_allow_html=True)
 
