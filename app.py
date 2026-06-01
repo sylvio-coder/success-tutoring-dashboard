@@ -1674,8 +1674,11 @@ def report_claude_outliers(df_wm):
         show_ranked(loc_latest, "Active",           "🥇 Top 5 — Active Members",       n=5, ascending=False)
         show_ranked(loc_latest, "New",              "🥇 Top 5 — New Members",          n=5, ascending=False)
         show_ranked(loc_latest, "Net Growth Rate %","🥇 Top 5 — Net Growth Rate %",    n=5, ascending=False)
-        show_all(loc_latest[loc_latest["Active"] < 50].sort_values("Active"),
-                 "⚠️ All Locations — Active Members Below 50")
+        st.markdown('<div class="section-header">⚠️ All Locations — Active Members Below 50</div>', unsafe_allow_html=True)
+        df_below50 = loc_latest[loc_latest["Active"] < 50].sort_values("Active").copy()
+        cols_below50 = [c for c in [loc_col,"Active","New","Cancelled","Churn Rate %","Net Growth Rate %","Stage","GPM"] if c in df_below50.columns]
+        st.dataframe(df_below50[cols_below50].rename(columns={loc_col:"Location"}).reset_index(drop=True),
+                     use_container_width=True, hide_index=True)
 
     with col2:
         show_ranked(loc_latest, "Churn Rate %",     "🔴 Top 5 — Highest Churn Rate %",          n=5, ascending=False)
