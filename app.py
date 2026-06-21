@@ -1191,7 +1191,7 @@ def report_onboarding(df_wm):
     if "Onboarding week" in onb.columns:
         onb_w=onb.sort_values("Onboarding week")
         gpm_list=onb_w["GPM"].dropna().unique().tolist() if "GPM" in onb_w.columns else []
-        gpm_cmap=plt.cm.get_cmap("tab10",max(len(gpm_list),1))
+        gpm_cmap = plt.colormaps["tab10"].resampled(max(len(gpm_list), 1))
         gpm_color_map={g:gpm_cmap(i) for i,g in enumerate(gpm_list)}
         bar_colors=[gpm_color_map.get(str(row.get("GPM","")),BI_ACCENT) for _,row in onb_w.iterrows()]
         fig,ax=bi_fig(14,max(6,len(onb_w)*0.45))
