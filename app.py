@@ -252,7 +252,7 @@ def load_sheet_data(tab_name):
 def load_weekly_membership():
     df = load_sheet_data("Weekly Membership")
     if "Date" in df.columns:
-        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+        df["Date"] = pd.to_datetime(df["Date"], dayfirst=True, errors="coerce")
         df = df.dropna(subset=["Date"])
     num_cols = ["# Active members","# New members","# Suspended members",
                 "# Cancelled members","Onboarding Members","Onboarding week","Age (Months)"]
@@ -267,7 +267,7 @@ def load_revenue():
     try:
         df = load_sheet_data("Revenue")
         df = df.rename(columns={"Location": "Success Tutoring - Business name"})
-        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+        df["Date"] = pd.to_datetime(df["Date"], dayfirst=True, errors="coerce")
         for c in ["# Active Students","Total Sessions","Gross Revenue","Net Revenue",
                   "Student Visits","Revenue per Session","Revenue per Student",
                   "Sessions per Student","Student per Session",
