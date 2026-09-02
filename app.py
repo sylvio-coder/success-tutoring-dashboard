@@ -723,6 +723,11 @@ def report_locations(df_wm):
                 "# Active members","# New members","# Suspended members","# Cancelled members"]].copy()
             for c in ["# Active members","# New members","# Suspended members","# Cancelled members"]:
                 lw_all[c]=pd.to_numeric(lw_all[c],errors="coerce").fillna(0)
+            st.write("vl columns:", vl.columns.tolist())
+            st.write("lw_all columns:", lw_all.columns.tolist())
+            st.write("loc_col:", loc_col)
+            st.write("latest_date:", latest_date)
+            st.stop()
             merged = vl.merge(lw_all,on=loc_col,how="left")
             for c in ["# Active members","# New members","# Suspended members","# Cancelled members"]:
                 if c in merged.columns: merged[c]=merged[c].fillna(0)
