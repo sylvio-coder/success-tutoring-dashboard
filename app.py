@@ -723,7 +723,7 @@ def report_locations(df_wm):
                 "# Active members","# New members","# Suspended members","# Cancelled members"]].copy()
             for c in ["# Active members","# New members","# Suspended members","# Cancelled members"]:
                 lw_all[c]=pd.to_numeric(lw_all[c],errors="coerce").fillna(0)
-                        merged = vl.merge(lw_all,on=loc_col,how="left")
+            merged = vl.merge(lw_all,on=loc_col,how="left")
             for c in ["# Active members","# New members","# Suspended members","# Cancelled members"]:
                 if c in merged.columns: merged[c]=merged[c].fillna(0)
             merged["Churn %"]=merged.apply(
