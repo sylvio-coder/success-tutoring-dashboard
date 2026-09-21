@@ -771,6 +771,116 @@ def report_membership(df_wm):
     cr_latest=churn_rate(lc,la); cr_prev=churn_rate(pc,pa)
     col1,col2=st.columns([1,3])
     with col1: metric_card("Network Churn Rate",f"{cr_latest:.1f}%",round(cr_latest-cr_prev,2),"red")
+        # ── YEAR-OVER-YEAR WEEKLY COMPARISON ──────────────────────────────────
+    st.markdown('<div class="section-header">Year-over-Year Weekly Comparison</div>', unsafe_allow_html=True)
+
+    df_yoy = df_wm.copy()
+    df_yoy["Week"] = df_yoy["Date - Week/Year"].str.split("/").str[0].astype(int)
+    df_yoy["Year"] = df_yoy["Date - Week/Year"].str.split("/").str[1].astype(int)
+
+    # Independent filters
+    yoy_cols = st.columns(3)
+    all_locs_yoy = sorted(df_yoy["Success Tutoring - Business name"].dropna().unique().tolist())
+    sel_locs_yoy = yoy_cols[0].multiselect("📍 Location(s)", all_locs_yoy, default=[], key="yoy_locs",
+                                            placeholder="All Locations")
+    all_gpms_yoy = sorted(df_yoy["GPM"].dropna().unique().tolist()) if "GPM" in df_yoy.columns else []
+    sel_gpm_yoy  = yoy_cols[1].selectbox("👤 GPM", ["All"] + all_gpms_yoy, key="yoy_gpm")
+    all_stages_yoy = sorted(df_yoy["Stage"].dropna().unique().tolist()) if "Stage" in df_yoy.columns else []
+    sel_stage_yoy  = yoy_cols[2].selectbox("🏁 Stage", ["All"] + all_stages_yoy, key="yoy_stage")
+
+    yoy_cols2 = st.columns(3)
+    all_status_yoy = sorted(df_yoy["Status"].dropna().unique().tolist()) if "Status" in df_yoy.columns else []
+    sel_status_yoy  = yoy_cols2[0].selectbox("🌐 Status", ["All"] + all_status_yoy, key="yoy_status")
+    all_states_yoy  = sorted(df_yoy["Region"].dropna().unique().tolist()) if "Region" in df_yoy.columns else []
+    sel_state_yoy   = yoy_cols2[1].selectbox("📍 State", ["All"] + all_states_yoy, key="yoy_state")
+    all_countries_yoy = sorted(df_yoy["Country"].dropna().unique().tolist()) if "Country" in df_yoy.columns else []
+    sel_country_yoy   = yoy_cols2[2].selectbox("🌍 Country", ["All"] + all_countries_yoy, key="yoy_country")
+
+    # Metric selector
+    yoy_metric = st.selectbox("📊 Metric", ["# Active members","# New members","# Suspended members","# Cancelled members"], key="yoy_metric")
+
+    # Year toggles
+    available_years = sorted(df_yoy["Year"].dropna().unique().tolist(), reverse=True)
+    yoy_year_cols = st.columns(len(available_years))
+    sel_years_yoy = []
+    for i, yr in enumerate(available_years):
+        if yoy_year_cols[i].checkbox(str(yr), value=(i < 2), key=f"yoy_yr_{yr}"):
+            sel_years_yoy.append(yr)
+
+    # Apply filters
+    df_yoy_f = df_yoy.copy()
+    if sel_locs_yoy:    df_yoy_f = df_yoy_f[df_yoy_f["Success Tutoring - Business name"].isin(sel_locs_yoy)]
+    if sel_gpm_yoy   != "All": df_yoy_f = df_yoy_f[df_yoy_f["GPM"]     == sel_gpm_yoy]
+    if sel_stage_yoy != "All": df_yoy_f = df_yoy_f[df_yoy_f["Stage"]   == sel_stage_yoy]
+    if sel_status_yoy!= "All": df_yoy_f = df_yoy_f[df_yoy_f["Status"]  == sel_status_yoy]
+    if sel_state_yoy != "All": df_yoy_f = df_yoy_f[df_yoy_f["Region"]  == sel_state_yoy]
+    if sel_country_yoy!="All": df_yoy_f = df_yoy_f[df_yoy_f["Country"] == sel_country_yoy]
+
+    if yoy_metric in df_yoy_f.columns:
+        df_yoy_f[yoy_metric] = pd.to_numeric(df_yoy_f[yoy_metric], errors="coerce").fillna(0)
+
+    all_weeks = list(range(1, 53))
+    YEAR_COLORS = {2024: "#4e9af1", 2025: "#f1a14e", 2026: "#4ef19a"}
+
+    if sel_years_yoy and yoy_metric in df_yoy_f.columns:
+        fig_yoy = go.Figure()
+        for yr in sorted(sel_years_yoy):
+            df_yr = df_yoy_f[df_yoy_f["Year"] == yr].groupby("Week")[yoy_metric].sum().reindex(all_weeks)
+            fig_yoy.add_trace(go.Bar(
+                x=all_weeks,
+                y=df_yr.values,
+                name=str(yr),
+                marker_color=YEAR_COLORS.get(yr, "#aaaaaa")
+            ))
+        fig_yoy.update_layout(
+            barmode="group",
+            title=f"{yoy_metric} — Year over Year by Week",
+            xaxis=dict(title="Week", tickmode="linear", dtick=1),
+            yaxis=dict(title=yoy_metric),
+            height=450,
+            legend=dict(orientation="h", y=-0.2),
+            margin=dict(l=40, r=40, t=50, b=80),
+        )
+        st.plotly_chart(fig_yoy, use_container_width=True)
+
+        # ── VARIANCE TABLE ────────────────────────────────────────────────
+        latest_week = df_yoy_f["Week"].max()
+        latest_year = df_yoy_f["Year"].max()
+        prev_year   = latest_year - 1
+
+        def get_val(week, year):
+            v = df_yoy_f[(df_yoy_f["Week"]==week) & (df_yoy_f["Year"]==year)][yoy_metric].sum()
+            return v if v > 0 else None
+
+        def pct(a, b):
+            if a is None or b is None or b == 0: return None
+            return round((a - b) / b * 100, 1)
+
+        cur  = get_val(latest_week, latest_year)
+        prev_wk = get_val(latest_week - 1, latest_year)
+        prev_yr_wk = get_val(latest_week, prev_year)
+
+        ytd_cur  = df_yoy_f[(df_yoy_f["Year"]==latest_year)  & (df_yoy_f["Week"]<=latest_week)][yoy_metric].sum()
+        ytd_prev = df_yoy_f[(df_yoy_f["Year"]==prev_year) & (df_yoy_f["Week"]<=latest_week)][yoy_metric].sum()
+        ytd_var  = pct(ytd_cur, ytd_prev) if ytd_prev > 0 else None
+
+        def fmt_pct(v):
+            if v is None: return "N/A"
+            color = "green" if v >= 0 else "red"
+            sign  = "+" if v >= 0 else ""
+            return f'<span style="color:{color};font-weight:bold">{sign}{v}%</span>'
+
+        st.markdown(f"""
+        | Variance | Value |
+        |---|---|
+        | This week vs last week (Wk {latest_week} vs Wk {latest_week-1}) | {fmt_pct(pct(cur, prev_wk))} |
+        | This week vs same week last year (Wk {latest_week} {latest_year} vs {prev_year}) | {fmt_pct(pct(cur, prev_yr_wk))} |
+        | YTD {latest_year} vs YTD {prev_year} (Wk 1–{latest_week}) | {fmt_pct(ytd_var)} |
+        """, unsafe_allow_html=True)
+    else:
+        st.info("Select at least one year to display the chart.")
+
+    # ── END YEAR-OVER-YEAR ─────────────────────────────────────────────────
     st.markdown('<div class="section-header">Member Trend — Last 13 Months</div>',unsafe_allow_html=True)
     df_13m=get_13m_filtered(df_wm,df)
     for c in num_cols:
