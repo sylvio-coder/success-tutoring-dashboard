@@ -978,7 +978,7 @@ def report_membership(df_wm):
 
                 # vs Same Week Last Year
                 prev_yr_loc = df_loc[(df_loc["Year"]==prev_year) & (df_loc["Week"]==latest_week)][yoy_metric].sum()
-                row[f"vs Wk{latest_week} '{str(prev_year)[2:]}"] = pct(cur_loc if cur_loc > 0 else None, prev_yr_loc if prev_yr_loc > 0 else None)
+                row[f"vs Wk{latest_week} '{str(prev_year)[2:]}'"] = pct(cur_loc if cur_loc > 0 else None, prev_yr_loc if prev_yr_loc > 0 else None)
 
                 # YTD columns
                 ytd_cur_loc  = df_loc[(df_loc["Year"]==latest_year) & (df_loc["Week"]<=latest_week)][yoy_metric].sum()
@@ -1012,7 +1012,7 @@ def report_membership(df_wm):
             t_ytd_cur  = df_yoy_f[(df_yoy_f["Year"]==latest_year) & (df_yoy_f["Week"]<=latest_week)][yoy_metric].sum()
             t_ytd_prev = df_yoy_f[(df_yoy_f["Year"]==prev_year)   & (df_yoy_f["Week"]<=latest_week)][yoy_metric].sum()
             total_row[f"vs Wk{latest_week-1}"]                    = pct(t_cur or None, t_prev_wk or None)
-            total_row[f"vs Wk{latest_week} '{str(prev_year)[2:]}"] = pct(t_cur or None, t_prev_yr or None)
+            total_row[f"vs Wk{latest_week} '{str(prev_year)[2:]}'"] = pct(t_cur or None, t_prev_yr or None)
             total_row["YTD Var%"]                                  = pct(t_ytd_cur or None, t_ytd_prev or None)
 
             df_table = pd.concat([df_table, pd.DataFrame([total_row])], ignore_index=True)
