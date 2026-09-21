@@ -43,7 +43,24 @@ BI_TEXT     = "#f3f2f1"
 BI_SUBTEXT  = "#a0aec0"
 BI_CHART_BG = "#1f2937"
 BI_GRID     = "#2d3748"
+REGION_TO_STATE = {
+    "New South Wales": "NSW",
+    "Victoria": "VIC",
+    "Queensland": "QLD",
+    "Western Australia": "WA",
+    "South Australia": "SA",
+    "New Zealand": "NZ",
+    "Auckland (N)": "NZ",
+    "Canterbury (S)": "NZ",
+    "Manawati-Whanganui": "NZ",
+}
 
+HOLIDAY_COLORS = {
+    "Autumn": "rgba(255,140,0,",
+    "Winter": "rgba(30,144,255,",
+    "Spring": "rgba(50,205,50,",
+    "Summer": "rgba(255,215,0,",
+}
 st.markdown(f"""
 <style>
 * {{ box-sizing: border-box; }}
@@ -263,6 +280,15 @@ def load_weekly_membership():
 
 
 @st.cache_data(ttl=300)
+def load_school_holidays():
+    try:
+        df = load_sheet_data("School Holidays")
+        df["Year"]       = pd.to_numeric(df["Year"],       errors="coerce")
+        df["Start_Week"] = pd.to_numeric(df["Start_Week"], errors="coerce")
+        df["End_Week"]   = pd.to_numeric(df["End_Week"],   errors="coerce")
+        return df.dropna(subset=["Year","Start_Week","End_Week"])
+    except:
+        return pd.DataFrame()
 def load_revenue():
     try:
         df = load_sheet_data("Revenue")
@@ -771,85 +797,116 @@ def report_membership(df_wm):
     cr_latest=churn_rate(lc,la); cr_prev=churn_rate(pc,pa)
     col1,col2=st.columns([1,3])
     with col1: metric_card("Network Churn Rate",f"{cr_latest:.1f}%",round(cr_latest-cr_prev,2),"red")
-        # ── YEAR-OVER-YEAR WEEKLY COMPARISON ──────────────────────────────────
+            # ── YEAR-OVER-YEAR WEEKLY COMPARISON ──────────────────────────────────
     st.markdown('<div class="section-header">Year-over-Year Weekly Comparison</div>', unsafe_allow_html=True)
 
     df_yoy = df_wm.copy()
     df_yoy["Week"] = df_yoy["Date - Week/Year"].str.split("/").str[0].astype(int)
     df_yoy["Year"] = df_yoy["Date - Week/Year"].str.split("/").str[1].astype(int)
+    df_yoy["State"] = df_yoy["Region"].map(REGION_TO_STATE).fillna("Other")
 
     # Independent filters
     yoy_cols = st.columns(3)
-    all_locs_yoy = sorted(df_yoy["Success Tutoring - Business name"].dropna().unique().tolist())
-    sel_locs_yoy = yoy_cols[0].multiselect("📍 Location(s)", all_locs_yoy, default=[], key="yoy_locs",
-                                            placeholder="All Locations")
-    all_gpms_yoy = sorted(df_yoy["GPM"].dropna().unique().tolist()) if "GPM" in df_yoy.columns else []
-    sel_gpm_yoy  = yoy_cols[1].selectbox("👤 GPM", ["All"] + all_gpms_yoy, key="yoy_gpm")
-    all_stages_yoy = sorted(df_yoy["Stage"].dropna().unique().tolist()) if "Stage" in df_yoy.columns else []
-    sel_stage_yoy  = yoy_cols[2].selectbox("🏁 Stage", ["All"] + all_stages_yoy, key="yoy_stage")
+    all_locs_yoy    = sorted(df_yoy["Success Tutoring - Business name"].dropna().unique().tolist())
+    sel_locs_yoy    = yoy_cols[0].multiselect("📍 Location(s)", all_locs_yoy, default=[], key="yoy_locs", placeholder="All Locations")
+    all_gpms_yoy    = sorted(df_yoy["GPM"].dropna().unique().tolist()) if "GPM" in df_yoy.columns else []
+    sel_gpm_yoy     = yoy_cols[1].selectbox("👤 GPM", ["All"] + all_gpms_yoy, key="yoy_gpm")
+    all_stages_yoy  = sorted(df_yoy["Stage"].dropna().unique().tolist()) if "Stage" in df_yoy.columns else []
+    sel_stage_yoy   = yoy_cols[2].selectbox("🏁 Stage", ["All"] + all_stages_yoy, key="yoy_stage")
 
     yoy_cols2 = st.columns(3)
-    all_status_yoy = sorted(df_yoy["Status"].dropna().unique().tolist()) if "Status" in df_yoy.columns else []
-    sel_status_yoy  = yoy_cols2[0].selectbox("🌐 Status", ["All"] + all_status_yoy, key="yoy_status")
-    all_states_yoy  = sorted(df_yoy["Region"].dropna().unique().tolist()) if "Region" in df_yoy.columns else []
-    sel_state_yoy   = yoy_cols2[1].selectbox("📍 State", ["All"] + all_states_yoy, key="yoy_state")
+    all_status_yoy    = sorted(df_yoy["Status"].dropna().unique().tolist()) if "Status" in df_yoy.columns else []
+    sel_status_yoy    = yoy_cols2[0].selectbox("🌐 Status",  ["All"] + all_status_yoy,    key="yoy_status")
+    all_states_yoy    = sorted(df_yoy["Region"].dropna().unique().tolist()) if "Region" in df_yoy.columns else []
+    sel_state_yoy     = yoy_cols2[1].selectbox("📍 State",   ["All"] + all_states_yoy,    key="yoy_state")
     all_countries_yoy = sorted(df_yoy["Country"].dropna().unique().tolist()) if "Country" in df_yoy.columns else []
     sel_country_yoy   = yoy_cols2[2].selectbox("🌍 Country", ["All"] + all_countries_yoy, key="yoy_country")
 
     # Metric selector
-    yoy_metric = st.selectbox("📊 Metric", ["# Active members","# New members","# Suspended members","# Cancelled members"], key="yoy_metric")
+    yoy_metric = st.selectbox("📊 Metric", [
+        "# Active members","# New members","# Suspended members","# Cancelled members"
+    ], key="yoy_metric")
 
     # Year toggles
     available_years = sorted(df_yoy["Year"].dropna().unique().tolist(), reverse=True)
-    yoy_year_cols = st.columns(len(available_years))
-    sel_years_yoy = []
+    yoy_year_cols   = st.columns(len(available_years))
+    sel_years_yoy   = []
     for i, yr in enumerate(available_years):
         if yoy_year_cols[i].checkbox(str(yr), value=(i < 2), key=f"yoy_yr_{yr}"):
             sel_years_yoy.append(yr)
+
     # Comparative toggle
-    comparative = st.checkbox("📊 Comparative only (locations open in all selected years)", 
-            value=False, key="yoy_comparative")
+    comparative = st.checkbox("📊 Comparative only (locations open in all selected years)", value=False, key="yoy_comparative")
+
+    # Holiday state selector
+    holiday_states     = ["NSW","VIC","QLD","WA","SA","NZ"]
+    sel_holiday_states = st.multiselect("🎓 Show school holidays for", holiday_states, default=[], key="yoy_holiday_states", placeholder="Select states...")
 
     # Apply filters
     df_yoy_f = df_yoy.copy()
-    if sel_locs_yoy:    df_yoy_f = df_yoy_f[df_yoy_f["Success Tutoring - Business name"].isin(sel_locs_yoy)]
-    if sel_gpm_yoy   != "All": df_yoy_f = df_yoy_f[df_yoy_f["GPM"]     == sel_gpm_yoy]
-    if sel_stage_yoy != "All": df_yoy_f = df_yoy_f[df_yoy_f["Stage"]   == sel_stage_yoy]
-    if sel_status_yoy!= "All": df_yoy_f = df_yoy_f[df_yoy_f["Status"]  == sel_status_yoy]
-    if sel_state_yoy != "All": df_yoy_f = df_yoy_f[df_yoy_f["Region"]  == sel_state_yoy]
-    if sel_country_yoy!="All": df_yoy_f = df_yoy_f[df_yoy_f["Country"] == sel_country_yoy]
-    # Comparative filter - only locations with data in ALL selected years
+    if sel_locs_yoy:           df_yoy_f = df_yoy_f[df_yoy_f["Success Tutoring - Business name"].isin(sel_locs_yoy)]
+    if sel_gpm_yoy    != "All": df_yoy_f = df_yoy_f[df_yoy_f["GPM"]     == sel_gpm_yoy]
+    if sel_stage_yoy  != "All": df_yoy_f = df_yoy_f[df_yoy_f["Stage"]   == sel_stage_yoy]
+    if sel_status_yoy != "All": df_yoy_f = df_yoy_f[df_yoy_f["Status"]  == sel_status_yoy]
+    if sel_state_yoy  != "All": df_yoy_f = df_yoy_f[df_yoy_f["Region"]  == sel_state_yoy]
+    if sel_country_yoy!= "All": df_yoy_f = df_yoy_f[df_yoy_f["Country"] == sel_country_yoy]
+
+    # Comparative filter
     if comparative and len(sel_years_yoy) > 1:
-        loc_col_yoy = "Success Tutoring - Business name"
-        # Get (location, week) pairs for each year
-        pairs = [
-            set(zip(df_yoy_f[df_yoy_f["Year"]==yr][loc_col_yoy], 
-                    df_yoy_f[df_yoy_f["Year"]==yr]["Week"]))
-            for yr in sel_years_yoy
-        ]
-        # Only keep (location, week) combos that exist in ALL years
-        common_pairs = pairs[0].intersection(*pairs[1:])
-        df_yoy_f = df_yoy_f[
-            df_yoy_f.apply(
-                lambda r: (r[loc_col_yoy], r["Week"]) in common_pairs, axis=1
-            )
-        ]
+        loc_col_yoy   = "Success Tutoring - Business name"
+        locs_per_year = [set(zip(df_yoy_f[df_yoy_f["Year"]==yr][loc_col_yoy], df_yoy_f[df_yoy_f["Year"]==yr]["Week"])) for yr in sel_years_yoy]
+        common_pairs  = locs_per_year[0].intersection(*locs_per_year[1:])
+        df_yoy_f      = df_yoy_f[df_yoy_f.apply(lambda r: (r[loc_col_yoy], r["Week"]) in common_pairs, axis=1)]
+
     if yoy_metric in df_yoy_f.columns:
         df_yoy_f[yoy_metric] = pd.to_numeric(df_yoy_f[yoy_metric], errors="coerce").fillna(0)
 
-    all_weeks = list(range(1, 53))
-    YEAR_COLORS = {2024: "#4e9af1", 2025: "#f1a14e", 2026: "#4ef19a"}
+    all_weeks  = list(range(1, 53))
+    YEAR_COLORS = {2024: "#4e9af1", 2025: "#f1a14e", 2026: "#4ef19a", 2027: "#f14e9a"}
 
     if sel_years_yoy and yoy_metric in df_yoy_f.columns:
+        latest_year = df_yoy_f["Year"].max()
+        latest_week = df_yoy_f[df_yoy_f["Year"]==latest_year]["Week"].max()
+        prev_year   = latest_year - 1
+
+        # Build chart
         fig_yoy = go.Figure()
         for yr in sorted(sel_years_yoy):
-            df_yr = df_yoy_f[df_yoy_f["Year"] == yr].groupby("Week")[yoy_metric].sum().reindex(all_weeks)
+            df_yr = df_yoy_f[df_yoy_f["Year"]==yr].groupby("Week")[yoy_metric].sum().reindex(all_weeks)
             fig_yoy.add_trace(go.Bar(
-                x=all_weeks,
-                y=df_yr.values,
+                x=all_weeks, y=df_yr.values,
                 name=str(yr),
                 marker_color=YEAR_COLORS.get(yr, "#aaaaaa")
             ))
+
+        # School holiday shading
+        if sel_holiday_states:
+            df_hols = load_school_holidays()
+            if not df_hols.empty:
+                latest_sel_year = max(sel_years_yoy)
+                prior_sel_years = [y for y in sel_years_yoy if y != latest_sel_year]
+                for _, hrow in df_hols[df_hols["State"].isin(sel_holiday_states)].iterrows():
+                    h_year  = int(hrow["Year"])
+                    h_start = int(hrow["Start_Week"])
+                    h_end   = int(hrow["End_Week"])
+                    h_label = hrow["Holiday"]
+                    base_color = HOLIDAY_COLORS.get(h_label, "rgba(200,200,200,")
+                    if h_year == latest_sel_year:
+                        fig_yoy.add_vrect(
+                            x0=h_start - 0.5, x1=h_end + 0.5,
+                            fillcolor=base_color + "0.15)",
+                            layer="below", line_width=0,
+                            annotation_text=h_label,
+                            annotation_position="top left",
+                            annotation=dict(font_size=9, font_color="grey")
+                        )
+                    elif h_year in prior_sel_years:
+                        fig_yoy.add_vrect(
+                            x0=h_start - 0.5, x1=h_end + 0.5,
+                            fillcolor=base_color + "0.07)",
+                            layer="below", line_width=0
+                        )
+
         fig_yoy.update_layout(
             barmode="group",
             title=f"{yoy_metric} — Year over Year by Week",
@@ -861,11 +918,7 @@ def report_membership(df_wm):
         )
         st.plotly_chart(fig_yoy, use_container_width=True)
 
-        # ── VARIANCE TABLE ────────────────────────────────────────────────
-        latest_year = df_yoy_f["Year"].max()
-        latest_week = df_yoy_f[df_yoy_f["Year"]==latest_year]["Week"].max()
-        prev_year   = latest_year - 1
-
+        # ── VARIANCE TABLE ─────────────────────────────────────────────
         def get_val(week, year):
             v = df_yoy_f[(df_yoy_f["Week"]==week) & (df_yoy_f["Year"]==year)][yoy_metric].sum()
             return v if v > 0 else None
@@ -874,19 +927,18 @@ def report_membership(df_wm):
             if a is None or b is None or b == 0: return None
             return round((a - b) / b * 100, 1)
 
-        cur  = get_val(latest_week, latest_year)
-        prev_wk = get_val(latest_week - 1, latest_year)
-        prev_yr_wk = get_val(latest_week, prev_year)
-
-        ytd_cur  = df_yoy_f[(df_yoy_f["Year"]==latest_year)  & (df_yoy_f["Week"]<=latest_week)][yoy_metric].sum()
-        ytd_prev = df_yoy_f[(df_yoy_f["Year"]==prev_year) & (df_yoy_f["Week"]<=latest_week)][yoy_metric].sum()
-        ytd_var  = pct(ytd_cur, ytd_prev) if ytd_prev > 0 else None
-
         def fmt_pct(v):
             if v is None: return "N/A"
             color = "green" if v >= 0 else "red"
             sign  = "+" if v >= 0 else ""
             return f'<span style="color:{color};font-weight:bold">{sign}{v}%</span>'
+
+        cur        = get_val(latest_week, latest_year)
+        prev_wk    = get_val(latest_week - 1, latest_year)
+        prev_yr_wk = get_val(latest_week, prev_year)
+        ytd_cur    = df_yoy_f[(df_yoy_f["Year"]==latest_year)  & (df_yoy_f["Week"]<=latest_week)][yoy_metric].sum()
+        ytd_prev   = df_yoy_f[(df_yoy_f["Year"]==prev_year) & (df_yoy_f["Week"]<=latest_week)][yoy_metric].sum()
+        ytd_var    = pct(ytd_cur, ytd_prev) if ytd_prev > 0 else None
 
         st.markdown(f"""
         | Variance | Value |
@@ -895,6 +947,129 @@ def report_membership(df_wm):
         | This week vs same week last year (Wk {latest_week} {latest_year} vs {prev_year}) | {fmt_pct(pct(cur, prev_yr_wk))} |
         | YTD {latest_year} vs YTD {prev_year} (Wk 1–{latest_week}) | {fmt_pct(ytd_var)} |
         """, unsafe_allow_html=True)
+
+        # ── LOCATION TABLE ─────────────────────────────────────────────
+        st.markdown(f'<div class="section-header">Location Detail — {yoy_metric}</div>', unsafe_allow_html=True)
+
+        with st.spinner("Calculating location table..."):
+            loc_col_yoy  = "Success Tutoring - Business name"
+            if sel_locs_yoy:
+                table_locs = sel_locs_yoy
+            else:
+                table_locs = sorted(df_yoy_f[loc_col_yoy].dropna().unique().tolist())
+
+            rows = []
+            for loc in table_locs:
+                df_loc = df_yoy_f[df_yoy_f[loc_col_yoy] == loc]
+                row    = {"Location": loc.replace("Success Tutoring - ", "")}
+
+                # Value for each selected year at latest week
+                for yr in sorted(sel_years_yoy, reverse=True):
+                    v = df_loc[(df_loc["Year"]==yr) & (df_loc["Week"]==latest_week)][yoy_metric].sum()
+                    row[f"Wk{latest_week} '{str(yr)[2:]}"] = v if v > 0 else None
+
+                # vs Last Week
+                cur_loc  = df_loc[(df_loc["Year"]==latest_year) & (df_loc["Week"]==latest_week)][yoy_metric].sum()
+                prev_loc = df_loc[(df_loc["Year"]==latest_year) & (df_loc["Week"]==latest_week-1)][yoy_metric].sum()
+                row["vs LW"]  = pct(cur_loc if cur_loc > 0 else None, prev_loc if prev_loc > 0 else None)
+
+                # vs Same Week Last Year
+                prev_yr_loc = df_loc[(df_loc["Year"]==prev_year) & (df_loc["Week"]==latest_week)][yoy_metric].sum()
+                row["vs LY"]  = pct(cur_loc if cur_loc > 0 else None, prev_yr_loc if prev_yr_loc > 0 else None)
+
+                # YTD
+                ytd_cur_loc  = df_loc[(df_loc["Year"]==latest_year)  & (df_loc["Week"]<=latest_week)][yoy_metric].sum()
+                ytd_prev_loc = df_loc[(df_loc["Year"]==prev_year) & (df_loc["Week"]<=latest_week)][yoy_metric].sum()
+                row[f"YTD '{str(latest_year)[2:]}"] = ytd_cur_loc  if ytd_cur_loc  > 0 else None
+                row[f"YTD '{str(prev_year)[2:]}"]   = ytd_prev_loc if ytd_prev_loc > 0 else None
+                row["YTD Var%"] = pct(ytd_cur_loc if ytd_cur_loc > 0 else None, ytd_prev_loc if ytd_prev_loc > 0 else None)
+
+                rows.append(row)
+
+            df_table = pd.DataFrame(rows)
+
+            # Sort by latest week value highest first
+            wk_col = f"Wk{latest_week} '{str(latest_year)[2:]}'"
+            if wk_col in df_table.columns:
+                df_table = df_table.sort_values(wk_col, ascending=False, na_position="last")
+
+            # Grand total row
+            total_row = {"Location": "TOTAL"}
+            for col in df_table.columns:
+                if col == "Location": continue
+                if col in ["vs LW","vs LY","YTD Var%"]:
+                    # Recalculate totals for variance columns
+                    pass
+                else:
+                    total_row[col] = df_table[col].sum(min_count=1)
+
+            # Recalculate grand total variances properly
+            wk_cols = [c for c in df_table.columns if c.startswith("Wk")]
+            if len(wk_cols) >= 2:
+                total_cur  = df_table[wk_cols[0]].sum()
+                total_prev = df_table[wk_cols[1]].sum() if len(wk_cols) > 1 else 0
+                total_row["vs LW"] = pct(total_cur if total_cur > 0 else None,
+                                         df_yoy_f[(df_yoy_f["Year"]==latest_year) & (df_yoy_f["Week"]==latest_week-1)][yoy_metric].sum() or None)
+                total_row["vs LY"] = pct(total_cur if total_cur > 0 else None,
+                                         df_yoy_f[(df_yoy_f["Year"]==prev_year)   & (df_yoy_f["Week"]==latest_week)][yoy_metric].sum() or None)
+            ytd_key_cur  = f"YTD '{str(latest_year)[2:]}'"
+            ytd_key_prev = f"YTD '{str(prev_year)[2:]}'"
+            if ytd_key_cur in df_table.columns and ytd_key_prev in df_table.columns:
+                t_ytd_cur  = df_table[ytd_key_cur].sum()
+                t_ytd_prev = df_table[ytd_key_prev].sum()
+                total_row["YTD Var%"] = pct(t_ytd_cur if t_ytd_cur > 0 else None,
+                                            t_ytd_prev if t_ytd_prev > 0 else None)
+
+            df_table = pd.concat([df_table, pd.DataFrame([total_row])], ignore_index=True)
+
+            # Render with colour-coded variance columns
+            pct_cols = ["vs LW", "vs LY", "YTD Var%"]
+
+            def style_pct(val):
+                if pd.isna(val) or val is None: return ""
+                color = "green" if val >= 0 else "red"
+                return f"color: {color}; font-weight: bold"
+
+            def fmt_cell(val, col):
+                if pd.isna(val) or val is None: return ""
+                if col in pct_cols:
+                    sign = "+" if val >= 0 else ""
+                    return f"{sign}{val:.1f}%"
+                return f"{val:,.0f}"
+
+            # Build HTML table for horizontal scroll
+            html_rows = ""
+            for _, r in df_table.iterrows():
+                is_total = r["Location"] == "TOTAL"
+                row_style = "font-weight:bold;border-top:2px solid #666;" if is_total else ""
+                html_rows += f'<tr style="{row_style}">'
+                for col in df_table.columns:
+                    val = r[col]
+                    cell_style = ""
+                    if col in pct_cols and not pd.isna(val) and val is not None:
+                        cell_style = "color:green;font-weight:bold;" if val >= 0 else "color:red;font-weight:bold;"
+                        display = f"+{val:.1f}%" if val >= 0 else f"{val:.1f}%"
+                    elif col == "Location":
+                        display = str(val)
+                    elif pd.isna(val) or val is None:
+                        display = ""
+                    else:
+                        display = f"{val:,.0f}"
+                    html_rows += f'<td style="padding:6px 12px;white-space:nowrap;{cell_style}">{display}</td>'
+                html_rows += "</tr>"
+
+            header_html = "".join([f'<th style="padding:6px 12px;text-align:left;white-space:nowrap;background:#1e2130;position:sticky;top:0;">{c}</th>' for c in df_table.columns])
+
+            table_html = f"""
+            <div style="overflow-x:auto;max-height:500px;overflow-y:auto;">
+            <table style="border-collapse:collapse;width:100%;font-size:13px;">
+                <thead><tr>{header_html}</tr></thead>
+                <tbody>{html_rows}</tbody>
+            </table>
+            </div>
+            """
+            st.markdown(table_html, unsafe_allow_html=True)
+
     else:
         st.info("Select at least one year to display the chart.")
 
