@@ -806,6 +806,9 @@ def report_membership(df_wm):
     for i, yr in enumerate(available_years):
         if yoy_year_cols[i].checkbox(str(yr), value=(i < 2), key=f"yoy_yr_{yr}"):
             sel_years_yoy.append(yr)
+    # Comparative toggle
+    comparative = st.checkbox("📊 Comparative only (locations open in all selected years)", 
+            value=False, key="yoy_comparative")
 
     # Apply filters
     df_yoy_f = df_yoy.copy()
@@ -815,7 +818,15 @@ def report_membership(df_wm):
     if sel_status_yoy!= "All": df_yoy_f = df_yoy_f[df_yoy_f["Status"]  == sel_status_yoy]
     if sel_state_yoy != "All": df_yoy_f = df_yoy_f[df_yoy_f["Region"]  == sel_state_yoy]
     if sel_country_yoy!="All": df_yoy_f = df_yoy_f[df_yoy_f["Country"] == sel_country_yoy]
-
+    # Comparative filter - only locations with data in ALL selected years
+    if comparative and len(sel_years_yoy) > 1:
+        loc_col_yoy = "Success Tutoring - Business name"
+        locs_per_year = [
+            set(df_yoy_f[df_yoy_f["Year"]==yr][loc_col_yoy].dropna().unique())
+            for yr in sel_years_yoy]
+        ]
+        common_locs = locs_per_year[0].intersection(*locs_per_year[1:])
+        df_yoy_f = df_yoy_f[df_yoy_f[loc_col_yoy].isin(common_locs)]
     if yoy_metric in df_yoy_f.columns:
         df_yoy_f[yoy_metric] = pd.to_numeric(df_yoy_f[yoy_metric], errors="coerce").fillna(0)
 
@@ -844,8 +855,8 @@ def report_membership(df_wm):
         st.plotly_chart(fig_yoy, use_container_width=True)
 
         # ── VARIANCE TABLE ────────────────────────────────────────────────
-        latest_week = df_yoy_f["Week"].max()
         latest_year = df_yoy_f["Year"].max()
+        latest_week = df_yoy_f[df_yoy_f["Year"]==latest_year]["Week"].max()
         prev_year   = latest_year - 1
 
         def get_val(week, year):
