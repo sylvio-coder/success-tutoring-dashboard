@@ -821,10 +821,7 @@ def report_membership(df_wm):
     # Comparative filter - only locations with data in ALL selected years
     if comparative and len(sel_years_yoy) > 1:
         loc_col_yoy = "Success Tutoring - Business name"
-        locs_per_year = [
-            set(df_yoy_f[df_yoy_f["Year"]==yr][loc_col_yoy].dropna().unique())
-            for yr in sel_years_yoy]
-        ]
+        locs_per_year = [set(df_yoy_f[df_yoy_f["Year"]==yr][loc_col_yoy].dropna().unique()) for yr in sel_years_yoy]
         common_locs = locs_per_year[0].intersection(*locs_per_year[1:])
         df_yoy_f = df_yoy_f[df_yoy_f[loc_col_yoy].isin(common_locs)]
     if yoy_metric in df_yoy_f.columns:
