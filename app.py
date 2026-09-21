@@ -821,9 +821,19 @@ def report_membership(df_wm):
     # Comparative filter - only locations with data in ALL selected years
     if comparative and len(sel_years_yoy) > 1:
         loc_col_yoy = "Success Tutoring - Business name"
-        locs_per_year = [set(df_yoy_f[df_yoy_f["Year"]==yr][loc_col_yoy].dropna().unique()) for yr in sel_years_yoy]
-        common_locs = locs_per_year[0].intersection(*locs_per_year[1:])
-        df_yoy_f = df_yoy_f[df_yoy_f[loc_col_yoy].isin(common_locs)]
+        # Get (location, week) pairs for each year
+        pairs = [
+            set(zip(df_yoy_f[df_yoy_f["Year"]==yr][loc_col_yoy], 
+                    df_yoy_f[df_yoy_f["Year"]==yr]["Week"]))
+            for yr in sel_years_yoy
+        ]
+        # Only keep (location, week) combos that exist in ALL years
+        common_pairs = pairs[0].intersection(*pairs[1:])
+        df_yoy_f = df_yoy_f[
+            df_yoy_f.apply(
+                lambda r: (r[loc_col_yoy], r["Week"]) in common_pairs, axis=1
+            )
+        ]
     if yoy_metric in df_yoy_f.columns:
         df_yoy_f[yoy_metric] = pd.to_numeric(df_yoy_f[yoy_metric], errors="coerce").fillna(0)
 
