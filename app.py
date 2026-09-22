@@ -2530,17 +2530,17 @@ def login_section():
             )
             st.markdown(f"""
             <div style="text-align:center;margin:16px 0">
-                <a href="{google_auth_url}" target="_blank"
+                <a href="{google_auth_url}" target="_blank" style="
                     display:inline-flex;align-items:center;gap:10px;
                     background:white;color:#1a1a2e;
-                    padding:12px 24px;border-radius:6px;
-                    font-weight:600;font-size:0.95em;
+                    padding:14px 32px;border-radius:8px;
+                    font-weight:700;font-size:1.1em;
                     text-decoration:none;
-                    border:1px solid #dddddd;
-                    box-shadow:0 2px 8px rgba(0,0,0,0.15);
+                    border:2px solid #4285F4;
+                    box-shadow:0 4px 12px rgba(66,133,244,0.4);
                 ">
-                <img src="https://www.google.com/favicon.ico" width="20" height="20"/>
-                Sign in with Google
+                    <img src="https://www.google.com/favicon.ico" width="24" height="24"/>
+                    Sign in with Google
                 </a>
             </div>
             """, unsafe_allow_html=True)
