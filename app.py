@@ -2528,10 +2528,9 @@ def login_section():
                 f"&access_type=offline"
                 f"&prompt=select_account"
             )
-            st.write("Auth URL:", google_auth_url)
             st.markdown(f"""
             <div style="text-align:center;margin:16px 0">
-                <a href="{google_auth_url}" target="_self" style="
+                <a href="{google_auth_url}" target="_blank"
                     display:inline-flex;align-items:center;gap:10px;
                     background:white;color:#1a1a2e;
                     padding:12px 24px;border-radius:6px;
