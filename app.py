@@ -680,7 +680,8 @@ def add_week_year(df):
     return d
 
 def yoy_options(key, years, metrics=None, avg_label="Average per location", avg_help=None,
-                show_avg=True, show_churn=False):
+                show_avg=True, show_churn=False, avg_metrics=None):
+    """avg_metrics: if given, the Average toggle only appears for these metrics (rates are already per-unit)."""
     """Options row above a year-over-year chart. Returns a dict of the choices."""
     cols = st.columns([2, 2, 2, 2]) if metrics else st.columns([2, 2, 2])
     i, out = 0, {}
@@ -693,6 +694,8 @@ def yoy_options(key, years, metrics=None, avg_label="Average per location", avg_
     with cols[i + 2]:
         out["comparative"] = st.checkbox("Comparative only", value=False, key=f"{key}_comparative",
                                          help="Only include locations open in every selected year")
+        if avg_metrics is not None and out.get("metric") not in avg_metrics:
+            show_avg = False
         out["average"] = st.checkbox(avg_label, value=False, key=f"{key}_average",
                                      help=avg_help or "Totals ÷ number of locations trading that week") if show_avg else False
         out["churn"] = st.checkbox("Churn %", value=False, key=f"{key}_churn",
@@ -784,6 +787,69 @@ def yoy_bar_figure(weekly, latest_year, latest_week, title, y_title, fmt=",.0f",
                                 title=dict(text=line_axis_title, font=dict(color=BI_RED, size=11)))
     fig.update_layout(**layout)
     return fig
+
+def location_comparison(d13, loc_col, measures, key, rank_col, start_col):
+    """Clean lines per location for one measure, labelled at the line ends, with an optional
+    network-average line. measures: label -> dict(kind="sum", col=...) or
+    dict(kind="ratio", num=..., den=..., scale=1), plus optional prefix/suffix/fmt."""
+    max_date = d13["Date"].max()
+    ranked = (d13[d13["Date"] == max_date].groupby(loc_col)[rank_col].sum().sort_values(ascending=False).index.tolist())
+    all_locs = ranked + sorted(set(d13[loc_col].dropna()) - set(ranked))
+    c1, c2, c3 = st.columns([2, 5, 1.6])
+    label = c1.selectbox("Measure", list(measures), key=f"{key}_measure")
+    sel_locs = c2.multiselect("Locations (up to 8)", all_locs, default=all_locs[:3], max_selections=8,
+                              key=f"{key}_locs", format_func=lambda x: x.replace("Success Tutoring - ", ""))
+    with c3:
+        st.markdown("<div style='height:1.9rem'></div>", unsafe_allow_html=True)
+        show_avg = st.checkbox("Network average", value=True, key=f"{key}_avg")
+    m = measures[label]
+    need = [c for c in {m.get("col"), m.get("num"), m.get("den"), start_col} if c]
+    fmt, pre, suf = m.get("fmt", ",.0f"), m.get("prefix", ""), m.get("suffix", "")
+
+    def series(dd):
+        g = dd.groupby("Date")[need].sum().sort_index()
+        g = g[g[start_col].cumsum() > 0]
+        if m["kind"] == "sum":
+            return g[m["col"]]
+        return (g[m["num"]] / g[m["den"]] * m.get("scale", 1)).where(g[m["den"]] > 0)
+
+    if not sel_locs:
+        st.info("Select one or more locations to compare."); return
+    fig = go.Figure(); ends = []
+    if show_avg:
+        trading = d13[d13[start_col] > 0]
+        if m["kind"] == "sum":
+            avg = trading.groupby(["Date", loc_col])[m["col"]].sum().groupby(level="Date").mean()
+        else:
+            avg = series(trading)
+        fig.add_trace(go.Scatter(x=avg.index, y=avg.values, name="Network avg", mode="lines",
+                                 line=dict(color="#9fb0b5", width=2, dash="dash"),
+                                 hovertemplate=f"Network avg: {pre}%{{y:{fmt}}}{suf}<extra></extra>"))
+    for i, loc in enumerate(sel_locs):
+        sr = series(d13[d13[loc_col] == loc]).dropna()
+        if sr.empty: continue
+        name = loc.replace("Success Tutoring - ", "")
+        color = SERIES_COLORS[i % len(SERIES_COLORS)]
+        fig.add_trace(go.Scatter(x=sr.index, y=sr.values, name=name, mode="lines", line=dict(color=color, width=2.5),
+                                 hovertemplate=f"{name}: {pre}%{{y:{fmt}}}{suf}<extra></extra>"))
+        fig.add_trace(go.Scatter(x=[sr.index[-1]], y=[sr.values[-1]], mode="markers", marker=dict(color=color, size=8),
+                                 showlegend=False, hoverinfo="skip"))
+        ends.append([sr.index[-1], float(sr.values[-1]), f"{name} {pre}{sr.values[-1]:{fmt}}{suf}", color])
+    annotations = []
+    if ends:
+        gap = (max(abs(e[1]) for e in ends) or 1) * 0.05
+        ends.sort(key=lambda e: e[1]); placed = []
+        for e in ends:
+            placed.append(e[1] if not placed or e[1] - placed[-1] >= gap else placed[-1] + gap)
+        annotations = [dict(x=e[0], y=y, xref="x", yref="y", text=f"<b>{e[2]}</b>", showarrow=False,
+                            xanchor="left", xshift=10, font=dict(color=e[3], size=11)) for e, y in zip(ends, placed)]
+    layout = std_layout("", label, 460)
+    layout.update(showlegend=False, hovermode="x unified", margin=dict(l=70, r=190, t=20, b=50), annotations=annotations)
+    layout["xaxis"] = dict(PLOTLY_LAYOUT["xaxis"], tickangle=0, tickformat="%b %y", dtick="M1",
+                           range=[d13["Date"].min() - pd.Timedelta(days=3), max_date + pd.Timedelta(days=3)])
+    layout["yaxis"] = dict(layout["yaxis"], tickformat=",.2~f", tickprefix=pre, ticksuffix=suf)
+    fig.update_layout(**layout)
+    show_chart(fig, use_container_width=True)
 
 def report_membership(df_wm, df_rv):
     st.markdown('<div class="report-title">Membership</div>', unsafe_allow_html=True)
@@ -1286,104 +1352,67 @@ def report_age_combined(df_wm):
 # ══════════════════════════════════════════════════════════════════════════════
 def report_net_growth(df_wm):
     st.markdown('<div class="report-title">Net Growth Rate %</div>', unsafe_allow_html=True)
-    st.markdown('<div class="report-subtitle">Source: Weekly Membership — Net Growth Rate % = (New − Cancelled) / Active × 100</div>', unsafe_allow_html=True)
+    st.markdown('<div class="report-subtitle">Source: Weekly Membership — Net Growth Rate % = (New − Cancelled) ÷ Active × 100</div>', unsafe_allow_html=True)
     df_wm = apply_gpm_filter(df_wm)
-
+    loc_col = "Success Tutoring - Business name"
+    cols = ["# Active members", "# New members", "# Cancelled members"]
     df = report_filters(df_wm.copy(), key_prefix="r8ng_f", show_date=False,
                         show_country=True, show_state=True, show_stage=True,
-                        show_gpm=True, show_status=True)
-    loc_col = "Success Tutoring - Business name"
-
-    for c in ["# Active members","# New members","# Cancelled members"]:
+                        show_gpm=True, show_location=True, show_status=True)
+    for c in cols:
         if c in df.columns: df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+    if df.empty:
+        st.warning("No data for the selected filters."); return
 
-    df_13m = get_13m_filtered(df_wm, df)
-    for c in ["# Active members","# New members","# Cancelled members"]:
-        if c in df_13m.columns: df_13m[c] = pd.to_numeric(df_13m[c], errors="coerce").fillna(0)
+    # ── Year-over-year weekly NGR % ───────────────────────────────────────
+    st.markdown('<div class="section-header">Net Growth Rate % — Year-over-Year by Week</div>', unsafe_allow_html=True)
+    d = add_week_year(df)
+    years = sorted(d["Year"].unique().tolist(), reverse=True)
+    if not years:
+        st.info("No week/year data available."); return
+    opts = yoy_options("ngr", years, avg_label="Equal weight per location",
+                       avg_help="Off: (all new − all cancelled) ÷ all active, so bigger centres count more. "
+                                "On: the average of each centre's own NGR %, so every centre counts equally.")
+    sel = opts["years"]
+    d = d[d["Year"].isin(sel)]
+    if opts["comparative"]:
+        d = comparative_only(d, sel, loc_col)
+    if not sel or d.empty:
+        st.info("Select at least one year with data.")
+    else:
+        latest_year = max(sel)
+        latest_week = int(d[d["Year"] == latest_year]["Week"].max())
+        weekly = {}
+        for yr in sel:
+            x = d[d["Year"] == yr]
+            if opts["average"]:
+                per_loc = x.groupby(["Week", loc_col])[cols].sum()
+                per_loc = per_loc[per_loc["# Active members"] > 0]
+                ngr = (per_loc["# New members"] - per_loc["# Cancelled members"]) / per_loc["# Active members"] * 100
+                weekly[yr] = ngr.groupby(level="Week").mean()
+            else:
+                g = x.groupby("Week")[cols].sum()
+                weekly[yr] = ((g["# New members"] - g["# Cancelled members"]) / g["# Active members"] * 100).where(g["# Active members"] > 0)
+        label = "Avg NGR % per location (equal weight)" if opts["average"] else "Network NGR %"
+        fig = yoy_bar_figure(weekly, latest_year, latest_week, f"{label} by week", label,
+                             fmt=".2f", suffix="%", change="pts", holidays=opts["holidays"])
+        fig.add_hline(y=0, line_color=BI_SUBTEXT, line_width=1)
+        show_chart(fig, use_container_width=True)
 
-    def calc_ngr(row):
-        try:
-            a = float(row.get("# Active members", 0))
-            return round((float(row.get("# New members", 0)) - float(row.get("# Cancelled members", 0))) / a * 100, 2) if a > 0 else 0.0
-        except: return 0.0
-
-    # ── Network Net Growth Rate % trend ──
-    st.markdown('<div class="section-header">Net Growth Rate % — Last 13 Months (Total New − Total Cancelled) / Total Active</div>', unsafe_allow_html=True)
-    weekly = df_13m.groupby("Date").agg(
-        New=("# New members","sum"),
-        Cancelled=("# Cancelled members","sum"),
-        Active=("# Active members","sum")
-    ).reset_index().sort_values("Date")
-    weekly["Net Growth Rate %"] = weekly.apply(
-        lambda r: round((r["New"] - r["Cancelled"]) / r["Active"] * 100, 2) if r["Active"] > 0 else 0.0, axis=1)
-
-    fig = go.Figure()
-    std_traces(fig, weekly, "Date", "Net Growth Rate %", BI_ACCENT, "Net Growth Rate %")
-    fig.add_hline(y=0, line_dash="dash", line_color=BI_RED, line_width=1.5,
-                  annotation_text="Break-even", annotation_position="bottom right")
-    fig.update_layout(**std_layout("", "Net Growth Rate %", 500))
-    show_chart(fig, use_container_width=True)
-
-    # ── Avg Net Growth Rate % per location ──
-    st.markdown('<div class="section-header">Avg Net Growth Rate % per Location — Growth Stage Default (Equal weight per location)</div>', unsafe_allow_html=True)
-    vl = load_vlookup()
-    all_stages = vl["Stage"].dropna().unique().tolist() if not vl.empty and "Stage" in vl.columns else []
-    stage_opts = ["All"] + sorted(all_stages)
-    default_s = "Growth" if "Growth" in stage_opts else stage_opts[0]
-    sel_s = st.selectbox("Filter by Stage:", stage_opts,
-                          index=stage_opts.index(default_s), key="r8ng_stage")
-    df_plot = df_13m.copy()
-    if sel_s != "All" and not vl.empty and "Stage" in vl.columns:
-        stage_locs = vl[vl["Stage"] == sel_s][loc_col].tolist()
-        df_plot = df_plot[df_plot[loc_col].isin(stage_locs)]
-
-    if not df_plot.empty and loc_col in df_plot.columns:
-        df_plot["ngr"] = df_plot.apply(calc_ngr, axis=1)
-        avg_ngr = df_plot.groupby("Date").apply(
-            lambda x: x.groupby(loc_col)["ngr"].mean().mean()
-        ).reset_index(); avg_ngr.columns = ["Date","Avg NGR %"]; avg_ngr = avg_ngr.sort_values("Date")
-        stage_lbl = f"— {sel_s}" if sel_s != "All" else "— All Stages"
-
-        fig2 = go.Figure()
-        std_traces(fig2, avg_ngr, "Date", "Avg NGR %", BI_BLUE, f"Avg NGR % {stage_lbl}")
-        fig2.add_hline(y=0, line_dash="dash", line_color=BI_RED, line_width=1.5,
-                       annotation_text="Break-even", annotation_position="bottom right")
-        fig2.update_layout(**std_layout(
-            "", "Avg NGR %", 500))
-        show_chart(fig2, use_container_width=True)
-
-        show_indiv = st.checkbox("Show individual locations", value=False, key="r8ng_indiv")
-        if show_indiv:
-            locs = sorted(df_plot[loc_col].dropna().unique().tolist())
-            sel_locs = st.multiselect("Select locations:", locs, default=locs[:3],
-                                       max_selections=8, key="r8ng_locs")
-            if sel_locs:
-                fig3 = go.Figure()
-                colors_indiv = SERIES_COLORS
-                for i, loc in enumerate(sel_locs):
-                    loc_df = df_plot[df_plot[loc_col]==loc].groupby("Date")["ngr"].mean().reset_index().sort_values("Date")
-                    loc_name = loc.replace("Success Tutoring - ","")
-                    std_traces(fig3, loc_df, "Date", "ngr", colors_indiv[i%len(colors_indiv)], loc_name)
-                fig3.add_hline(y=0, line_dash="dash", line_color=BI_RED, line_width=1.5)
-                fig3.update_layout(**std_layout("NGR % by Individual Location","NGR %",500))
-                show_chart(fig3, use_container_width=True)
-
-    # ── Latest week table ──
+    # ── Latest week by location ───────────────────────────────────────────
     latest_wk = df["Date"].max()
-    df_tbl = df[df["Date"] == latest_wk].copy()
-    for c in ["# Active members","# New members","# Cancelled members"]:
-        if c in df_tbl.columns: df_tbl[c] = pd.to_numeric(df_tbl[c], errors="coerce").fillna(0)
-    df_tbl["Net Growth Rate %"] = df_tbl.apply(calc_ngr, axis=1)
-    loc_tbl = df_tbl.groupby(loc_col).agg(
-        Active=("# Active members","sum"),
-        New=("# New members","sum"),
-        Cancelled=("# Cancelled members","sum")
-    ).reset_index()
-    loc_tbl["Net Growth Rate %"] = loc_tbl.apply(
-        lambda r: round((r["New"] - r["Cancelled"]) / r["Active"] * 100, 2) if r["Active"] > 0 else 0.0, axis=1)
-    loc_tbl = loc_tbl.rename(columns={loc_col:"Location"}).sort_values("Net Growth Rate %", ascending=False).reset_index(drop=True)
-    st.markdown(f'<div class="section-header">Net Growth Rate % by Location — Latest Week ({latest_wk.strftime("%d %b %Y")})</div>', unsafe_allow_html=True)
-    st.dataframe(loc_tbl, use_container_width=True, hide_index=True)
+    loc_tbl = df[df["Date"] == latest_wk].groupby(loc_col)[cols].sum().reset_index()
+    loc_tbl["Net Growth Rate %"] = ((loc_tbl["# New members"] - loc_tbl["# Cancelled members"])
+                                    / loc_tbl["# Active members"] * 100).where(loc_tbl["# Active members"] > 0)
+    loc_tbl = pd.DataFrame({"Location": loc_tbl[loc_col].str.replace("Success Tutoring - ", "", regex=False),
+                            "Active": loc_tbl["# Active members"].astype(int), "New": loc_tbl["# New members"].astype(int),
+                            "Cancelled": loc_tbl["# Cancelled members"].astype(int),
+                            "Net Growth Rate %": loc_tbl["Net Growth Rate %"]}).sort_values("Net Growth Rate %", ascending=False)
+    st.markdown(f'<div class="section-header">Net Growth Rate % by Location — {latest_wk.strftime("%d %b %Y")}</div>', unsafe_allow_html=True)
+    color = lambda v: "" if pd.isna(v) or v == 0 else f"color: {BI_GREEN if v > 0 else BI_RED}; font-weight: 600"
+    st.dataframe(loc_tbl.style.map(color, subset=["Net Growth Rate %"]).format({"Net Growth Rate %": "{:+.2f}%"}, na_rep="–"),
+                 use_container_width=True, hide_index=True, height=min(560, 35 * (len(loc_tbl) + 1) + 3))
+
 # ══════════════════════════════════════════════════════════════════════════════
 # REPORT 9 — Onboarding Progress
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1459,32 +1488,11 @@ def report_revenue(df_rv):
     df_rv = apply_gpm_filter(df_rv)
     loc_col = "Success Tutoring - Business name"
 
-    # ── Filters ───────────────────────────────────────────────────────────
+    # ── Filters (same panel as the other reports) ─────────────────────────
     rv_filters = st.container(border=True)
-    rv_filters.markdown('<div class="filter-label">Filters</div>', unsafe_allow_html=True)
-    f1, f2, f3, f4, f5, f6 = rv_filters.columns(6)
-    all_countries = ["All"] + sorted(df_rv["Country"].dropna().unique().tolist()) if "Country" in df_rv.columns else ["All"]
-    all_states    = ["All"] + sorted(df_rv["Region"].dropna().unique().tolist()) if "Region" in df_rv.columns else ["All"]
-    all_stages    = ["All"] + sorted(df_rv["Stage"].dropna().unique().tolist()) if "Stage" in df_rv.columns else ["All"]
-    all_gpms      = ["All"] + sorted(df_rv["GPM"].dropna().unique().tolist()) if "GPM" in df_rv.columns else ["All"]
-    all_statuses  = ["All"] + sorted(df_rv["Status"].dropna().unique().tolist()) if "Status" in df_rv.columns else ["All"]
-    all_locs      = ["All Locations"] + sorted(df_rv[loc_col].dropna().unique().tolist()) if loc_col in df_rv.columns else ["All Locations"]
-
-    with f1: sel_country = st.selectbox("Country",  all_countries, key="rv_country")
-    with f2: sel_state   = st.selectbox("State",    all_states,    key="rv_state")
-    with f3: sel_stage   = st.selectbox("Stage",    all_stages,    key="rv_stage")
-    with f4: sel_gpm     = st.selectbox("GPM",      all_gpms,      key="rv_gpm")
-    with f5: sel_status  = st.selectbox("Status",   all_statuses,  key="rv_status")
-    with f6: sel_loc     = st.selectbox("Location", all_locs,      key="rv_loc")
-
-    df = df_rv.copy()
-    if sel_country != "All"           and "Country" in df.columns: df = df[df["Country"] == sel_country]
-    if sel_state   != "All"           and "Region"  in df.columns: df = df[df["Region"]  == sel_state]
-    if sel_stage   != "All"           and "Stage"   in df.columns: df = df[df["Stage"]   == sel_stage]
-    if sel_gpm     != "All"           and "GPM"     in df.columns: df = df[df["GPM"]     == sel_gpm]
-    if sel_status  != "All"           and "Status"  in df.columns: df = df[df["Status"]  == sel_status]
-    if sel_loc     != "All Locations" and loc_col   in df.columns: df = df[df[loc_col]   == sel_loc]
-
+    df_base = report_filters(df_rv.copy(), key_prefix="rv", show_date=False, show_country=True, show_state=True,
+                             show_stage=True, show_gpm=True, show_location=True, show_status=True, panel=rv_filters)
+    df = df_base.copy()
     if df.empty:
         st.warning("No revenue data available for selected filters."); return
 
@@ -1582,13 +1590,7 @@ def report_revenue(df_rv):
     st.markdown("<br>", unsafe_allow_html=True)
 
     # ── Build df_13m_base (respects all filters except date) ─────────────
-    df_13m_base = df_rv.copy()
-    if sel_country != "All"           and "Country" in df_13m_base.columns: df_13m_base = df_13m_base[df_13m_base["Country"] == sel_country]
-    if sel_state   != "All"           and "Region"  in df_13m_base.columns: df_13m_base = df_13m_base[df_13m_base["Region"]  == sel_state]
-    if sel_stage   != "All"           and "Stage"   in df_13m_base.columns: df_13m_base = df_13m_base[df_13m_base["Stage"]   == sel_stage]
-    if sel_gpm     != "All"           and "GPM"     in df_13m_base.columns: df_13m_base = df_13m_base[df_13m_base["GPM"]     == sel_gpm]
-    if sel_status  != "All"           and "Status"  in df_13m_base.columns: df_13m_base = df_13m_base[df_13m_base["Status"]  == sel_status]
-    if sel_loc     != "All Locations" and loc_col   in df_13m_base.columns: df_13m_base = df_13m_base[df_13m_base[loc_col]   == sel_loc]
+    df_13m_base = df_base.copy()
 
     max_date   = df_13m_base["Date"].max()
     cutoff_13m = max_date - pd.DateOffset(months=13)
@@ -1642,69 +1644,61 @@ def report_revenue(df_rv):
     else:
         st.info("No region data available.")
 
-    # ── 13 Month Trend ────────────────────────────────────────────────────
-    st.markdown('<div class="section-header">Revenue Trend — Last 13 Months</div>', unsafe_allow_html=True)
-
-    mc1, mc2, mc3, mc4, mc5, mc6 = st.columns(6)
-    show_nr  = mc1.checkbox("Net Revenue",               value=True,  key="rv_nr")
-    show_gr  = mc2.checkbox("Gross Revenue",             value=False, key="rv_gr")
-    show_as  = mc3.checkbox("# Active Students",         value=False, key="rv_as")
-    show_sv  = mc4.checkbox("Student Visits",            value=False, key="rv_sv")
-    show_ts  = mc5.checkbox("Total Sessions",            value=False, key="rv_ts")
-    show_rps = mc6.checkbox("Revenue per Session",       value=False, key="rv_rps")
-    mc7, mc8, mc9, mc10, mc11 = st.columns(5)
-    show_rpu  = mc7.checkbox("Revenue per Student",      value=False, key="rv_rpu")
-    show_sps  = mc8.checkbox("Sessions per Student",     value=False, key="rv_sps")
-    show_stu  = mc9.checkbox("Student per Session",      value=False, key="rv_stu")
-    show_spsv = mc10.checkbox("Sessions per Stud Visit", value=False, key="rv_spsv")
-    show_svps = mc11.checkbox("Stud Visits per Session", value=False, key="rv_svps")
-
-    selected_metrics = []
-    if show_nr   and "Net Revenue"                in df_13m.columns: selected_metrics.append(("Net Revenue",                BI_ACCENT,  "Net Revenue"))
-    if show_gr   and "Gross Revenue"              in df_13m.columns: selected_metrics.append(("Gross Revenue",              BI_GREEN,   "Gross Revenue"))
-    if show_as   and "# Active Students"          in df_13m.columns: selected_metrics.append(("# Active Students",          BI_BLUE,    "Active Students"))
-    if show_sv   and "Student Visits"             in df_13m.columns: selected_metrics.append(("Student Visits",             BI_YELLOW,  "Student Visits"))
-    if show_ts   and "Total Sessions"             in df_13m.columns: selected_metrics.append(("Total Sessions",             BI_ORANGE,  "Total Sessions"))
-    if show_rps  and "Revenue per Session"        in df_13m.columns: selected_metrics.append(("Revenue per Session",        BI_RED,     "Rev per Session"))
-    if show_rpu  and "Revenue per Student"        in df_13m.columns: selected_metrics.append(("Revenue per Student",        BI_PURPLE,  "Rev per Student"))
-    if show_sps  and "Sessions per Student"       in df_13m.columns: selected_metrics.append(("Sessions per Student",       SERIES_COLORS[6],  "Sessions per Student"))
-    if show_stu  and "Student per Session"        in df_13m.columns: selected_metrics.append(("Student per Session",        SERIES_COLORS[5],  "Student per Session"))
-    if show_spsv and "Sessions per Student Visit" in df_13m.columns: selected_metrics.append(("Sessions per Student Visit", SERIES_COLORS[8],  "Sessions per Stud Visit"))
-    if show_svps and "Student Visits per Session" in df_13m.columns: selected_metrics.append(("Student Visits per Session", SERIES_COLORS[7],  "Stud Visits per Session"))
-
-    if selected_metrics:
-        agg_dict = {m: "sum" if m in SUM_METRICS else "mean" for m, _, _ in selected_metrics if m in df_13m.columns}
-        weekly_13m = df_13m.groupby("Date").agg(agg_dict).reset_index().sort_values("Date")
-        cols_plot  = [(m, color, label) for m, color, label in selected_metrics if m in weekly_13m.columns]
-        fig_trend  = plotly_line(weekly_13m, "Date", cols_plot, "", yaxis_title="", height=500)
-        show_chart(fig_trend, use_container_width=True)
+    # ── Year-over-year weekly revenue ─────────────────────────────────────
+    st.markdown('<div class="section-header">Year-over-Year Weekly Comparison</div>', unsafe_allow_html=True)
+    RV_RATIOS = {"Revenue per Session": ("Net Revenue", "Total Sessions"), "Revenue per Student": ("Net Revenue", "# Active Students"),
+                 "Sessions per Student": ("Total Sessions", "# Active Students"), "Student per Session": ("# Active Students", "Total Sessions"),
+                 "Sessions per Student Visit": ("Total Sessions", "Student Visits"), "Student Visits per Session": ("Student Visits", "Total Sessions")}
+    MONEY = {"Gross Revenue", "Net Revenue", "Revenue per Session", "Revenue per Student"}
+    avail = [m for m in ALL_METRICS if m in df_base.columns and (m in SUM_METRICS or all(c in df_base.columns for c in RV_RATIOS.get(m, ())))]
+    avail = sorted(avail, key=lambda m: m != "Net Revenue")   # Net Revenue first (default)
+    dy = add_week_year(df_base)
+    for m in SUM_METRICS:
+        if m in dy.columns: dy[m] = pd.to_numeric(dy[m], errors="coerce").fillna(0)
+    start_col = "# Active Students" if "# Active Students" in dy.columns else "Net Revenue"
+    years = sorted(dy["Year"].unique().tolist(), reverse=True)
+    if years and avail:
+        opts = yoy_options("rvy", years, metrics={m: m.replace("# ", "") for m in avail},
+                           avg_metrics=set(SUM_METRICS))
+        metric, sel = opts["metric"], opts["years"]
+        dy = dy[dy["Year"].isin(sel)]
+        if opts["comparative"]:
+            dy = comparative_only(dy, sel, loc_col)
+        if not sel or dy.empty:
+            st.info("Select at least one year with data.")
+        else:
+            latest_year = max(sel)
+            latest_week = int(dy[dy["Year"] == latest_year]["Week"].max())
+            weekly = {}
+            for yr in sel:
+                g = dy[dy["Year"] == yr].groupby("Week").sum(numeric_only=True)
+                if metric in RV_RATIOS:
+                    num, den = RV_RATIOS[metric]
+                    weekly[yr] = (g[num] / g[den]).where(g[den] > 0)
+                else:
+                    weekly[yr] = g[metric]
+                    if opts["average"]:
+                        weekly[yr] = weekly[yr] / trading_locations(dy, loc_col, start_col, yr)
+            name = metric.replace("# ", "")
+            label = f"Avg {name.lower()} per location" if opts["average"] else name
+            money = metric in MONEY
+            fmt_ = ",.2f" if metric in RV_RATIOS or opts["average"] else ",.0f"
+            fig = yoy_bar_figure(weekly, latest_year, latest_week, f"{label} by week", label, fmt=fmt_,
+                                 prefix="$" if money else "", holidays=opts["holidays"])
+            show_chart(fig, use_container_width=True)
     else:
-        st.info("Please select at least one metric.")
+        st.info("No revenue data by week available.")
 
-    # ── Trend by Location ─────────────────────────────────────────────────
-    st.markdown('<div class="section-header">Trend by Location</div>', unsafe_allow_html=True)
-    avail_metrics = [m for m in ALL_METRICS if m in df_13m.columns]
-    loc_metric    = st.selectbox("Metric:", avail_metrics, key="rv_loc_metric")
-    all_loc_opts  = sorted(df_13m[loc_col].dropna().unique().tolist()) if loc_col in df_13m.columns else []
-    sel_locs      = st.multiselect("Select locations to compare:", all_loc_opts,
-                                    default=all_loc_opts[:3] if len(all_loc_opts) >= 3 else all_loc_opts,
-                                    key="rv_sel_locs")
-    if sel_locs:
-        loc_agg    = "sum" if loc_metric in SUM_METRICS else "mean"
-        colors     = SERIES_COLORS
-        loc_df     = pd.DataFrame()
-        loc_series = []
-        for i, loc in enumerate(sel_locs):
-            loc_data = df_13m[df_13m[loc_col] == loc].groupby("Date")[loc_metric].agg(loc_agg).reset_index()
-            col_name = loc.replace("Success Tutoring - ", "")
-            loc_data = loc_data.rename(columns={loc_metric: col_name})
-            loc_df   = loc_data if loc_df.empty else loc_df.merge(loc_data, on="Date", how="outer")
-            loc_series.append((col_name, colors[i % len(colors)], col_name))
-        loc_df  = loc_df.sort_values("Date")
-        fig_loc = plotly_line(loc_df, "Date", loc_series, f"{loc_metric} by Location", yaxis_title=loc_metric, height=450)
-        show_chart(fig_loc, use_container_width=True)
-    else:
-        st.info("Please select at least one location.")
+    # ── Location comparison ───────────────────────────────────────────────
+    st.markdown('<div class="section-header">Location Comparison — Last 13 Months</div>', unsafe_allow_html=True)
+    measures = {}
+    for m in avail:
+        entry = {"kind": "ratio", "num": RV_RATIOS[m][0], "den": RV_RATIOS[m][1], "fmt": ",.2f"} if m in RV_RATIOS \
+                else {"kind": "sum", "col": m, "fmt": ",.0f"}
+        if m in MONEY: entry["prefix"] = "$"
+        measures[m.replace("# ", "")] = entry
+    if measures and not df_13m.empty:
+        location_comparison(df_13m, loc_col, measures, "rv_cmp", "Net Revenue" if "Net Revenue" in df_13m.columns else start_col, start_col)
 
     # ── Performance Bar Chart ─────────────────────────────────────────────
     st.markdown('<div class="section-header">Performance by Location</div>', unsafe_allow_html=True)
