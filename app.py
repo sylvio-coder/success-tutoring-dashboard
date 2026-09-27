@@ -662,7 +662,130 @@ def pct_card(label, value, note, higher_is_better=True):
         <div class="metric-delta"><span>{note}</span></div>
     </div>""", unsafe_allow_html=True)
 
-def report_membership(df_wm):
+# ── Shared 52-week year-over-year bar chart (Membership, Net Growth, Revenue) ─
+MUTED_YEAR_COLORS = ["#f0a88c", "#9fb0b5", "#c9d3d6", "#dfe6e8"]
+
+def add_week_year(df):
+    """Add ISO Week and Year columns (from 'Date - Week/Year' when present, otherwise from Date)."""
+    d = df.copy()
+    if "Date - Week/Year" in d.columns:
+        wy = d["Date - Week/Year"].astype(str).str.split("/")
+        d["Week"] = pd.to_numeric(wy.str[0], errors="coerce")
+        d["Year"] = pd.to_numeric(wy.str[1], errors="coerce")
+    else:
+        iso = pd.to_datetime(d["Date"]).dt.isocalendar()
+        d["Week"] = iso["week"].astype("float"); d["Year"] = iso["year"].astype("float")
+    d = d.dropna(subset=["Week", "Year"])
+    d["Week"] = d["Week"].astype(int); d["Year"] = d["Year"].astype(int)
+    return d
+
+def yoy_options(key, years, metrics=None, avg_label="Average per location", avg_help=None,
+                show_avg=True, show_churn=False):
+    """Options row above a year-over-year chart. Returns a dict of the choices."""
+    cols = st.columns([2, 2, 2, 2]) if metrics else st.columns([2, 2, 2])
+    i, out = 0, {}
+    if metrics:
+        out["metric"] = cols[0].selectbox("Metric", list(metrics), format_func=metrics.get, key=f"{key}_metric")
+        i = 1
+    out["years"] = cols[i].multiselect("Years", years, default=years[:2], key=f"{key}_years")
+    out["holidays"] = cols[i + 1].multiselect("School holidays", ["NSW", "VIC", "QLD", "WA", "SA", "NZ"],
+                                              default=[], key=f"{key}_holidays", placeholder="None")
+    with cols[i + 2]:
+        out["comparative"] = st.checkbox("Comparative only", value=False, key=f"{key}_comparative",
+                                         help="Only include locations open in every selected year")
+        out["average"] = st.checkbox(avg_label, value=False, key=f"{key}_average",
+                                     help=avg_help or "Totals ÷ number of locations trading that week") if show_avg else False
+        out["churn"] = st.checkbox("Churn %", value=False, key=f"{key}_churn",
+                                   help="Plot churn % (cancelled ÷ active) as lines on the right axis") if show_churn else False
+    return out
+
+def comparative_only(d, years, loc_col):
+    """Keep only (location, week) pairs present in every selected year."""
+    if len(years) < 2: return d
+    pairs = [set(zip(d[d["Year"] == yr][loc_col], d[d["Year"] == yr]["Week"])) for yr in years]
+    common = pairs[0].intersection(*pairs[1:])
+    return d[[(l, w) in common for l, w in zip(d[loc_col], d["Week"])]]
+
+def trading_locations(d, loc_col, active_col, year):
+    """Number of locations with a positive value in active_col, per week of a year."""
+    x = d[(d["Year"] == year) & (d[active_col] > 0)]
+    return x.groupby("Week")[loc_col].nunique()
+
+def yoy_bar_figure(weekly, latest_year, latest_week, title, y_title, fmt=",.0f", prefix="", suffix="",
+                   change="pct", holidays=None, lines=None, line_axis_title="Churn %"):
+    """Weekly bars per year: this year in teal, earlier years muted, current-week marker,
+    month names under week numbers. `weekly` and `lines` map year -> Series indexed by week 1..52."""
+    import datetime as _dt
+    all_weeks = list(range(1, 53))
+    years = sorted(weekly)
+    prev = weekly.get(latest_year - 1)
+    fig = go.Figure()
+    for yr in years:
+        vals = weekly[yr].reindex(all_weeks)
+        if yr == latest_year:
+            color = BI_ACCENT
+            if prev is not None:
+                pv = prev.reindex(all_weeks)
+                if change == "pts":
+                    note = [f"{'+' if v-p >= 0 else ''}{v-p:.2f} pts vs {latest_year-1}" if pd.notna(v) and pd.notna(p) else ""
+                            for v, p in zip(vals, pv)]
+                else:
+                    note = [f"{'+' if v-p >= 0 else ''}{(v-p)/p*100:.0f}% vs {latest_year-1}" if pd.notna(v) and pd.notna(p) and p != 0 else ""
+                            for v, p in zip(vals, pv)]
+            else:
+                note = [""] * 52
+            hover = f"<b>{yr}</b>: {prefix}%{{y:{fmt}}}{suffix}  %{{customdata}}<extra></extra>"
+        else:
+            color = MUTED_YEAR_COLORS[(latest_year - yr - 1) % len(MUTED_YEAR_COLORS)]
+            note = [""] * 52
+            hover = f"{yr}: {prefix}%{{y:{fmt}}}{suffix}<extra></extra>"
+        fig.add_trace(go.Bar(x=all_weeks, y=vals.values, name=str(yr), marker_color=color,
+                             customdata=note, hovertemplate=hover))
+    if lines:
+        for yr in sorted(lines):
+            ln = lines[yr].reindex(all_weeks)
+            latest = yr == latest_year
+            fig.add_trace(go.Scatter(x=all_weeks, y=ln.values, name=f"{yr} churn %", yaxis="y2", mode="lines",
+                                     line=dict(color=BI_RED if latest else "#e8a09e", width=2.25 if latest else 1.75,
+                                               dash="solid" if latest else "dot"),
+                                     connectgaps=False, hovertemplate=f"{yr} churn: %{{y:.1f}}%<extra></extra>"))
+    if holidays:
+        df_hols = load_school_holidays()
+        if not df_hols.empty:
+            for _, h in df_hols[df_hols["State"].isin(holidays)].iterrows():
+                h_year, h_start, h_end = int(h["Year"]), int(h["Start_Week"]), int(h["End_Week"])
+                base = HOLIDAY_COLORS.get(h["Holiday"], "rgba(200,200,200,")
+                if h_year == latest_year:
+                    fig.add_vrect(x0=h_start-0.5, x1=h_end+0.5, fillcolor=base+"0.15)", layer="below", line_width=0,
+                                  annotation_text=h["Holiday"], annotation_position="top left",
+                                  annotation=dict(font_size=9, font_color=BI_SUBTEXT))
+                elif h_year in years:
+                    fig.add_vrect(x0=h_start-0.5, x1=h_end+0.5, fillcolor=base+"0.07)", layer="below", line_width=0)
+    fig.add_vline(x=latest_week + 0.5, line_dash="dash", line_color=BI_SUBTEXT, line_width=1,
+                  annotation_text=f"Wk {latest_week}", annotation_position="top left",
+                  annotation_font=dict(size=10, color=BI_SUBTEXT))
+    ticktext, last_month = [], None
+    for w in all_weeks:
+        try: m = _dt.date.fromisocalendar(int(latest_year), w, 4).strftime("%b")
+        except ValueError: m = None
+        ticktext.append(f"{w}<br><b>{m}</b>" if m and m != last_month else str(w))
+        last_month = m or last_month
+    layout = std_layout(title, y_title, 460)
+    layout.update(barmode="group", bargap=0.18, bargroupgap=0.04, hovermode="x unified",
+                  margin=dict(l=60, r=60 if lines else 30, t=70, b=60),
+                  legend=dict(PLOTLY_LAYOUT["legend"], orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+    layout["xaxis"] = dict(PLOTLY_LAYOUT["xaxis"], tickmode="array", tickvals=all_weeks, ticktext=ticktext,
+                           tickangle=0, range=[0.4, 52.6], title=dict(text="Week", font=dict(color=BI_SUBTEXT, size=11)))
+    layout["yaxis"] = dict(layout["yaxis"], tickformat=",.2~f", tickprefix=prefix, ticksuffix=suffix,
+                           rangemode="normal" if change == "pts" else "tozero")
+    if lines:
+        layout["yaxis2"] = dict(overlaying="y", side="right", showgrid=False, zeroline=False, rangemode="tozero",
+                                ticksuffix="%", tickformat=".1f", tickfont=dict(color=BI_RED, size=11),
+                                title=dict(text=line_axis_title, font=dict(color=BI_RED, size=11)))
+    fig.update_layout(**layout)
+    return fig
+
+def report_membership(df_wm, df_rv):
     st.markdown('<div class="report-title">Membership</div>', unsafe_allow_html=True)
     st.markdown('<div class="report-subtitle">Source: Weekly Membership — active, new, suspended & cancelled member trends</div>', unsafe_allow_html=True)
     loc_col = "Success Tutoring - Business name"
@@ -702,33 +825,19 @@ def report_membership(df_wm):
 
     # ── Year-over-year weekly comparison ──────────────────────────────────
     st.markdown('<div class="section-header">Year-over-Year Weekly Comparison</div>', unsafe_allow_html=True)
-    df_yoy = df_f.copy()
-    if "Date - Week/Year" not in df_yoy.columns:
-        st.info("Week/Year column not found — year-over-year comparison unavailable.")
+    df_yoy = add_week_year(df_f)
+    available_years = sorted(df_yoy["Year"].unique().tolist(), reverse=True)
+    if not available_years:
+        st.info("No week/year data available for year-over-year comparison.")
     else:
-        df_yoy["Week"] = pd.to_numeric(df_yoy["Date - Week/Year"].astype(str).str.split("/").str[0], errors="coerce")
-        df_yoy["Year"] = pd.to_numeric(df_yoy["Date - Week/Year"].astype(str).str.split("/").str[1], errors="coerce")
-        df_yoy = df_yoy.dropna(subset=["Week", "Year"])
-        df_yoy["Week"] = df_yoy["Week"].astype(int); df_yoy["Year"] = df_yoy["Year"].astype(int)
-        available_years = sorted(df_yoy["Year"].unique().tolist(), reverse=True)
-
-        o1, o2, o3, o4 = st.columns([2, 2, 2, 2])
-        yoy_metric = o1.selectbox("Metric", num_cols, format_func=MEMBER_METRICS.get, key="yoy_metric")
-        sel_years_yoy = o2.multiselect("Years", available_years, default=available_years[:2], key="yoy_years")
-        sel_holiday_states = o3.multiselect("School holidays", ["NSW","VIC","QLD","WA","SA","NZ"],
-                                            default=[], key="yoy_holiday_states", placeholder="None")
-        with o4:
-            st.markdown("<div style='height:1.9rem'></div>", unsafe_allow_html=True)
-            comparative = st.checkbox("Comparative only", value=False, key="yoy_comparative",
-                                      help="Only include locations open in every selected year")
+        opts = yoy_options("yoy", available_years, metrics=MEMBER_METRICS, show_churn=True)
+        yoy_metric, sel_years_yoy = opts["metric"], opts["years"]
         metric_name = MEMBER_METRICS[yoy_metric]
         higher_better = yoy_metric not in LOWER_IS_BETTER
 
         df_yoy_f = df_yoy[df_yoy["Year"].isin(sel_years_yoy)].copy()
-        if comparative and len(sel_years_yoy) > 1:
-            pairs = [set(zip(df_yoy_f[df_yoy_f["Year"]==yr][loc_col], df_yoy_f[df_yoy_f["Year"]==yr]["Week"])) for yr in sel_years_yoy]
-            common = pairs[0].intersection(*pairs[1:])
-            df_yoy_f = df_yoy_f[[(l, w) in common for l, w in zip(df_yoy_f[loc_col], df_yoy_f["Week"])]]
+        if opts["comparative"]:
+            df_yoy_f = comparative_only(df_yoy_f, sel_years_yoy, loc_col)
 
         if not sel_years_yoy or df_yoy_f.empty:
             st.info("Select at least one year with data.")
@@ -736,75 +845,20 @@ def report_membership(df_wm):
             latest_year = max(sel_years_yoy)
             latest_week = int(df_yoy_f[df_yoy_f["Year"]==latest_year]["Week"].max())
             prev_year   = latest_year - 1
-            all_weeks   = list(range(1, 53))
-            weekly = {yr: df_yoy_f[df_yoy_f["Year"]==yr].groupby("Week")[yoy_metric].sum().reindex(all_weeks)
-                      for yr in sel_years_yoy}
-
-            # This year in brand teal; earlier years in lighter, muted colours
-            muted = ["#f0a88c", "#9fb0b5", "#c9d3d6", "#dfe6e8"]
-            fig_yoy = go.Figure()
-            for yr in sorted(sel_years_yoy):
-                vals = weekly[yr]
-                if yr == latest_year:
-                    color = BI_ACCENT
-                    prev = weekly.get(prev_year)
-                    if prev is not None:
-                        chg = [f"{'+' if (v-p)>=0 else ''}{(v-p)/p*100:.0f}% vs {prev_year}"
-                               if pd.notna(v) and pd.notna(p) and p > 0 else "" for v, p in zip(vals, prev)]
-                    else:
-                        chg = [""] * len(vals)
-                    hover = f"<b>{yr}</b>: %{{y:,.0f}}  %{{customdata}}<extra></extra>"
-                else:
-                    color = muted[(latest_year - yr - 1) % len(muted)]
-                    chg = [""] * len(vals)
-                    hover = f"{yr}: %{{y:,.0f}}<extra></extra>"
-                fig_yoy.add_trace(go.Bar(x=all_weeks, y=vals.values, name=str(yr), marker_color=color,
-                                         customdata=chg, hovertemplate=hover))
-
-            # School holiday shading
-            if sel_holiday_states:
-                df_hols = load_school_holidays()
-                if not df_hols.empty:
-                    prior_sel_years = [y for y in sel_years_yoy if y != latest_year]
-                    for _, hrow in df_hols[df_hols["State"].isin(sel_holiday_states)].iterrows():
-                        h_year, h_start, h_end = int(hrow["Year"]), int(hrow["Start_Week"]), int(hrow["End_Week"])
-                        h_label = hrow["Holiday"]
-                        base_color = HOLIDAY_COLORS.get(h_label, "rgba(200,200,200,")
-                        if h_year == latest_year:
-                            fig_yoy.add_vrect(x0=h_start-0.5, x1=h_end+0.5, fillcolor=base_color+"0.15)",
-                                              layer="below", line_width=0, annotation_text=h_label,
-                                              annotation_position="top left",
-                                              annotation=dict(font_size=9, font_color=BI_SUBTEXT))
-                        elif h_year in prior_sel_years:
-                            fig_yoy.add_vrect(x0=h_start-0.5, x1=h_end+0.5, fillcolor=base_color+"0.07)",
-                                              layer="below", line_width=0)
-
-            # Current week marker
-            fig_yoy.add_vline(x=latest_week + 0.5, line_dash="dash", line_color=BI_SUBTEXT, line_width=1,
-                              annotation_text=f"Wk {latest_week}", annotation_position="top left",
-                              annotation_font=dict(size=10, color=BI_SUBTEXT))
-
-            # Week numbers with the month name under the first week of each month
-            import datetime as _dt
-            ticktext, last_month = [], None
-            for w in all_weeks:
-                try:
-                    m = _dt.date.fromisocalendar(int(latest_year), w, 4).strftime("%b")
-                except ValueError:
-                    m = None
-                ticktext.append(f"{w}<br><b>{m}</b>" if m and m != last_month else str(w))
-                last_month = m or last_month
-
-            layout = std_layout(f"{metric_name} by week", metric_name, 460)
-            layout.update(barmode="group", bargap=0.18, bargroupgap=0.04, hovermode="x unified",
-                          margin=dict(l=60, r=30, t=70, b=60),
-                          legend=dict(PLOTLY_LAYOUT["legend"], orientation="h", yanchor="bottom", y=1.02,
-                                      xanchor="right", x=1, bgcolor="rgba(0,0,0,0)", borderwidth=0))
-            layout["xaxis"] = dict(PLOTLY_LAYOUT["xaxis"], tickmode="array", tickvals=all_weeks,
-                                   ticktext=ticktext, tickangle=0, range=[0.4, 52.6],
-                                   title=dict(text="Week", font=dict(color=BI_SUBTEXT, size=11)))
-            layout["yaxis"] = dict(layout["yaxis"], tickformat=",")
-            fig_yoy.update_layout(**layout)
+            weekly, churn_lines = {}, {}
+            for yr in sel_years_yoy:
+                d = df_yoy_f[df_yoy_f["Year"] == yr]
+                g = d.groupby("Week")[num_cols].sum()
+                vals = g[yoy_metric]
+                if opts["average"]:
+                    vals = vals / trading_locations(df_yoy_f, loc_col, "# Active members", yr)
+                weekly[yr] = vals
+                if opts["churn"]:
+                    churn_lines[yr] = (g["# Cancelled members"] / g["# Active members"] * 100).where(g["# Active members"] > 0)
+            label = f"Avg {metric_name.lower()} per location" if opts["average"] else metric_name
+            fig_yoy = yoy_bar_figure(weekly, latest_year, latest_week, f"{label} by week", label,
+                                     fmt=",.1f" if opts["average"] else ",.0f",
+                                     holidays=opts["holidays"], lines=churn_lines or None)
             show_chart(fig_yoy, use_container_width=True)
 
             # ── Variance cards ────────────────────────────────────────────
@@ -972,7 +1026,77 @@ def report_membership(df_wm):
                          "Churn %": st.column_config.NumberColumn("Churn %", format="%.1f%%"),
                      })
 
+    weekly_location_metrics(df_f, df_rv)
     centre_performance_index(df_f)
+
+def weekly_location_metrics(df_f, df_rv):
+    """One row per week for a single location: members and revenue side by side."""
+    loc_col = "Success Tutoring - Business name"
+    short = lambda x: str(x).replace("Success Tutoring - ", "")
+    st.markdown('<div class="section-header">Weekly Metrics by Location</div>', unsafe_allow_html=True)
+    locs = sorted(df_f[loc_col].dropna().unique().tolist())
+    if not locs:
+        st.info("No locations match the selected filters."); return
+    c1, c2 = st.columns([3, 1])
+    loc = c1.selectbox("Location (type to search)", locs, format_func=short, key="r2_wm_loc")
+    period = c2.selectbox("Period", ["Last month", "Last quarter", "Last year", "All weeks"], index=1, key="r2_wm_period")
+
+    vl = load_vlookup()
+    meta = vl[vl[loc_col] == loc].iloc[0] if not vl.empty and loc_col in vl.columns and (vl[loc_col] == loc).any() else None
+    if meta is not None:
+        bits = [f"{k}: <b>{meta.get(k)}</b>" for k in ["Stage", "GPM", "Region", "Country"]
+                if str(meta.get(k, "")).strip() not in ("", "nan", "None")]
+        try: bits.append(f"Open <b>{int(float(meta.get('Age (Months)', 0)))}</b> months")
+        except (TypeError, ValueError): pass
+        st.markdown(f'<div class="report-subtitle">{" · ".join(bits)}</div>', unsafe_allow_html=True)
+
+    m = df_f[df_f[loc_col] == loc].groupby("Date")[["# Active members", "# New members",
+                                                    "# Suspended members", "# Cancelled members"]].sum().sort_index()
+    if m.empty:
+        st.info("No weekly data for this location."); return
+    cutoff = {"Last month": pd.DateOffset(months=1), "Last quarter": pd.DateOffset(months=3),
+              "Last year": pd.DateOffset(years=1)}.get(period)
+    if cutoff is not None:
+        m = m[m.index >= m.index.max() - cutoff]
+    m = m.reset_index()
+
+    # Revenue for the same location, matched to the nearest membership week (within 7 days)
+    rv_cols = ["Net Revenue", "# Active Students", "Total Sessions"]
+    rv = apply_gpm_filter(df_rv) if not df_rv.empty else df_rv
+    if not rv.empty and loc_col in rv.columns and all(c in rv.columns for c in rv_cols):
+        r = rv[rv[loc_col] == loc].groupby("Date")[rv_cols].sum().reset_index().sort_values("Date")
+        m = pd.merge_asof(m.sort_values("Date"), r, on="Date", direction="nearest", tolerance=pd.Timedelta(days=7))
+    for c in rv_cols:
+        if c not in m.columns: m[c] = float("nan")
+
+    a, n, s_, c = m["# Active members"], m["# New members"], m["# Suspended members"], m["# Cancelled members"]
+    rev, stud, sess = m["Net Revenue"], m["# Active Students"], m["Total Sessions"]
+    out = pd.DataFrame({
+        "Week": m["Date"].dt.strftime("%d %b %Y"),
+        "Active": a, "New": n, "Suspended": s_, "Cancelled": c,
+        "Churn %": (c / a * 100).where(a > 0),
+        "Net Growth %": ((n - c) / a * 100).where(a > 0),
+        "Net Revenue": rev, "Active Students": stud, "Sessions": sess,
+        "Rev / Session": (rev / sess).where(sess > 0),
+        "Rev / Student": (rev / stud).where(stud > 0),
+        "Sessions / Student": (sess / stud).where(stud > 0),
+    }).iloc[::-1].reset_index(drop=True)
+    avg = out.drop(columns="Week").mean(numeric_only=True)
+    avg["Week"] = f"Average ({period.lower()})"
+    out = pd.concat([out, pd.DataFrame([avg])], ignore_index=True)
+
+    fmt = {"Active": "{:,.0f}", "New": "{:,.1f}", "Suspended": "{:,.1f}", "Cancelled": "{:,.1f}",
+           "Churn %": "{:.1f}%", "Net Growth %": "{:+.2f}%", "Net Revenue": "${:,.0f}",
+           "Active Students": "{:,.0f}", "Sessions": "{:,.0f}", "Rev / Session": "${:,.2f}",
+           "Rev / Student": "${:,.2f}", "Sessions / Student": "{:.2f}"}
+    whole = {"New": "{:,.0f}", "Suspended": "{:,.0f}", "Cancelled": "{:,.0f}"}
+    last = len(out) - 1
+    def bold_avg(row):
+        return ["font-weight: 700; background-color: #eef3f4" if row.name == last else "" for _ in row]
+    styled = out.style.apply(bold_avg, axis=1).format(fmt, na_rep="–")
+    styled = styled.format(whole, subset=pd.IndexSlice[out.index[:-1], list(whole)], na_rep="–")
+    st.dataframe(styled, use_container_width=True, hide_index=True, height=min(560, 35 * (len(out) + 1) + 3),
+                 column_config={"Week": st.column_config.TextColumn("Week", pinned=True, width=150)})
 
 def centre_performance_index(df_f):
     """Each centre's active members divided by the average of all trading centres
@@ -2089,7 +2213,7 @@ if df_wm.empty:
     st.warning("No locations are assigned to your account. Please contact your administrator."); st.stop()
 
 if selected_report=="1 · Campus Locations":           report_locations(df_wm)
-elif selected_report=="2 · Membership":               report_membership(df_wm)
+elif selected_report=="2 · Membership":               report_membership(df_wm, df_rv)
 elif selected_report=="3 · Membership by Age":        report_age_combined(df_wm)
 elif selected_report=="8 · Net Growth Rate %":          report_net_growth(df_wm)
 elif selected_report=="9 · Onboarding Progress":      report_onboarding(df_wm)
