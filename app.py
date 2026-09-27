@@ -289,6 +289,8 @@ def load_school_holidays():
         return df.dropna(subset=["Year","Start_Week","End_Week"])
     except:
         return pd.DataFrame()
+
+@st.cache_data(ttl=300)
 def load_revenue():
     try:
         df = load_sheet_data("Revenue")
@@ -332,7 +334,7 @@ def load_permissions():
     permissions = {}
     for _, row in df.iterrows():
         email = str(row["email"]).strip().lower()
-        tabs = [t.strip() for t in str(row["allowed_tabs"]).split(",")]
+        tabs = [t.strip() for t in str(row["allowed_tabs"]).split(",") if t.strip()]
         gpm_filter = str(row.get("gpm_filter","")).strip()
         access_level = str(row.get("access_level","admin")).strip().lower()
         permissions[email] = {
@@ -549,17 +551,16 @@ def plotly_dual_axis(weekly_df, date_col, member_series, title, height=520):
     fig.update_layout(**layout)
     return fig
 def apply_gpm_filter(df):
-    """Filter data based on logged-in user's allowed locations."""
-    access_level = st.session_state.get("access_level", "admin")
+    """Filter data based on logged-in user's allowed locations.
+    Only admins see every location; anyone else sees only their allowed
+    locations (none if the list is empty or could not be loaded)."""
+    if st.session_state.get("access_level") == "admin":
+        return df
     allowed_locations = st.session_state.get("allowed_locations", [])
-
     wm_loc_col = "Success Tutoring - Business name"
-
-    if access_level == "gpm" and allowed_locations:
-        if wm_loc_col in df.columns:
-            df = df[df[wm_loc_col].isin(allowed_locations)]
-
-    return df
+    if wm_loc_col in df.columns:
+        return df[df[wm_loc_col].isin(allowed_locations)]
+    return df.iloc[0:0]
 def get_13m_filtered(df_wm, df_filtered):
     loc_col = "Success Tutoring - Business name"
     max_date = df_wm["Date"].max()
@@ -720,7 +721,7 @@ def report_locations(df_wm):
     st.markdown('<div class="report-subtitle">Source: Vlookup — all location metadata with stage, GPM, country and region</div>', unsafe_allow_html=True)
     loc_col = "Success Tutoring - Business name"
     df_wm = apply_gpm_filter(df_wm)
-    vl_full = load_vlookup()
+    vl_full = apply_gpm_filter(load_vlookup())
     vl = report_filters(vl_full.copy(),key_prefix="r1vl",show_date=False,
                         show_country=True,show_state=True,show_stage=True,show_gpm=True,show_status=True)
     if not vl.empty and "Stage" in vl.columns:
@@ -1151,7 +1152,7 @@ def report_age_combined(df_wm):
     st.markdown('<div class="report-subtitle">Age groups from Vlookup | Member counts from Weekly Membership</div>', unsafe_allow_html=True)
     df_wm = apply_gpm_filter(df_wm)
     loc_col="Success Tutoring - Business name"
-    vl=load_vlookup()
+    vl=apply_gpm_filter(load_vlookup())
     if vl.empty or "Age (Months)" not in vl.columns:
         st.warning("Age (Months) not found in Vlookup."); return
     df_vl=report_filters(vl.copy(),key_prefix="r3vl",show_date=False,
@@ -1468,7 +1469,7 @@ def report_onboarding(df_wm):
     st.markdown('<div class="report-title">8 · Onboarding Progress</div>',unsafe_allow_html=True)
     st.markdown('<div class="report-subtitle">Source: Vlookup — onboarding week progress and pre-sale member counts</div>',unsafe_allow_html=True)
     df_wm = apply_gpm_filter(df_wm)
-    vl=load_vlookup()
+    vl=apply_gpm_filter(load_vlookup())
     if vl.empty: st.warning("Vlookup tab not available."); return
     vl_f=report_filters(vl.copy(),key_prefix="r7",show_date=False,
                          show_country=True,show_state=True,show_stage=True,show_gpm=True,show_status=True)
@@ -2507,6 +2508,7 @@ def login_section():
                         st.session_state["access_level"] = perms["access_level"]
                         st.session_state["gpm_filter"] = perms["gpm_filter"]
                         st.session_state["allowed_locations"] = perms.get("allowed_locations", [])
+                        st.session_state["allowed_tabs"] = perms["tabs"]
                         log_access(email, name, "Login")
                         st.rerun()
                     else:
@@ -2574,6 +2576,18 @@ REPORTS=[
     "12 · Location Performance Analysis",
 ]
 
+def report_allowed(report, allowed_tabs):
+    """allowed_tabs may contain "all", report numbers ("10") or names ("Revenue")."""
+    tabs = [t.strip().lower() for t in allowed_tabs]
+    if "all" in tabs:
+        return True
+    num, name = report.split(" · ", 1)
+    return num in tabs or name.lower() in tabs or report.lower() in tabs
+
+REPORTS = [r for r in REPORTS if report_allowed(r, st.session_state.get("allowed_tabs", []))]
+if not REPORTS:
+    st.warning("⛔ No reports are assigned to your account. Please contact your administrator."); st.stop()
+
 with st.sidebar:
     if os.path.exists("logo.png"):
         st.image("logo.png",width=150)
@@ -2600,7 +2614,7 @@ with st.sidebar:
     st.markdown("---")
     st.markdown(f'<div style="color:{BI_ACCENT};font-size:0.72em;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;padding:4px 0 6px 2px">📊 Reports</div>',
                 unsafe_allow_html=True)
-    if "selected_report" not in st.session_state:
+    if st.session_state.get("selected_report") not in REPORTS:
         st.session_state["selected_report"] = REPORTS[0]
     for r in REPORTS:
         is_active = st.session_state["selected_report"] == r
@@ -2656,8 +2670,9 @@ if df_wm.empty:
     st.warning("Weekly Membership sheet is empty."); st.stop()
 
 df_wm = apply_gpm_filter(df_wm)
+if df_wm.empty:
+    st.warning("⛔ No locations are assigned to your account. Please contact your administrator."); st.stop()
 
-df_wm = apply_gpm_filter(df_wm)
 if selected_report=="1 · Campus Locations":           report_locations(df_wm)
 elif selected_report=="2 · Membership":               report_membership(df_wm)
 elif selected_report=="3 · Membership by Age":        report_age_combined(df_wm)
