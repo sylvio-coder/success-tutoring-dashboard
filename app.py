@@ -2544,32 +2544,6 @@ def login_section():
                 </a>
             </div>
             """, unsafe_allow_html=True)
-            st.markdown(f'<p style="color:{BI_SUBTEXT};text-align:center;font-size:0.8em;margin-top:4px">— or use email below —</p>',
-                        unsafe_allow_html=True)
-        with st.expander("🔐 Sign in with email instead", expanded=False):
-            email_input = st.text_input("Email",placeholder="you@successtutoring.com",
-                                         label_visibility="collapsed", key="email_fallback")
-            pin_input = st.text_input("PIN", placeholder="Enter your PIN",
-                                      type="password", key="pin_fallback")
-            if st.button("Login with Email", use_container_width=True):
-                if email_input and "@successtutoring.com" in email_input:
-                    perms = get_user_permissions(email_input)
-                    if perms["tabs"] and str(pin_input).strip() == perms["pin"]:
-                        name_fb = email_input.split("@")[0].replace("."," ").title()
-                        st.session_state["logged_in"] = True
-                        st.session_state["user_email"] = email_input.lower().strip()
-                        st.session_state["user_name"] = name_fb
-                        st.session_state["access_level"] = perms["access_level"]
-                        st.session_state["gpm_filter"] = perms["gpm_filter"]
-                        st.session_state["allowed_locations"] = perms.get("allowed_locations", [])
-                        log_access(email_input.lower().strip(), name_fb, "Login")
-                        st.empty()
-                        st.rerun()
-                    else:
-                        flag_unknown_user(email_input.lower().strip())
-                        st.error("⛔ Invalid email or PIN.")
-                else:
-                    st.error("Please enter a valid @successtutoring.com email.")
         st.caption("🔒 Only approved team members can access this dashboard.")
 
 # ══════════════════════════════════════════════════════════════════════════════
