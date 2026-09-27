@@ -403,51 +403,61 @@ def bi_fig(w=14,h=6):
     return fig,ax
 
 # ── Plotly theme ──────────────────────────────────────────────────────────────
+CHART_FONT = "Source Sans Pro, Source Sans 3, Segoe UI, Arial, sans-serif"
 PLOTLY_LAYOUT = dict(
     paper_bgcolor="#ffffff", plot_bgcolor="#ffffff",
-    font=dict(color=BI_TEXT, family="Segoe UI, Source Sans Pro, Arial, sans-serif", size=12),
-    xaxis=dict(gridcolor=BI_GRID, gridwidth=1, tickfont=dict(color=BI_SUBTEXT, size=10),
-               linecolor=BI_BORDER, linewidth=1, showgrid=False, zeroline=False, tickangle=-30),
-    yaxis=dict(gridcolor=BI_GRID, gridwidth=1, tickfont=dict(color=BI_SUBTEXT, size=10),
-               linecolor=BI_BORDER, showgrid=True, zeroline=False),
-    legend=dict(bgcolor="rgba(255,255,255,0.9)", bordercolor="#cccccc", borderwidth=1,
-                font=dict(color=BI_TEXT, size=11), orientation="h",
-                yanchor="bottom", y=-0.35, xanchor="center", x=0.5, itemsizing="constant"),
+    font=dict(color=BI_TEXT, family=CHART_FONT, size=12),
+    xaxis=dict(gridcolor=BI_GRID, gridwidth=1, tickfont=dict(color=BI_SUBTEXT, size=11),
+               linecolor=BI_BORDER, linewidth=1, showgrid=False, zeroline=False, tickangle=0),
+    yaxis=dict(gridcolor="#eef2f3", gridwidth=1, tickfont=dict(color=BI_SUBTEXT, size=11),
+               linecolor=BI_BORDER, showgrid=True, zeroline=False, tickformat=",", rangemode="tozero"),
+    legend=dict(bgcolor="rgba(0,0,0,0)", borderwidth=0, font=dict(color=BI_TEXT, size=12),
+                orientation="h", yanchor="bottom", y=1.0, xanchor="left", x=0, itemsizing="constant"),
     hovermode="x unified",
-    hoverlabel=dict(bgcolor=BI_INK, bordercolor=BI_ACCENT,
-                    font=dict(color="#ffffff", size=12, family="Segoe UI"), namelength=-1),
-    margin=dict(l=70, r=40, t=50, b=130), dragmode=False,
+    hoverlabel=dict(bgcolor="#ffffff", bordercolor=BI_BORDER,
+                    font=dict(color=BI_TEXT, size=12, family=CHART_FONT), namelength=-1),
+    margin=dict(l=60, r=30, t=40, b=50), dragmode=False,
 )
 
 def std_traces(fig, df, date_col, col_name, color, label, secondary_y=False):
+    """One clean line with a soft area fill (the fill is dropped by show_chart when a
+    chart has several lines) and a dot on the latest point."""
     try:
         r,g,b = int(color[1:3],16),int(color[3:5],16),int(color[5:7],16)
-        fill_color = f"rgba({r},{g},{b},0.18)"
-        glow_color = f"rgba({r},{g},{b},0.4)"
+        fill_color = f"rgba({r},{g},{b},0.10)"
     except:
-        fill_color = "rgba(1,184,170,0.18)"
-        glow_color = "rgba(1,184,170,0.4)"
+        fill_color = "rgba(31,154,154,0.10)"
     kwargs = dict(secondary_y=secondary_y) if secondary_y is not False else {}
     fig.add_trace(go.Scatter(
         x=df[date_col], y=df[col_name], name=label, mode="lines",
-        line=dict(color=glow_color, width=6),
-        showlegend=False, hoverinfo="skip",
+        line=dict(color=color, width=2.25),
+        fill="tozeroy", fillcolor=fill_color, xhoverformat="%d %b %Y",
+        hovertemplate=f"{label}: <b>%{{y:,.1f}}</b><extra></extra>",
     ), **kwargs)
-    fig.add_trace(go.Scatter(
-        x=df[date_col], y=df[col_name], name=label,
-        mode="lines+markers",
-        line=dict(color=color, width=2.5, shape="spline", smoothing=0.4),
-        marker=dict(color=color, size=6, symbol="circle",
-                    line=dict(color="#ffffff", width=1.5)),
-        fill="tozeroy", fillcolor=fill_color,
-        hovertemplate=f"<b>{label}</b><br>%{{x|%d %b %Y}}<br><b>%{{y:,.1f}}</b><extra></extra>",
-    ), **kwargs)
+    if len(df):
+        last = df.sort_values(date_col).iloc[-1]
+        fig.add_trace(go.Scatter(
+            x=[last[date_col]], y=[last[col_name]], mode="markers",
+            marker=dict(color=color, size=7, line=dict(color="#ffffff", width=1.5)),
+            showlegend=False, hoverinfo="skip",
+        ), **kwargs)
+
+def show_chart(fig, **kwargs):
+    """Display a Plotly chart; drops area fills when more than one line is filled."""
+    filled = [t for t in fig.data if getattr(t, "fill", None) == "tozeroy"]
+    if len(filled) > 1:
+        for t in filled:
+            t.fill = None
+    kwargs.setdefault("use_container_width", True)
+    st.plotly_chart(fig, **kwargs)
 
 def std_layout(title, yaxis_title="", height=500):
+    """Shared layout. Pass title="" when a section heading above already names the chart."""
     layout = dict(PLOTLY_LAYOUT)
-    layout["title"] = dict(text=title,
-                           font=dict(color=BI_TEXT, size=15, family="Segoe UI, Source Sans Pro, Arial, sans-serif", weight="bold"),
-                           x=0, xanchor="left", pad=dict(l=0))
+    if title:
+        layout["title"] = dict(text=title, font=dict(color=BI_TEXT, size=14, family=CHART_FONT, weight="bold"),
+                               x=0, xanchor="left", y=0.98, yanchor="top", yref="container", pad=dict(l=4))
+        layout["margin"] = dict(PLOTLY_LAYOUT["margin"], t=80)
     layout["yaxis"] = dict(PLOTLY_LAYOUT["yaxis"],
                            title=dict(text=yaxis_title, font=dict(color=BI_SUBTEXT, size=11)))
     layout["height"] = height
@@ -467,29 +477,21 @@ def plotly_dual_axis(weekly_df, date_col, member_series, title, height=520):
         if col_name not in weekly_df.columns: continue
         std_traces(fig, weekly_df, date_col, col_name, color, label, secondary_y=False)
     if "Churn Rate %" in weekly_df.columns:
-        try:
-            r,g,b = int(BI_RED[1:3],16),int(BI_RED[3:5],16),int(BI_RED[5:7],16)
-            glow = f"rgba({r},{g},{b},0.4)"
-        except:
-            glow = "rgba(209,52,56,0.4)"
         fig.add_trace(go.Scatter(
             x=weekly_df[date_col], y=weekly_df["Churn Rate %"],
-            name="Churn Rate %", mode="lines",
-            line=dict(color=glow, width=6),
-            showlegend=False, hoverinfo="skip",
+            name="Churn Rate %", mode="lines", xhoverformat="%d %b %Y",
+            line=dict(color=BI_RED, width=2.25, dash="dot"),
+            hovertemplate="Churn Rate: <b>%{y:.1f}%</b><extra></extra>",
         ), secondary_y=True)
-        fig.add_trace(go.Scatter(
-            x=weekly_df[date_col], y=weekly_df["Churn Rate %"],
-            name="Churn Rate %", mode="lines+markers",
-            line=dict(color=BI_RED, width=2.5, dash="dot", shape="spline", smoothing=0.4),
-            marker=dict(color=BI_RED, size=6, symbol="diamond",
-                        line=dict(color="#ffffff", width=1.5)),
-            hovertemplate="<b>Churn Rate</b>: %{y:.1f}%<extra></extra>",
-        ), secondary_y=True)
+        if len(weekly_df):
+            fig.add_trace(go.Scatter(
+                x=[weekly_df[date_col].iloc[-1]], y=[weekly_df["Churn Rate %"].iloc[-1]], mode="markers",
+                marker=dict(color=BI_RED, size=7, line=dict(color="#ffffff", width=1.5)),
+                showlegend=False, hoverinfo="skip"), secondary_y=True)
     layout = std_layout(title, "Members", height)
     layout["yaxis2"] = dict(
         title=dict(text="Churn Rate %", font=dict(color=BI_RED, size=11)),
-        tickfont=dict(color=BI_RED), gridcolor=BI_GRID, showgrid=False, zeroline=False)
+        tickfont=dict(color=BI_RED, size=11), ticksuffix="%", tickformat=".1f", showgrid=False, zeroline=False, rangemode="tozero")
     fig.update_layout(**layout)
     return fig
 def apply_gpm_filter(df):
@@ -639,9 +641,8 @@ def draw_per_location_trend(df_13m, metric_col, metric_label, color, key_prefix)
             loc_name = loc.replace("Success Tutoring - ","")
             std_traces(fig, loc_df, "Date", metric_col, colors_indiv[i%len(colors_indiv)], loc_name)
     fig.update_layout(**std_layout(
-        f"Avg {metric_label} per Location {stage_lbl} — Last 13 Months",
-        f"Avg {metric_label}", 420))
-    st.plotly_chart(fig, use_container_width=True)
+        "", f"Avg {metric_label}", 420))
+    show_chart(fig, use_container_width=True)
 
 def latest_week_table(df_wm, df_filtered, metric_col, label_col, table_title):
     loc_col = "Success Tutoring - Business name"
@@ -880,7 +881,7 @@ def report_membership(df_wm):
                                    title=dict(text="Week", font=dict(color=BI_SUBTEXT, size=11)))
             layout["yaxis"] = dict(layout["yaxis"], tickformat=",")
             fig_yoy.update_layout(**layout)
-            st.plotly_chart(fig_yoy, use_container_width=True)
+            show_chart(fig_yoy, use_container_width=True)
 
             # ── Variance cards ────────────────────────────────────────────
             def pct(a, b):
@@ -998,7 +999,7 @@ def report_membership(df_wm):
             name = loc.replace("Success Tutoring - ", "")
             color = SERIES_COLORS[i % len(SERIES_COLORS)]
             fig_c.add_trace(go.Scatter(x=sr.index, y=sr.values, name=name, mode="lines",
-                                       line=dict(color=color, width=2.5, shape="spline", smoothing=0.3),
+                                       line=dict(color=color, width=2.5),
                                        hovertemplate=f"{name}: %{{y:{fmt}}}{suffix}<extra></extra>"))
             fig_c.add_trace(go.Scatter(x=[sr.index[-1]], y=[sr.values[-1]], mode="markers",
                                        marker=dict(color=color, size=8), showlegend=False, hoverinfo="skip"))
@@ -1024,7 +1025,7 @@ def report_membership(df_wm):
         layout["yaxis"] = dict(layout["yaxis"], tickformat=",", ticksuffix=suffix, rangemode="tozero")
         fig_c.update_layout(**layout)
         fig_c.update_xaxes(dtick="M1")
-        st.plotly_chart(fig_c, use_container_width=True)
+        show_chart(fig_c, use_container_width=True)
     else:
         st.info("Select one or more locations to compare.")
 
@@ -1215,8 +1216,8 @@ def report_age_combined(df_wm):
             if grp_df.empty: continue
             std_traces(fig_age, grp_df, "Date", metric_col, age_colors[i%len(age_colors)], grp)
         fig_age.update_layout(**std_layout(
-            f"Avg {metric_name} by Location Age — Last 13 Months", f"Avg {metric_name}", 500))
-        st.plotly_chart(fig_age,use_container_width=True)
+            "", f"Avg {metric_name}", 500))
+        show_chart(fig_age,use_container_width=True)
  # ── Avg membership by Region ──
     st.markdown('<div class="section-header">Avg Active Members by Region — Last 13 Months</div>', unsafe_allow_html=True)
     if "Region" in df_chart.columns and "# Active members" in df_chart.columns:
@@ -1230,8 +1231,8 @@ def report_age_combined(df_wm):
             std_traces(fig_region, reg_df, "Date", "# Active members",
                       region_colors[i%len(region_colors)], region)
         fig_region.update_layout(**std_layout(
-            "Avg Active Members by Region — Last 13 Months", "Avg Active Members", 500))
-        st.plotly_chart(fig_region, use_container_width=True)
+            "", "Avg Active Members", 500))
+        show_chart(fig_region, use_container_width=True)
 # ══════════════════════════════════════════════════════════════════════════════
 # Generic trend report helper
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1247,9 +1248,8 @@ def generic_member_report(df_wm, report_num, title, metric_col, metric_label, co
     st.markdown(f'<div class="section-header">{metric_label} Trend — Last 13 Months</div>',unsafe_allow_html=True)
     weekly=df_13m.groupby("Date")[metric_col].sum().reset_index().sort_values("Date")
     fig = plotly_line(weekly,"Date",[(metric_col,color,metric_label)],
-                      f"{metric_label} per Week — Last 13 Months",
-                      yaxis_title=metric_label,height=500)
-    st.plotly_chart(fig,use_container_width=True)
+                      "", yaxis_title=metric_label,height=500)
+    show_chart(fig,use_container_width=True)
     st.markdown(f'<div class="section-header">Avg {metric_label} per Location — Growth Stage Default</div>',unsafe_allow_html=True)
     draw_per_location_trend(df_13m,metric_col,metric_label,color,f"{key}plt")
     latest_week_table(df_wm,df,metric_col,metric_label,f"{metric_label} by Location")
@@ -1307,8 +1307,8 @@ def report_churn_combined(df_wm):
         if show_n: member_series.append(("New",     BI_BLUE,  "New"))
         if show_s: member_series.append(("Suspended",BI_ORANGE,"Suspended"))
         if show_c: member_series.append(("Cancelled",BI_RED,  "Cancelled"))
-        fig = plotly_dual_axis(weekly,"Date",member_series,"Membership Trends & Churn Rate",height=500)
-        st.plotly_chart(fig,use_container_width=True)
+        fig = plotly_dual_axis(weekly,"Date",member_series,"",height=500)
+        show_chart(fig,use_container_width=True)
     st.markdown('<div class="section-header">Avg Churn Rate per Location — Growth Stage Default</div>',unsafe_allow_html=True)
     df_c=df_13m.copy()
     df_c["churn_pct"]=df_c.apply(lambda r: churn_rate(r.get("# Cancelled members",0),r.get("# Active members",0)),axis=1)
@@ -1339,13 +1339,13 @@ def report_churn_combined(df_wm):
                     loc_name = loc.replace("Success Tutoring - ","")
                     std_traces(fig_ci, loc_df, "Date", "churn_pct", colors_indiv[i%len(colors_indiv)], loc_name)
                 fig_ci.update_layout(**std_layout(
-                    "Churn Rate % by Individual Location — Last 13 Months","Churn Rate %",500))
-                st.plotly_chart(fig_ci, use_container_width=True)
+                    "Churn Rate % by Individual Location","Churn Rate %",500))
+                show_chart(fig_ci, use_container_width=True)
         fig_c=go.Figure()
         std_traces(fig_c, avg_churn, "Date", "Avg Churn %", BI_RED, "Avg Churn %")
         fig_c.update_layout(**std_layout(
-            f"Avg Churn Rate per Location {stage_lbl} — Last 13 Months","Avg Churn Rate %",500))
-        st.plotly_chart(fig_c,use_container_width=True)
+            "","Avg Churn Rate %",500))
+        show_chart(fig_c,use_container_width=True)
 # ══════════════════════════════════════════════════════════════════════════════
 # REPORT 8 — Net Growth Rate %
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1386,8 +1386,8 @@ def report_net_growth(df_wm):
     std_traces(fig, weekly, "Date", "Net Growth Rate %", BI_ACCENT, "Net Growth Rate %")
     fig.add_hline(y=0, line_dash="dash", line_color=BI_RED, line_width=1.5,
                   annotation_text="Break-even", annotation_position="bottom right")
-    fig.update_layout(**std_layout("Network Net Growth Rate % — Last 13 Months (Total New − Total Cancelled) / Total Active", "Net Growth Rate %", 500))
-    st.plotly_chart(fig, use_container_width=True)
+    fig.update_layout(**std_layout("", "Net Growth Rate %", 500))
+    show_chart(fig, use_container_width=True)
 
     # ── Avg Net Growth Rate % per location ──
     st.markdown('<div class="section-header">Avg Net Growth Rate % per Location — Growth Stage Default (Equal weight per location)</div>', unsafe_allow_html=True)
@@ -1414,8 +1414,8 @@ def report_net_growth(df_wm):
         fig2.add_hline(y=0, line_dash="dash", line_color=BI_RED, line_width=1.5,
                        annotation_text="Break-even", annotation_position="bottom right")
         fig2.update_layout(**std_layout(
-            f"Avg Net Growth Rate % per Location {stage_lbl} — Last 13 Months", "Avg NGR %", 500))
-        st.plotly_chart(fig2, use_container_width=True)
+            "", "Avg NGR %", 500))
+        show_chart(fig2, use_container_width=True)
 
         show_indiv = st.checkbox("Show individual locations", value=False, key="r8ng_indiv")
         if show_indiv:
@@ -1430,8 +1430,8 @@ def report_net_growth(df_wm):
                     loc_name = loc.replace("Success Tutoring - ","")
                     std_traces(fig3, loc_df, "Date", "ngr", colors_indiv[i%len(colors_indiv)], loc_name)
                 fig3.add_hline(y=0, line_dash="dash", line_color=BI_RED, line_width=1.5)
-                fig3.update_layout(**std_layout("NGR % by Individual Location — Last 13 Months","NGR %",500))
-                st.plotly_chart(fig3, use_container_width=True)
+                fig3.update_layout(**std_layout("NGR % by Individual Location","NGR %",500))
+                show_chart(fig3, use_container_width=True)
 
     # ── Latest week table ──
     latest_wk = df["Date"].max()
@@ -1741,8 +1741,8 @@ def report_revenue(df_rv):
         agg_dict = {m: "sum" if m in SUM_METRICS else "mean" for m, _, _ in selected_metrics if m in df_13m.columns}
         weekly_13m = df_13m.groupby("Date").agg(agg_dict).reset_index().sort_values("Date")
         cols_plot  = [(m, color, label) for m, color, label in selected_metrics if m in weekly_13m.columns]
-        fig_trend  = plotly_line(weekly_13m, "Date", cols_plot, "Revenue Trend — Last 13 Months", height=500)
-        st.plotly_chart(fig_trend, use_container_width=True)
+        fig_trend  = plotly_line(weekly_13m, "Date", cols_plot, "", yaxis_title="", height=500)
+        show_chart(fig_trend, use_container_width=True)
     else:
         st.info("Please select at least one metric.")
 
@@ -1766,8 +1766,8 @@ def report_revenue(df_rv):
             loc_df   = loc_data if loc_df.empty else loc_df.merge(loc_data, on="Date", how="outer")
             loc_series.append((col_name, colors[i % len(colors)], col_name))
         loc_df  = loc_df.sort_values("Date")
-        fig_loc = plotly_line(loc_df, "Date", loc_series, f"{loc_metric} by Location — Last 13 Months", height=450)
-        st.plotly_chart(fig_loc, use_container_width=True)
+        fig_loc = plotly_line(loc_df, "Date", loc_series, f"{loc_metric} by Location", yaxis_title=loc_metric, height=450)
+        show_chart(fig_loc, use_container_width=True)
     else:
         st.info("Please select at least one location.")
 
@@ -1801,7 +1801,7 @@ def report_revenue(df_rv):
         margin=dict(l=40, r=20, t=30, b=160),
         height=450,
     )
-    st.plotly_chart(fig_bar, use_container_width=True)
+    show_chart(fig_bar, use_container_width=True)
 
     # ── Location table ────────────────────────────────────────────────────
     st.markdown('<div class="section-header">📋 All Metrics by Location — Latest Week</div>', unsafe_allow_html=True)
@@ -2305,9 +2305,17 @@ def report_location_performance(df_wm, df_rv):
     if show_rpu and "Revenue per Student" in trend_wm.columns: series_map.append(("Revenue per Student", BI_YELLOW, "Rev/Student"))
 
     loc_short = sel_loc.replace("Success Tutoring - ", "")
+    REVENUE_COLS = {"Net Revenue", "Revenue per Session", "Revenue per Student"}
+    def axis_for(col):
+        return "y2" if col.endswith("%") else "y3" if col in REVENUE_COLS else "y"
+    def add_line(d, col, color, label):
+        n = len(fig_trend.data)
+        std_traces(fig_trend, d, "Date", col, color, label)
+        for t in fig_trend.data[n:]:
+            t.yaxis = axis_for(col)
     for col, color, label in series_map:
         if col not in trend_wm.columns: continue
-        std_traces(fig_trend, trend_wm, "Date", col, color, f"{loc_short} — {label}")
+        add_line(trend_wm, col, color, f"{loc_short} — {label}")
 
     # Comparison location traces
     comp_colors = [BI_BLUE, BI_RED, BI_YELLOW, SERIES_COLORS[8]]
@@ -2326,10 +2334,21 @@ def report_location_performance(df_wm, df_rv):
         comp_short = comp_loc.replace("Success Tutoring - ","")
         for col, _, label in series_map:
             if col not in comp_trend.columns: continue
-            std_traces(fig_trend, comp_trend, "Date", col, comp_colors[i%len(comp_colors)], f"{comp_short} — {label}")
+            add_line(comp_trend, col, comp_colors[i%len(comp_colors)], f"{comp_short} — {label}")
 
-    fig_trend.update_layout(**std_layout(f"{loc_short} — 13 Month Trend", "", 520))
-    st.plotly_chart(fig_trend, use_container_width=True)
+    trend_layout = std_layout(f"{loc_short} — 13 Month Trend", "Members", 520)
+    used_axes = {t.yaxis or "y" for t in fig_trend.data}
+    right_axis = dict(overlaying="y", side="right", showgrid=False, zeroline=False,
+                      tickfont=dict(color=BI_SUBTEXT, size=11), linecolor=BI_BORDER)
+    if "y2" in used_axes:
+        trend_layout["yaxis2"] = dict(right_axis, ticksuffix="%", tickformat=".1f",
+                                      title=dict(text="Rate %", font=dict(color=BI_SUBTEXT, size=11)))
+    if "y3" in used_axes:
+        trend_layout["yaxis3"] = dict(right_axis, tickprefix="$", tickformat=",.0f", anchor="free", autoshift=True,
+                                      title=dict(text="Revenue", font=dict(color=BI_SUBTEXT, size=11)))
+    trend_layout["margin"] = dict(trend_layout["margin"], r=110)
+    fig_trend.update_layout(**trend_layout)
+    show_chart(fig_trend, use_container_width=True)
 
     # ══════════════════════════════════════════════════════════════════════
     # SECTION 3 — AI Analysis
