@@ -903,14 +903,10 @@ def report_membership(df_wm):
                               f"Wk 1–{latest_week}, {latest_year} vs {prev_year}", higher_better)
 
             # ── Location table ────────────────────────────────────────────
-            st.markdown(f'<div class="section-header">Location Detail — {metric_name}</div>', unsafe_allow_html=True)
-            yy, pyy = str(latest_year)[2:], str(prev_year)[2:]
-            c_prev_wk = f"Wk{latest_week-1} '{yy}"
-            c_cur     = f"Wk{latest_week} '{yy}"
-            c_prev_yr = f"Wk{latest_week} '{pyy}"
-            c_vs_wk   = f"vs Wk{latest_week-1}"
-            c_vs_yr   = f"vs Wk{latest_week} '{pyy}"
-            c_ytd, c_ytd_prev, c_ytd_var = f"YTD '{yy}", f"YTD '{pyy}", "YTD Var%"
+            st.markdown(f'<div class="section-header">Location Detail — {metric_name}, Wk {latest_week} {latest_year}</div>', unsafe_allow_html=True)
+            c_cur, c_prev_wk, c_vs_wk = "This Week", "Last Week", "vs LW %"
+            c_prev_yr, c_vs_yr        = "Same Week LY", "vs Same Week LY %"
+            c_ytd, c_ytd_prev, c_ytd_var = "YTD TY", "YTD LY", "YTD vs LY %"
             pct_cols = [c_vs_wk, c_vs_yr, c_ytd_var]
 
             def row_for(d, name):
@@ -922,8 +918,8 @@ def report_membership(df_wm):
                     return v if v > 0 else None
                 cur_v, pw, py = s(latest_year, latest_week), s(latest_year, latest_week - 1), s(prev_year, latest_week)
                 ytd, ytdp = s(latest_year, upto=latest_week), s(prev_year, upto=latest_week)
-                return {"Location": name, c_prev_wk: pw, c_cur: cur_v, c_prev_yr: py,
-                        c_vs_wk: pct(cur_v, pw), c_vs_yr: pct(cur_v, py),
+                return {"Location": name, c_cur: cur_v, c_prev_wk: pw, c_vs_wk: pct(cur_v, pw),
+                        c_prev_yr: py, c_vs_yr: pct(cur_v, py),
                         c_ytd: ytd, c_ytd_prev: ytdp, c_ytd_var: pct(ytd, ytdp)}
 
             rows = [row_for(g, loc.replace("Success Tutoring - ", ""))
@@ -1050,6 +1046,70 @@ def report_membership(df_wm):
                                                                    max_value=float(loc_tbl["Active"].max() or 1)),
                          "Churn %": st.column_config.NumberColumn("Churn %", format="%.1f%%"),
                      })
+
+    centre_performance_index(df_f)
+
+def centre_performance_index(df_f):
+    """Each centre's active members divided by the average of all trading centres
+    (or of trading centres in the same state), for every week of the chosen year.
+    Rows follow the report filters; averages always use the whole network."""
+    loc_col = "Success Tutoring - Business name"
+    st.markdown('<div class="section-header">Centre Performance Index</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="report-subtitle">Active members ÷ average active members per trading centre. '
+                f'1.00 = average · 1.28 = 28% above average · 0.80 = 20% below.</div>', unsafe_allow_html=True)
+
+    full = load_weekly_membership().copy()
+    if "Date - Week/Year" not in full.columns or loc_col not in full.columns:
+        st.info("Week/Year column not found — index unavailable."); return
+    wy = full["Date - Week/Year"].astype(str).str.split("/")
+    full["Week"] = pd.to_numeric(wy.str[0], errors="coerce")
+    full["Year"] = pd.to_numeric(wy.str[1], errors="coerce")
+    full = full.dropna(subset=["Week", "Year"])
+    full["Week"] = full["Week"].astype(int); full["Year"] = full["Year"].astype(int)
+    full["# Active members"] = pd.to_numeric(full["# Active members"], errors="coerce").fillna(0)
+    country = full["Country"] if "Country" in full.columns else pd.Series("", index=full.index)
+    region = full["Region"] if "Region" in full.columns else pd.Series("", index=full.index)
+    full["State"] = [("NZ" if c == "New Zealand" else REGION_TO_STATE.get(r, r)) for c, r in zip(country, region)]
+
+    years = sorted(full["Year"].unique().tolist(), reverse=True)
+    i1, i2, _ = st.columns([1, 2, 3])
+    year = i1.selectbox("Year", years, key="r2_cpi_year")
+    basis = i2.radio("Compare against", ["All centres", "State"], horizontal=True, key="r2_cpi_basis")
+
+    wk = (full[full["Year"] == year].groupby([loc_col, "State", "Week"])["# Active members"].sum().reset_index())
+    wk = wk[wk["# Active members"] > 0]          # only centres trading that week
+    if wk.empty:
+        st.info("No active members recorded for that year."); return
+    group = ["Week"] if basis == "All centres" else ["State", "Week"]
+    wk["Average"] = wk.groupby(group)["# Active members"].transform("mean")
+    wk["Index"] = wk["# Active members"] / wk["Average"]
+
+    shown = set(df_f[loc_col].dropna().unique())
+    wk = wk[wk[loc_col].isin(shown)]
+    if wk.empty:
+        st.info("No trading centres match the selected filters for that year."); return
+    table = wk.pivot_table(index=loc_col, columns="Week", values="Index")
+    table = table.reindex(columns=sorted(table.columns))
+    latest = table.columns.max()
+    table = table.sort_values(latest, ascending=False, na_position="last")
+    table.columns = [f"Wk {w}" for w in table.columns]
+    table.index = [l.replace("Success Tutoring - ", "") for l in table.index]
+    table.index.name = "Location"
+    table = table.reset_index()
+
+    def shade(v):
+        if pd.isna(v): return ""
+        strength = min(abs(v - 1) / 0.5, 1) * 0.55
+        rgb = "46,133,64" if v >= 1 else "200,50,47"
+        return f"background-color: rgba({rgb},{strength:.2f})"
+    week_cols = [c for c in table.columns if c != "Location"]
+    styled = table.style.map(shade, subset=week_cols).format("{:.2f}", subset=week_cols, na_rep="–")
+    st.dataframe(styled, use_container_width=True, hide_index=True,
+                 height=min(600, 35 * (len(table) + 1) + 3),
+                 column_config={"Location": st.column_config.TextColumn("Location", pinned=True, width=170)})
+    avg_note = "all trading centres" if basis == "All centres" else "trading centres in the same state (all of NZ counts as one)"
+    st.caption(f"Averages use {avg_note} across the whole network, whatever filters are applied. "
+               f"Weeks where a centre had no active members show –.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # REPORT 3 — Membership by Age
