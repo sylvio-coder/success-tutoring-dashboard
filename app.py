@@ -13,6 +13,7 @@ from streamlit_echarts import st_echarts
 from google.oauth2.service_account import Credentials
 import anthropic
 import os
+import html
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -28,21 +29,26 @@ SCOPES_SHEETS = [
 st.set_page_config(page_title="Success Tutoring Dashboard", page_icon="📊", layout="wide")
 
 # ── Theme ─────────────────────────────────────────────────────────────────────
-BI_BG       = "#1a1a2e"
-BI_CARD     = "#16213e"
-BI_ACCENT   = "#01b8aa"
-BI_BLUE     = "#4da6ff"
-BI_GREEN    = "#107c10"
-BI_ORANGE   = "#fd7e14"
-BI_RED      = "#d13438"
-BI_YELLOW   = "#ffd700"
-BI_PURPLE   = "#8764b8"
-BI_GRAY     = "#2d3748"
-BI_BORDER   = "#2d3748"
-BI_TEXT     = "#f3f2f1"
-BI_SUBTEXT  = "#a0aec0"
-BI_CHART_BG = "#1f2937"
-BI_GRID     = "#2d3748"
+BI_BG       = "#f3f5f6"   # report canvas (light grey)
+BI_CARD     = "#ffffff"   # cards and panels
+BI_ACCENT   = "#1f9a9a"   # Success Tutoring teal
+BI_BLUE     = "#2f6fb5"
+BI_GREEN    = "#2e8540"
+BI_ORANGE   = "#e0562a"   # Success Tutoring orange
+BI_RED      = "#c8322f"
+BI_YELLOW   = "#c99a06"
+BI_PURPLE   = "#7a5cb0"
+BI_GRAY     = "#e3e8ea"
+BI_BORDER   = "#dde5e6"
+BI_TEXT     = "#1c2a30"
+BI_SUBTEXT  = "#5d6d73"
+BI_CHART_BG = "#ffffff"
+BI_GRID     = "#e8edee"
+BI_INK      = "#1c2a30"   # top bar
+
+# One chart palette used across all reports, led by the brand teal and orange
+SERIES_COLORS = [BI_ACCENT, BI_ORANGE, BI_BLUE, BI_PURPLE, BI_YELLOW,
+                 "#3b8f5a", "#d4679b", "#8a5a44", "#4fb3d9", "#5d6d73"]
 REGION_TO_STATE = {
     "New South Wales": "NSW",
     "Victoria": "VIC",
@@ -63,185 +69,119 @@ HOLIDAY_COLORS = {
 }
 st.markdown(f"""
 <style>
-* {{ box-sizing: border-box; }}
-    [data-baseweb="select"] * {{ 
-        background-color: #1a2744 !important; 
-        color: white !important; 
-    }}
-    [data-baseweb="select"] [role="option"] {{
-        background-color: #1a2744 !important;
-        color: white !important;
-    }}
-    [data-baseweb="select"] [aria-selected="true"] {{
-        background-color: #2d3f6e !important;
-    }}
-    [data-baseweb="popover"] * {{
-        background-color: #1a2744 !important;
-        color: white !important;
-    }}
-    [data-baseweb="base-input"] * {{
-        background-color: #1a2744 !important;
-        color: white !important;
-    }}
-    [data-baseweb="tag"] {{
-        background-color: #2d3f6e !important;
-        color: white !important;
-    }}
     html, body, [class*="css"] {{
-        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        color: {BI_TEXT};
+        font-family: 'Segoe UI', 'Source Sans Pro', 'Source Sans 3', system-ui, sans-serif;
     }}
     .stApp {{ background-color: {BI_BG}; }}
-    .main .block-container {{ padding-top: 1rem; max-width: 1400px; }}
+    .main .block-container, div[data-testid="stMainBlockContainer"] {{ padding-top: 3.75rem; max-width: 1400px; }}
+
+    /* Top bar */
+    .topbar {{
+        background: {BI_INK}; color: #ffffff; border-radius: 8px;
+        padding: 10px 18px; margin-bottom: 18px;
+        display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;
+    }}
+    .topbar-title {{ font-size: 1.05em; font-weight: 600; }}
+    .topbar-title span {{ color: #9fb3b9; font-weight: 400; }}
+    .topbar-meta {{ font-size: 0.85em; color: #b9c7cb; }}
+    .topbar-meta b {{ color: #ffffff; font-weight: 600; text-transform: capitalize; }}
+
+    /* KPI cards */
     .metric-card {{
         background: {BI_CARD}; border: 1px solid {BI_BORDER};
-        border-radius: 4px; padding: 18px 16px;
-        text-align: left; margin: 4px;
-        box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+        border-radius: 8px; padding: 14px 16px; margin: 4px 0 10px;
+        box-shadow: 0 1px 2px rgba(28,42,48,0.05);
     }}
-    .metric-card.green  {{ border-top: 3px solid {BI_ACCENT}; }}
-    .metric-card.orange {{ border-top: 3px solid {BI_ORANGE}; }}
-    .metric-card.red    {{ border-top: 3px solid {BI_RED}; }}
-    .metric-card.blue   {{ border-top: 3px solid {BI_BLUE}; }}
-    .metric-card.purple {{ border-top: 3px solid {BI_PURPLE}; }}
-    .metric-value {{ font-size: 2.2em; font-weight: 700; color: {BI_TEXT}; line-height: 1.1; }}
-    .metric-label {{ font-size: 0.75em; color: {BI_SUBTEXT}; margin-bottom: 6px;
-                     text-transform: uppercase; letter-spacing: 0.6px; font-weight: 600; }}
-    .metric-delta {{ font-size: 0.82em; margin-top: 8px; font-weight: 600; }}
+    .metric-label {{
+        font-size: 0.78em; color: {BI_SUBTEXT}; margin-bottom: 4px; font-weight: 600;
+        display: flex; align-items: center; gap: 6px;
+    }}
+    .metric-label::before {{
+        content: ""; width: 8px; height: 8px; border-radius: 50%; background: {BI_SUBTEXT}; flex: none;
+    }}
+    .metric-card.green  .metric-label::before {{ background: {BI_ACCENT}; }}
+    .metric-card.orange .metric-label::before {{ background: {BI_ORANGE}; }}
+    .metric-card.red    .metric-label::before {{ background: {BI_RED}; }}
+    .metric-card.blue   .metric-label::before {{ background: {BI_BLUE}; }}
+    .metric-card.purple .metric-label::before {{ background: {BI_PURPLE}; }}
+    .metric-value {{ font-size: 1.9em; font-weight: 700; color: {BI_TEXT}; line-height: 1.15;
+                     font-variant-numeric: tabular-nums; }}
+    .metric-delta {{ font-size: 0.8em; margin-top: 6px; font-weight: 600; }}
+    .metric-delta span {{ color: {BI_SUBTEXT}; font-weight: 400; }}
+
+    /* Titles */
+    .report-title {{ font-size: 1.5em; font-weight: 700; color: {BI_TEXT}; margin-bottom: 0; }}
+    .report-subtitle {{ font-size: 0.88em; color: {BI_SUBTEXT}; margin-bottom: 14px; }}
     .section-header {{
-        font-size: 1em; font-weight: 700; color: {BI_TEXT};
-        margin: 16px 0 8px 0; padding: 8px 12px;
-        background: {BI_CARD}; border-left: 3px solid {BI_ACCENT};
-        border-radius: 0 4px 4px 0; text-transform: uppercase; letter-spacing: 0.5px;
+        font-size: 1.02em; font-weight: 700; color: {BI_TEXT};
+        margin: 22px 0 10px 0; padding: 0 0 6px 0;
+        border-bottom: 1px solid {BI_BORDER};
     }}
-    .report-title {{ font-size: 1.3em; font-weight: 700; color: {BI_TEXT}; margin-bottom: 2px; }}
-    .report-subtitle {{ font-size: 0.85em; color: {BI_SUBTEXT}; margin-bottom: 16px; }}
     .gauge-label {{
         text-align: center; color: {BI_SUBTEXT}; font-size: 0.82em; font-weight: 600;
-        margin-top: -6px; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;
+        margin-top: -6px; margin-bottom: 8px;
     }}
-    section[data-testid="stSidebar"] {{
-        background-color: #0d1117 !important;
-        border-right: 1px solid {BI_BORDER};
-        min-width: 242px !important;
-        max-width: 242px !important;
-        width: 242px !important;
+    .filter-label {{
+        font-size: 0.72em; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+        color: {BI_SUBTEXT}; margin-bottom: 2px;
     }}
-    section[data-testid="stSidebar"] * {{ color: {BI_TEXT} !important; }}
-    section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] button {{
-        opacity: 1 !important; position: static !important; height: auto !important;
-        margin: 0 !important; padding: 6px 8px !important; border: 1px solid {BI_BORDER} !important;
-    }}
-    section[data-testid="stSidebar"] .stButton > button {{
-        font-size: 0.75em !important;
-        padding: 3px 8px !important;
-        margin: 1px 0 !important;
-    }}
-    section[data-testid="stSidebar"] .stRadio label {{
-        font-size: 0.82em !important;
-        padding: 5px 8px !important;
-        border-radius: 4px !important;
-        cursor: pointer;
-        display: block;
-        width: 100%;
-    }}
-    section[data-testid="stSidebar"] .stRadio label:hover {{
-        background: #1a2744 !important;
-        color: {BI_ACCENT} !important;
-    }}
+
+    /* Panels: filters, expanders, tables, charts */
+    div[data-testid="stVerticalBlockBorderWrapper"] {{ background: {BI_CARD}; border-radius: 8px; }}
     details[data-testid="stExpander"] {{
-        background: #0d2137 !important;
-        border: 1px solid {BI_ACCENT} !important;
-        border-radius: 6px !important;
-        margin-bottom: 12px;
+        background: {BI_CARD} !important; border: 1px solid {BI_BORDER} !important;
+        border-radius: 8px !important; margin-bottom: 12px;
     }}
-    details[data-testid="stExpander"] summary {{
-        color: {BI_ACCENT} !important;
-        font-weight: 700 !important;
-        font-size: 0.9em !important;
-        padding: 8px 12px !important;
-        background: #0d2137 !important;
-        border-radius: 6px;
+    details[data-testid="stExpander"] summary {{ font-weight: 600 !important; }}
+    .stDataFrame {{ border: 1px solid {BI_BORDER}; border-radius: 6px; }}
+    div[data-testid="stPlotlyChart"] {{
+        background: {BI_CARD}; border: 1px solid {BI_BORDER}; border-radius: 8px; padding: 6px;
     }}
-    details[data-testid="stExpander"] > div {{
-        background: #0d2137 !important;
-        padding: 8px 12px !important;
-        border-top: 1px solid {BI_BORDER};
+    .stButton > button {{ border-radius: 6px; font-weight: 600; }}
+    hr {{ border-color: {BI_BORDER}; margin: 12px 0; }}
+
+    /* Sidebar */
+    section[data-testid="stSidebar"] {{
+        background-color: {BI_CARD} !important;
+        border-right: 1px solid {BI_BORDER};
+        min-width: 260px !important; max-width: 260px !important; width: 260px !important;
     }}
-    .stButton > button {{
-        background-color: transparent; color: {BI_TEXT};
-        border: 1px solid {BI_BORDER}; border-radius: 6px;
-        font-weight: 600; font-size: 0.85em; padding: 6px 12px;
-    }}
-    .stButton > button:hover {{
-        background-color: {BI_ACCENT}; color: white; border-color: {BI_ACCENT};
+    section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"] {{ gap: 2px !important; }}
+    .nav-group {{
+        font-size: 0.7em; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+        color: #8a989d; padding: 12px 6px 0;
+        margin-bottom: calc(1rem + 4px);  /* offsets Streamlit's -1rem margin under markdown */
     }}
     section[data-testid="stSidebar"] .stButton > button {{
-        position: relative !important;
-        top: -36px !important;
-        height: 34px !important;
-        margin-bottom: -34px !important;
-        margin-top: 0 !important;
-        padding: 0 !important;
-        opacity: 0 !important;
-        width: 100% !important;
-        cursor: pointer !important;
-        pointer-events: all !important;
-        border: none !important;
+        width: 100%; justify-content: flex-start; text-align: left;
+        padding: 6px 10px; min-height: 36px; border-radius: 6px;
+        font-size: 0.9em; font-weight: 500;
     }}
-    section[data-testid="stSidebar"] .stButton {{
-        margin: 0 !important;
-        padding: 0 !important;
+    section[data-testid="stSidebar"] .stButton > button > div {{ justify-content: flex-start; }}
+    section[data-testid="stSidebar"] .stButton > button p {{ font-size: 0.95em; }}
+    section[data-testid="stSidebar"] .stButton > button[kind="secondary"],
+    section[data-testid="stSidebar"] button[data-testid="stBaseButton-secondary"] {{
+        background: transparent; border: 1px solid transparent; color: {BI_TEXT};
     }}
-    section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"] {{
-        gap: 0 !important;
+    section[data-testid="stSidebar"] .stButton > button[kind="secondary"]:hover,
+    section[data-testid="stSidebar"] button[data-testid="stBaseButton-secondary"]:hover {{
+        background: {BI_BG}; border-color: {BI_BORDER}; color: {BI_TEXT};
     }}
-    section[data-testid="stSidebar"] div[data-testid="element-container"] {{
-        margin: 0 !important;
-        padding: 0 !important;
+    section[data-testid="stSidebar"] .stButton > button[kind="primary"],
+    section[data-testid="stSidebar"] button[data-testid="stBaseButton-primary"] {{
+        background: {BI_ACCENT}; border: 1px solid {BI_ACCENT}; color: #ffffff; font-weight: 600;
     }}
-    hr {{ border-color: {BI_BORDER}; margin: 12px 0; }}
-    .stDataFrame {{ border: 1px solid {BI_BORDER}; border-radius: 2px; }}
-    div[data-baseweb="select"] label {{ color: white !important; }}
-    div[data-baseweb="select"] p {{ color: white !important; }}
-    div[data-testid="stSelectbox"] label {{ color: white !important; }}
-    div[data-testid="stSelectbox"] p {{ color: white !important; }}
-    div[data-testid="stSelectbox"] [data-testid="stWidgetLabel"] * {{ color: white !important; }}
-    div[data-testid="stCheckbox"] label {{ color: white !important; }}
-    div[data-testid="stCheckbox"] label p {{ color: white !important; }}
-    div[data-testid="stCheckbox"] span {{ color: white !important; }}
-    h4 {{ color: white !important; }}
-    h3 {{ color: white !important; }}
-    h2 {{ color: white !important; }}
-    .stMarkdown p {{ color: white !important; }}
-    .stMarkdown {{ color: white !important; }}
-    summary {{ color: white !important; }}
-    details[data-testid="stExpander"] [data-baseweb="select"] > div {{ background-color: #1a2744 !important; color: white !important; }}
-    details[data-testid="stExpander"] [data-baseweb="select"] > div > div {{ background-color: #1a2744 !important; color: white !important; }}
-    details[data-testid="stExpander"] [data-baseweb="select"] span {{ color: white !important; background-color: #1a2744 !important; }}
-    details[data-testid="stExpander"] [data-baseweb="select"] div {{ background-color: #1a2744 !important; color: white !important; }}
-    details[data-testid="stExpander"] [data-baseweb="select"] {{ background-color: #1a2744 !important; }}
-.stSelectbox > div > div {{ background-color: #1a2744 !important; color: white !important; }}
-    .stSelectbox div[data-baseweb="select"] {{ background-color: #1a2744 !important; }}
-.stSelectbox > div > div {{ background-color: #1a2744 !important; color: white !important; }}
-    .stSelectbox div[data-baseweb="select"] {{ background-color: #1a2744 !important; }}
-[data-baseweb="select"] > div {{ background-color: #1a2744 !important; }}
-    [data-baseweb="select"] > div > div {{ background-color: #1a2744 !important; color: white !important; }}
-    [data-baseweb="input"] {{ background-color: #1a2744 !important; }}
-    input {{ background-color: #1a2744 !important; color: white !important; }}
-    [class*="ValueContainer"] {{ background-color: #1a2744 !important; color: white !important; }}
-    [class*="control"] {{ background-color: #1a2744 !important; border-color: #2d3748 !important; }}
-    [class*="singleValue"] {{ color: white !important; }}
-    [class*="placeholder"] {{ color: #a0aec0 !important; }}
-    [class*="Input"] input {{ background-color: #1a2744 !important; color: white !important; }}
-    [class*="MenuList"] {{ background-color: #1a2744 !important; }}
-    [class*="option"] {{ background-color: #1a2744 !important; color: white !important; }}
-    [class*="option"]:hover {{ background-color: #2d3f6e !important; }}
-    [data-baseweb="select"] span {{ color: white !important; }}
-    [data-baseweb="select"] div {{ background-color: #1a2744 !important; color: white !important; }}
-    div[data-testid="stMultiSelect"] > div {{ background-color: #1a2744 !important; }}
-    div[data-testid="stMultiSelect"] span {{ color: white !important; }}
-    div[data-testid="stMultiSelect"] div {{ background-color: #1a2744 !important; color: white !important; }}
+    .side-footer {{ border-top: 1px solid {BI_BORDER}; margin-top: 14px; padding-top: 10px; }}
+    .side-updated {{ font-size: 0.78em; color: {BI_SUBTEXT}; }}
+    .user-card {{ display: flex; align-items: center; gap: 10px; padding: 10px 2px 8px; }}
+    .user-avatar {{
+        width: 32px; height: 32px; border-radius: 50%; flex: none;
+        background: {BI_ORANGE}; color: #ffffff; display: grid; place-items: center;
+        font-weight: 700; font-size: 0.9em;
+    }}
+    .user-text {{ min-width: 0; line-height: 1.25; }}
+    .user-name {{ font-weight: 600; font-size: 0.9em; color: {BI_TEXT}; }}
+    .user-mail {{ font-size: 0.75em; color: {BI_SUBTEXT}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -407,12 +347,14 @@ def churn_rate(cancelled, active):
     except:
         return 0.0
 
-def metric_card(label, value, delta=None, color=""):
+def metric_card(label, value, delta=None, color="", higher_is_better=True):
     delta_html = ""
     if delta is not None:
         arrow = "▲" if delta > 0 else "▼" if delta < 0 else "●"
-        dcolor = BI_ACCENT if delta > 0 else BI_RED if delta < 0 else BI_SUBTEXT
-        delta_html = f'<div class="metric-delta" style="color:{dcolor}">{arrow} {abs(delta):,.0f} vs prev week</div>'
+        good = delta > 0 if higher_is_better else delta < 0
+        dcolor = BI_SUBTEXT if delta == 0 else (BI_GREEN if good else BI_RED)
+        dtext = f"{abs(delta):,.0f}" if float(delta).is_integer() or abs(delta) >= 100 else f"{abs(delta):,.1f}"
+        delta_html = f'<div class="metric-delta" style="color:{dcolor}">{arrow} {dtext} <span>vs last week</span></div>'
     st.markdown(f"""<div class="metric-card {color}">
         <div class="metric-label">{label}</div>
         <div class="metric-value">{value}</div>
@@ -462,17 +404,17 @@ def bi_fig(w=14,h=6):
 
 # ── Plotly theme ──────────────────────────────────────────────────────────────
 PLOTLY_LAYOUT = dict(
-    paper_bgcolor="#ffffff", plot_bgcolor="#f8f9fa",
-    font=dict(color="#1a1a2e", family="Segoe UI, Helvetica Neue, Arial, sans-serif", size=12),
-    xaxis=dict(gridcolor="#1e2d3d", gridwidth=1, tickfont=dict(color="#555555", size=10),
-               linecolor="#dddddd", linewidth=1, showgrid=False, zeroline=False, tickangle=-30),
-    yaxis=dict(gridcolor="#e8e8e8", gridwidth=1, tickfont=dict(color="#555555", size=10),
-               linecolor="#dddddd", showgrid=True, zeroline=False),
+    paper_bgcolor="#ffffff", plot_bgcolor="#ffffff",
+    font=dict(color=BI_TEXT, family="Segoe UI, Source Sans Pro, Arial, sans-serif", size=12),
+    xaxis=dict(gridcolor=BI_GRID, gridwidth=1, tickfont=dict(color=BI_SUBTEXT, size=10),
+               linecolor=BI_BORDER, linewidth=1, showgrid=False, zeroline=False, tickangle=-30),
+    yaxis=dict(gridcolor=BI_GRID, gridwidth=1, tickfont=dict(color=BI_SUBTEXT, size=10),
+               linecolor=BI_BORDER, showgrid=True, zeroline=False),
     legend=dict(bgcolor="rgba(255,255,255,0.9)", bordercolor="#cccccc", borderwidth=1,
-                font=dict(color="#1a1a2e", size=11), orientation="h",
+                font=dict(color=BI_TEXT, size=11), orientation="h",
                 yanchor="bottom", y=-0.35, xanchor="center", x=0.5, itemsizing="constant"),
     hovermode="x unified",
-    hoverlabel=dict(bgcolor="#1a2744", bordercolor=BI_ACCENT,
+    hoverlabel=dict(bgcolor=BI_INK, bordercolor=BI_ACCENT,
                     font=dict(color="#ffffff", size=12, family="Segoe UI"), namelength=-1),
     margin=dict(l=70, r=40, t=50, b=130), dragmode=False,
 )
@@ -496,7 +438,7 @@ def std_traces(fig, df, date_col, col_name, color, label, secondary_y=False):
         mode="lines+markers",
         line=dict(color=color, width=2.5, shape="spline", smoothing=0.4),
         marker=dict(color=color, size=6, symbol="circle",
-                    line=dict(color="#0f1923", width=1.5)),
+                    line=dict(color="#ffffff", width=1.5)),
         fill="tozeroy", fillcolor=fill_color,
         hovertemplate=f"<b>{label}</b><br>%{{x|%d %b %Y}}<br><b>%{{y:,.1f}}</b><extra></extra>",
     ), **kwargs)
@@ -504,10 +446,10 @@ def std_traces(fig, df, date_col, col_name, color, label, secondary_y=False):
 def std_layout(title, yaxis_title="", height=500):
     layout = dict(PLOTLY_LAYOUT)
     layout["title"] = dict(text=title,
-                           font=dict(color="#1a1a2e", size=15, family="Segoe UI", weight="bold"),
+                           font=dict(color=BI_TEXT, size=15, family="Segoe UI, Source Sans Pro, Arial, sans-serif", weight="bold"),
                            x=0, xanchor="left", pad=dict(l=0))
     layout["yaxis"] = dict(PLOTLY_LAYOUT["yaxis"],
-                           title=dict(text=yaxis_title, font=dict(color="#555555", size=11)))
+                           title=dict(text=yaxis_title, font=dict(color=BI_SUBTEXT, size=11)))
     layout["height"] = height
     return layout
 
@@ -541,13 +483,13 @@ def plotly_dual_axis(weekly_df, date_col, member_series, title, height=520):
             name="Churn Rate %", mode="lines+markers",
             line=dict(color=BI_RED, width=2.5, dash="dot", shape="spline", smoothing=0.4),
             marker=dict(color=BI_RED, size=6, symbol="diamond",
-                        line=dict(color="#0f1923", width=1.5)),
+                        line=dict(color="#ffffff", width=1.5)),
             hovertemplate="<b>Churn Rate</b>: %{y:.1f}%<extra></extra>",
         ), secondary_y=True)
     layout = std_layout(title, "Members", height)
     layout["yaxis2"] = dict(
         title=dict(text="Churn Rate %", font=dict(color=BI_RED, size=11)),
-        tickfont=dict(color=BI_RED), gridcolor="#e8e8e8", showgrid=False, zeroline=False)
+        tickfont=dict(color=BI_RED), gridcolor=BI_GRID, showgrid=False, zeroline=False)
     fig.update_layout(**layout)
     return fig
 def apply_gpm_filter(df):
@@ -581,7 +523,8 @@ def report_filters(df, key_prefix="", show_date=True,
                    show_country=True, show_state=True,
                    show_stage=True, show_gpm=True, show_location=False, show_status=True):
     loc_col = "Success Tutoring - Business name"
-    with st.expander("🔍 Filter this report", expanded=True):
+    with st.container(border=True):
+        st.markdown('<div class="filter-label">Filters</div>', unsafe_allow_html=True)
         cols = st.columns(5); i = 0
         if show_date and "Date" in df.columns:
             max_d = df["Date"].max(); min_d = df["Date"].min()
@@ -645,12 +588,9 @@ def checkbox_date_filter(df, key_prefix=""):
     if "Date" not in df.columns or df.empty: return df
     all_dates = sorted(df["Date"].dropna().unique(),reverse=True)
     date_labels = [d.strftime("%d %b %Y") for d in all_dates]
-    st.markdown(f"""<div style="background:#0d2137;border:1px solid {BI_ACCENT};
-                border-radius:6px;padding:12px 16px;margin-bottom:12px">
-        <span style="color:{BI_ACCENT};font-weight:700;font-size:0.9em">📅 Select Weeks to Display</span>
-        <p style="color:{BI_SUBTEXT};font-size:0.8em;margin:4px 0 8px 0">
-        Newest first. Default is latest 2 weeks.</p>
-    </div>""", unsafe_allow_html=True)
+    st.markdown(f"""<div class="filter-label">Weeks</div>
+        <p style="color:{BI_SUBTEXT};font-size:0.8em;margin:0 0 4px 0">Newest first. Default is the latest 2 weeks.</p>""",
+        unsafe_allow_html=True)
     default_sel = date_labels[:2] if len(date_labels) >= 2 else date_labels
     selected_labels = st.multiselect(
         "Select one or more weeks:",
@@ -688,7 +628,7 @@ def draw_per_location_trend(df_13m, metric_col, metric_label, color, key_prefix)
         locs = sorted(df_plot[loc_col].dropna().unique().tolist())
         sel_locs = st.multiselect("Select locations:",locs,default=locs[:3],
                                    max_selections=8,key=f"{key_prefix}_locs")
-        colors_indiv = [BI_BLUE,BI_ORANGE,BI_PURPLE,BI_RED,BI_YELLOW,"#00b4d8","#e91e8c","#33cc99"]
+        colors_indiv = SERIES_COLORS
         for i,loc in enumerate(sel_locs):
             loc_df = df_plot[df_plot[loc_col]==loc].groupby("Date")[metric_col].sum().reset_index().sort_values("Date")
             loc_name = loc.replace("Success Tutoring - ","")
@@ -717,7 +657,7 @@ def latest_week_table(df_wm, df_filtered, metric_col, label_col, table_title):
 # REPORT 1 — Locations
 # ══════════════════════════════════════════════════════════════════════════════
 def report_locations(df_wm):
-    st.markdown('<div class="report-title">1 · Campus Locations</div>', unsafe_allow_html=True)
+    st.markdown('<div class="report-title">Campus Locations</div>', unsafe_allow_html=True)
     st.markdown('<div class="report-subtitle">Source: Vlookup — all location metadata with stage, GPM, country and region</div>', unsafe_allow_html=True)
     loc_col = "Success Tutoring - Business name"
     df_wm = apply_gpm_filter(df_wm)
@@ -770,7 +710,7 @@ def report_locations(df_wm):
 # REPORT 2 — Membership
 # ══════════════════════════════════════════════════════════════════════════════
 def report_membership(df_wm):
-    st.markdown('<div class="report-title">2 · Membership</div>', unsafe_allow_html=True)
+    st.markdown('<div class="report-title">Membership</div>', unsafe_allow_html=True)
     st.markdown('<div class="report-subtitle">Source: Weekly Membership — active, new, suspended & cancelled member trends</div>', unsafe_allow_html=True)
     df_wm = apply_gpm_filter(df_wm)
     df_temp = report_filters(df_wm.copy(),key_prefix="r2",show_date=False,
@@ -792,12 +732,12 @@ def report_membership(df_wm):
     col1,col2,col3,col4=st.columns(4)
     with col1: metric_card("Active Members",   f"{la:,.0f}",la-pa,"green")
     with col2: metric_card("New Members",      f"{ln:,.0f}",ln-pn,"blue")
-    with col3: metric_card("Suspended Members",f"{ls:,.0f}",ls-ps,"orange")
-    with col4: metric_card("Cancelled Members",f"{lc:,.0f}",lc-pc,"red")
+    with col3: metric_card("Suspended Members",f"{ls:,.0f}",ls-ps,"orange",higher_is_better=False)
+    with col4: metric_card("Cancelled Members",f"{lc:,.0f}",lc-pc,"red",higher_is_better=False)
     st.markdown("<br>",unsafe_allow_html=True)
     cr_latest=churn_rate(lc,la); cr_prev=churn_rate(pc,pa)
     col1,col2=st.columns([1,3])
-    with col1: metric_card("Network Churn Rate",f"{cr_latest:.1f}%",round(cr_latest-cr_prev,2),"red")
+    with col1: metric_card("Network Churn Rate",f"{cr_latest:.1f}%",round(cr_latest-cr_prev,2),"red",higher_is_better=False)
             # ── YEAR-OVER-YEAR WEEKLY COMPARISON ──────────────────────────────────
     st.markdown('<div class="section-header">Year-over-Year Weekly Comparison</div>', unsafe_allow_html=True)
 
@@ -807,7 +747,9 @@ def report_membership(df_wm):
     df_yoy["State"] = df_yoy["Region"].map(REGION_TO_STATE).fillna("Other")
 
     # Independent filters
-    yoy_cols = st.columns(3)
+    yoy_panel = st.container(border=True)
+    yoy_panel.markdown('<div class="filter-label">Filters</div>', unsafe_allow_html=True)
+    yoy_cols = yoy_panel.columns(3)
     all_locs_yoy    = sorted(df_yoy["Success Tutoring - Business name"].dropna().unique().tolist())
     sel_locs_yoy    = yoy_cols[0].multiselect("📍 Location(s)", all_locs_yoy, default=[], key="yoy_locs", placeholder="All Locations")
     all_gpms_yoy    = sorted(df_yoy["GPM"].dropna().unique().tolist()) if "GPM" in df_yoy.columns else []
@@ -815,7 +757,7 @@ def report_membership(df_wm):
     all_stages_yoy  = sorted(df_yoy["Stage"].dropna().unique().tolist()) if "Stage" in df_yoy.columns else []
     sel_stage_yoy   = yoy_cols[2].selectbox("🏁 Stage", ["All"] + all_stages_yoy, key="yoy_stage")
 
-    yoy_cols2 = st.columns(3)
+    yoy_cols2 = yoy_panel.columns(3)
     all_status_yoy    = sorted(df_yoy["Status"].dropna().unique().tolist()) if "Status" in df_yoy.columns else []
     sel_status_yoy    = yoy_cols2[0].selectbox("🌐 Status",  ["All"] + all_status_yoy,    key="yoy_status")
     all_states_yoy    = sorted(df_yoy["Region"].dropna().unique().tolist()) if "Region" in df_yoy.columns else []
@@ -824,24 +766,24 @@ def report_membership(df_wm):
     sel_country_yoy   = yoy_cols2[2].selectbox("🌍 Country", ["All"] + all_countries_yoy, key="yoy_country")
 
     # Metric selector
-    yoy_metric = st.selectbox("📊 Metric", [
+    yoy_metric = yoy_panel.selectbox("📊 Metric", [
         "# Active members","# New members","# Suspended members","# Cancelled members"
     ], key="yoy_metric")
 
     # Year toggles
     available_years = sorted(df_yoy["Year"].dropna().unique().tolist(), reverse=True)
-    yoy_year_cols   = st.columns(len(available_years))
+    yoy_year_cols   = yoy_panel.columns(len(available_years))
     sel_years_yoy   = []
     for i, yr in enumerate(available_years):
         if yoy_year_cols[i].checkbox(str(yr), value=(i < 2), key=f"yoy_yr_{yr}"):
             sel_years_yoy.append(yr)
 
     # Comparative toggle
-    comparative = st.checkbox("📊 Comparative only (locations open in all selected years)", value=False, key="yoy_comparative")
+    comparative = yoy_panel.checkbox("📊 Comparative only (locations open in all selected years)", value=False, key="yoy_comparative")
 
     # Holiday state selector
     holiday_states     = ["NSW","VIC","QLD","WA","SA","NZ"]
-    sel_holiday_states = st.multiselect("🎓 Show school holidays for", holiday_states, default=[], key="yoy_holiday_states", placeholder="Select states...")
+    sel_holiday_states = yoy_panel.multiselect("🎓 Show school holidays for", holiday_states, default=[], key="yoy_holiday_states", placeholder="Select states...")
 
     # Apply filters
     df_yoy_f = df_yoy.copy()
@@ -863,7 +805,7 @@ def report_membership(df_wm):
         df_yoy_f[yoy_metric] = pd.to_numeric(df_yoy_f[yoy_metric], errors="coerce").fillna(0)
 
     all_weeks  = list(range(1, 53))
-    YEAR_COLORS = {2024: "#4e9af1", 2025: "#f1a14e", 2026: "#4ef19a", 2027: "#f14e9a"}
+    YEAR_COLORS = {2024: BI_BLUE, 2025: BI_ORANGE, 2026: BI_ACCENT, 2027: BI_PURPLE}
 
     if sel_years_yoy and yoy_metric in df_yoy_f.columns:
         latest_year = df_yoy_f["Year"].max()
@@ -877,7 +819,7 @@ def report_membership(df_wm):
             fig_yoy.add_trace(go.Bar(
                 x=all_weeks, y=df_yr.values,
                 name=str(yr),
-                marker_color=YEAR_COLORS.get(yr, "#aaaaaa")
+                marker_color=YEAR_COLORS.get(yr, BI_SUBTEXT)
             ))
 
         # School holiday shading
@@ -1121,7 +1063,7 @@ def report_membership(df_wm):
             sel_locs=st.multiselect("Select locations:",locs,default=locs[:3],max_selections=8,key="r11_locs")
             if sel_locs:
                 fig3=go.Figure()
-                colors_indiv=[BI_ACCENT,BI_BLUE,BI_ORANGE,BI_PURPLE,BI_RED,BI_YELLOW,"#00b4d8","#e91e8c"]
+                colors_indiv=SERIES_COLORS
                 for i,loc in enumerate(sel_locs):
                     for col_name,color,label in metrics_11:
                         if col_name not in df_11.columns: continue
@@ -1148,7 +1090,7 @@ def report_membership(df_wm):
 # REPORT 3 — Membership by Age
 # ══════════════════════════════════════════════════════════════════════════════
 def report_age_combined(df_wm):
-    st.markdown('<div class="report-title">3 · Membership by Age</div>', unsafe_allow_html=True)
+    st.markdown('<div class="report-title">Membership by Age</div>', unsafe_allow_html=True)
     st.markdown('<div class="report-subtitle">Age groups from Vlookup | Member counts from Weekly Membership</div>', unsafe_allow_html=True)
     df_wm = apply_gpm_filter(df_wm)
     loc_col="Success Tutoring - Business name"
@@ -1235,7 +1177,7 @@ def report_age_combined(df_wm):
     if "Region" in df_chart.columns and "# Active members" in df_chart.columns:
         regions = sorted(df_chart["Region"].dropna().unique().tolist())
         sel_regions = st.multiselect("Select regions:", regions, default=regions, key="r3_regions")
-        region_colors = [BI_ACCENT,BI_BLUE,BI_ORANGE,BI_RED,BI_PURPLE,BI_YELLOW,"#00b4d8","#e91e8c","#33cc99","#ff6b6b"]
+        region_colors = SERIES_COLORS
         fig_region = go.Figure()
         for i, region in enumerate(sel_regions):
             reg_df = df_chart[df_chart["Region"]==region].groupby("Date")["# Active members"].mean().reset_index().sort_values("Date")
@@ -1249,7 +1191,7 @@ def report_age_combined(df_wm):
 # Generic trend report helper
 # ══════════════════════════════════════════════════════════════════════════════
 def generic_member_report(df_wm, report_num, title, metric_col, metric_label, color, key):
-    st.markdown(f'<div class="report-title">{report_num} · {title}</div>',unsafe_allow_html=True)
+    st.markdown(f'<div class="report-title">{title}</div>',unsafe_allow_html=True)
     st.markdown(f'<div class="report-subtitle">Source: Weekly Membership — {metric_label} trends and location ranking</div>',unsafe_allow_html=True)
     df_wm = apply_gpm_filter(df_wm)
     if metric_col not in df_wm.columns: st.warning("Column not found."); return
@@ -1271,7 +1213,7 @@ def generic_member_report(df_wm, report_num, title, metric_col, metric_label, co
 # REPORT 7 — Membership Churn
 # ══════════════════════════════════════════════════════════════════════════════
 def report_churn_combined(df_wm):
-    st.markdown('<div class="report-title">7 · Membership Churn</div>',unsafe_allow_html=True)
+    st.markdown('<div class="report-title">Membership Churn</div>',unsafe_allow_html=True)
     st.markdown('<div class="report-subtitle">Source: Weekly Membership — Churn = Cancelled / Active × 100</div>',unsafe_allow_html=True)
     df_wm = apply_gpm_filter(df_wm)
     df=report_filters(df_wm.copy(),key_prefix="r6",show_date=False,
@@ -1346,7 +1288,7 @@ def report_churn_combined(df_wm):
                                           max_selections=8, key="r6_churn_locs")
             if sel_locs_ch:
                 fig_ci = go.Figure()
-                colors_indiv = [BI_ACCENT,BI_BLUE,BI_ORANGE,BI_PURPLE,BI_RED,BI_YELLOW,"#00b4d8","#e91e8c"]
+                colors_indiv = SERIES_COLORS
                 for i, loc in enumerate(sel_locs_ch):
                     loc_df = df_c[df_c[loc_col]==loc].groupby("Date")["churn_pct"].mean().reset_index().sort_values("Date")
                     loc_name = loc.replace("Success Tutoring - ","")
@@ -1363,7 +1305,7 @@ def report_churn_combined(df_wm):
 # REPORT 8 — Net Growth Rate %
 # ══════════════════════════════════════════════════════════════════════════════
 def report_net_growth(df_wm):
-    st.markdown('<div class="report-title">8 · Net Growth Rate %</div>', unsafe_allow_html=True)
+    st.markdown('<div class="report-title">Net Growth Rate %</div>', unsafe_allow_html=True)
     st.markdown('<div class="report-subtitle">Source: Weekly Membership — Net Growth Rate % = (New − Cancelled) / Active × 100</div>', unsafe_allow_html=True)
     df_wm = apply_gpm_filter(df_wm)
 
@@ -1437,7 +1379,7 @@ def report_net_growth(df_wm):
                                        max_selections=8, key="r8ng_locs")
             if sel_locs:
                 fig3 = go.Figure()
-                colors_indiv = [BI_ACCENT,BI_BLUE,BI_ORANGE,BI_PURPLE,BI_RED,BI_YELLOW,"#00b4d8","#e91e8c"]
+                colors_indiv = SERIES_COLORS
                 for i, loc in enumerate(sel_locs):
                     loc_df = df_plot[df_plot[loc_col]==loc].groupby("Date")["ngr"].mean().reset_index().sort_values("Date")
                     loc_name = loc.replace("Success Tutoring - ","")
@@ -1466,7 +1408,7 @@ def report_net_growth(df_wm):
 # REPORT 9 — Onboarding Progress
 # ══════════════════════════════════════════════════════════════════════════════
 def report_onboarding(df_wm):
-    st.markdown('<div class="report-title">8 · Onboarding Progress</div>',unsafe_allow_html=True)
+    st.markdown('<div class="report-title">Onboarding Progress</div>',unsafe_allow_html=True)
     st.markdown('<div class="report-subtitle">Source: Vlookup — onboarding week progress and pre-sale member counts</div>',unsafe_allow_html=True)
     df_wm = apply_gpm_filter(df_wm)
     vl=apply_gpm_filter(load_vlookup())
@@ -1481,8 +1423,7 @@ def report_onboarding(df_wm):
     if "Onboarding week" in onb.columns:
         onb_w=onb.sort_values("Onboarding week")
         gpm_list=onb_w["GPM"].dropna().unique().tolist() if "GPM" in onb_w.columns else []
-        gpm_cmap = plt.colormaps["tab10"].resampled(max(len(gpm_list), 1))
-        gpm_color_map={g:gpm_cmap(i) for i,g in enumerate(gpm_list)}
+        gpm_color_map={g:SERIES_COLORS[i % len(SERIES_COLORS)] for i,g in enumerate(gpm_list)}
         bar_colors=[gpm_color_map.get(str(row.get("GPM","")),BI_ACCENT) for _,row in onb_w.iterrows()]
         fig,ax=bi_fig(14,max(6,len(onb_w)*0.45))
         bars=ax.barh(onb_w[loc_col],onb_w["Onboarding week"],color=bar_colors,height=0.6)
@@ -1532,14 +1473,16 @@ def report_onboarding(df_wm):
 # REPORT 10 — Revenue
 # ══════════════════════════════════════════════════════════════════════════════
 def report_revenue(df_rv):
-    st.markdown('<div class="report-title">10 · Revenue</div>', unsafe_allow_html=True)
+    st.markdown('<div class="report-title">Revenue</div>', unsafe_allow_html=True)
     st.markdown('<div class="report-subtitle">Source: Revenue sheet — all metrics pulled directly from source</div>', unsafe_allow_html=True)
 
     df_rv = apply_gpm_filter(df_rv)
     loc_col = "Success Tutoring - Business name"
 
     # ── Filters ───────────────────────────────────────────────────────────
-    f1, f2, f3, f4, f5, f6 = st.columns(6)
+    rv_filters = st.container(border=True)
+    rv_filters.markdown('<div class="filter-label">Filters</div>', unsafe_allow_html=True)
+    f1, f2, f3, f4, f5, f6 = rv_filters.columns(6)
     all_countries = ["All"] + sorted(df_rv["Country"].dropna().unique().tolist()) if "Country" in df_rv.columns else ["All"]
     all_states    = ["All"] + sorted(df_rv["Region"].dropna().unique().tolist()) if "Region" in df_rv.columns else ["All"]
     all_stages    = ["All"] + sorted(df_rv["Stage"].dropna().unique().tolist()) if "Stage" in df_rv.columns else ["All"]
@@ -1566,7 +1509,8 @@ def report_revenue(df_rv):
         st.warning("No revenue data available for selected filters."); return
 
     # ── Date filter ───────────────────────────────────────────────────────
-    df = checkbox_date_filter(df.copy(), key_prefix="r10rv")
+    with rv_filters:
+        df = checkbox_date_filter(df.copy(), key_prefix="r10rv")
     all_dates = sorted(df["Date"].dropna().unique())
     if not all_dates:
         st.warning("No dates found."); return
@@ -1743,10 +1687,10 @@ def report_revenue(df_rv):
     if show_ts   and "Total Sessions"             in df_13m.columns: selected_metrics.append(("Total Sessions",             BI_ORANGE,  "Total Sessions"))
     if show_rps  and "Revenue per Session"        in df_13m.columns: selected_metrics.append(("Revenue per Session",        BI_RED,     "Rev per Session"))
     if show_rpu  and "Revenue per Student"        in df_13m.columns: selected_metrics.append(("Revenue per Student",        BI_PURPLE,  "Rev per Student"))
-    if show_sps  and "Sessions per Student"       in df_13m.columns: selected_metrics.append(("Sessions per Student",       "#f472b6",  "Sessions per Student"))
-    if show_stu  and "Student per Session"        in df_13m.columns: selected_metrics.append(("Student per Session",        "#34d399",  "Student per Session"))
-    if show_spsv and "Sessions per Student Visit" in df_13m.columns: selected_metrics.append(("Sessions per Student Visit", "#00b4d8",  "Sessions per Stud Visit"))
-    if show_svps and "Student Visits per Session" in df_13m.columns: selected_metrics.append(("Student Visits per Session", "#e91e8c",  "Stud Visits per Session"))
+    if show_sps  and "Sessions per Student"       in df_13m.columns: selected_metrics.append(("Sessions per Student",       SERIES_COLORS[6],  "Sessions per Student"))
+    if show_stu  and "Student per Session"        in df_13m.columns: selected_metrics.append(("Student per Session",        SERIES_COLORS[5],  "Student per Session"))
+    if show_spsv and "Sessions per Student Visit" in df_13m.columns: selected_metrics.append(("Sessions per Student Visit", SERIES_COLORS[8],  "Sessions per Stud Visit"))
+    if show_svps and "Student Visits per Session" in df_13m.columns: selected_metrics.append(("Student Visits per Session", SERIES_COLORS[7],  "Stud Visits per Session"))
 
     if selected_metrics:
         agg_dict = {m: "sum" if m in SUM_METRICS else "mean" for m, _, _ in selected_metrics if m in df_13m.columns}
@@ -1767,7 +1711,7 @@ def report_revenue(df_rv):
                                     key="rv_sel_locs")
     if sel_locs:
         loc_agg    = "sum" if loc_metric in SUM_METRICS else "mean"
-        colors     = [BI_ACCENT, BI_BLUE, BI_ORANGE, BI_RED, BI_PURPLE, BI_YELLOW, "#00b4d8", "#f472b6"]
+        colors     = SERIES_COLORS
         loc_df     = pd.DataFrame()
         loc_series = []
         for i, loc in enumerate(sel_locs):
@@ -1803,11 +1747,11 @@ def report_revenue(df_rv):
         textposition="outside",
     ))
     fig_bar.update_layout(
-        plot_bgcolor=BI_CARD, paper_bgcolor=BI_CARD,
+        plot_bgcolor=BI_CHART_BG, paper_bgcolor=BI_CHART_BG,
         font=dict(color=BI_TEXT),
         xaxis=dict(showgrid=False, color=BI_SUBTEXT, tickangle=-45,
                    title=dict(text="Location", font=dict(color=BI_SUBTEXT, size=11))),
-        yaxis=dict(showgrid=True, gridcolor=BI_BORDER, color=BI_SUBTEXT, tickprefix=prefix_bar,
+        yaxis=dict(showgrid=True, gridcolor=BI_GRID, color=BI_SUBTEXT, tickprefix=prefix_bar,
                    title=dict(text=bar_metric, font=dict(color=BI_SUBTEXT, size=11))),
         margin=dict(l=40, r=20, t=30, b=160),
         height=450,
@@ -1842,7 +1786,7 @@ def report_revenue(df_rv):
 # REPORT 11 — AI Data Analysis
 # ══════════════════════════════════════════════════════════════════════════════
 def report_claude_outliers(df_wm):
-    st.markdown('<div class="report-title">10 · AI Data Analysis</div>', unsafe_allow_html=True)
+    st.markdown('<div class="report-title">AI Data Analysis</div>', unsafe_allow_html=True)
     st.markdown('<div class="report-subtitle">Source: Weekly Membership — latest week performance tables and network outliers</div>', unsafe_allow_html=True)
     df_wm = apply_gpm_filter(df_wm)
 
@@ -2101,7 +2045,7 @@ Compare Australia, New Zealand and any other countries. Which is performing best
 # REPORT 12 — Location Performance Analysis
 # ══════════════════════════════════════════════════════════════════════════════
 def report_location_performance(df_wm, df_rv):
-    st.markdown('<div class="report-title">12 · Location Performance Analysis</div>', unsafe_allow_html=True)
+    st.markdown('<div class="report-title">Location Performance Analysis</div>', unsafe_allow_html=True)
     st.markdown('<div class="report-subtitle">Consolidated metrics for a single location across all reports</div>', unsafe_allow_html=True)
 
     df_wm = apply_gpm_filter(df_wm)
@@ -2311,9 +2255,9 @@ def report_location_performance(df_wm, df_rv):
     if show_canc:   series_map.append(("Cancelled", BI_RED, "Cancelled"))
     if show_churn:  series_map.append(("Churn Rate %", BI_ORANGE, "Churn Rate %"))
     if show_ngr:    series_map.append(("Net Growth Rate %", BI_PURPLE, "Net Growth Rate %"))
-    if show_rev and "Net Revenue" in trend_wm.columns:     series_map.append(("Net Revenue", "#34d399", "Net Revenue"))
-    if show_rps and "Revenue per Session" in trend_wm.columns: series_map.append(("Revenue per Session", "#f472b6", "Rev/Session"))
-    if show_rpu and "Revenue per Student" in trend_wm.columns: series_map.append(("Revenue per Student", "#fbbf24", "Rev/Student"))
+    if show_rev and "Net Revenue" in trend_wm.columns:     series_map.append(("Net Revenue", BI_GREEN, "Net Revenue"))
+    if show_rps and "Revenue per Session" in trend_wm.columns: series_map.append(("Revenue per Session", SERIES_COLORS[6], "Rev/Session"))
+    if show_rpu and "Revenue per Student" in trend_wm.columns: series_map.append(("Revenue per Student", BI_YELLOW, "Rev/Student"))
 
     loc_short = sel_loc.replace("Success Tutoring - ", "")
     for col, color, label in series_map:
@@ -2321,7 +2265,7 @@ def report_location_performance(df_wm, df_rv):
         std_traces(fig_trend, trend_wm, "Date", col, color, f"{loc_short} — {label}")
 
     # Comparison location traces
-    comp_colors = [BI_BLUE, BI_RED, BI_YELLOW, "#00b4d8"]
+    comp_colors = [BI_BLUE, BI_RED, BI_YELLOW, SERIES_COLORS[8]]
     for i, comp_loc in enumerate(comp_locs):
         comp_wm = df_wm[df_wm[loc_col]==comp_loc].copy()
         comp_wm = comp_wm[comp_wm["Date"]>=cutoff]
@@ -2588,73 +2532,88 @@ REPORTS = [r for r in REPORTS if report_allowed(r, st.session_state.get("allowed
 if not REPORTS:
     st.warning("⛔ No reports are assigned to your account. Please contact your administrator."); st.stop()
 
+# Report menu: (report, menu label, icon), grouped like Power BI report sections
+NAV_GROUPS = [
+    ("Network", [
+        ("1 · Campus Locations",   "Campus Locations",    ":material/location_on:"),
+        ("9 · Onboarding Progress", "Onboarding Progress", ":material/checklist:"),
+    ]),
+    ("Membership", [
+        ("2 · Membership",          "Membership",          ":material/groups:"),
+        ("3 · Membership by Age",   "Membership by Age",   ":material/stacks:"),
+        ("4 · New Members",         "New Members",         ":material/person_add:"),
+        ("5 · Suspended Members",   "Suspended Members",   ":material/pause_circle:"),
+        ("6 · Cancelled Members",   "Cancelled Members",   ":material/person_remove:"),
+    ]),
+    ("Growth", [
+        ("7 · Membership Churn",    "Membership Churn",    ":material/trending_down:"),
+        ("8 · Net Growth Rate %",   "Net Growth Rate %",   ":material/trending_up:"),
+    ]),
+    ("Finance", [
+        ("10 · Revenue",            "Revenue",             ":material/attach_money:"),
+    ]),
+    ("AI Insights", [
+        ("11 · AI Outlier Analysis",            "AI Outlier Analysis",  ":material/auto_awesome:"),
+        ("12 · Location Performance Analysis",  "Location Performance", ":material/query_stats:"),
+    ]),
+]
+REPORT_LABELS = {r: label for _, items in NAV_GROUPS for r, label, _ in items}
+
+@st.cache_data(ttl=300)
+def data_loaded_at():
+    """Time the sheet data was last fetched (cleared together with the data cache)."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    return datetime.now(ZoneInfo("Australia/Sydney"))
+
+if st.session_state.get("selected_report") not in REPORTS:
+    st.session_state["selected_report"] = REPORTS[0]
+
 with st.sidebar:
     if os.path.exists("logo.png"):
-        st.image("logo.png",width=150)
+        st.image("logo.png", width=130)
     else:
-        st.markdown(f'<div style="color:{BI_ACCENT};font-size:1.1em;font-weight:700;padding:8px 0">📊 Success Tutoring</div>',
+        st.markdown(f'<div style="color:{BI_ACCENT};font-size:1.1em;font-weight:700;padding:8px 0">Success Tutoring</div>',
                     unsafe_allow_html=True)
-    st.markdown(f'<div style="color:#718096;font-size:0.68em;margin-bottom:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{user_email}</div>', unsafe_allow_html=True)
-    st.markdown("---")
-    btn_col1,btn_col2=st.columns(2)
-    with btn_col1:
-        if st.button("🔄 Refresh",use_container_width=True):
-            st.cache_data.clear(); st.success("✅ Refreshed!"); st.rerun()
-    with btn_col2:
-        if st.button("🚪 Logout",use_container_width=True):
-            log_access(
-                st.session_state.get("user_email",""),
-                st.session_state.get("user_name",""),
-                "Logout"
-            )
-            for key in ["connected","email","name","oauth_token"]:
-                st.session_state.pop(key, None)
-            st.session_state.clear()
-            st.rerun()
-    st.markdown("---")
-    st.markdown(f'<div style="color:{BI_ACCENT};font-size:0.72em;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;padding:4px 0 6px 2px">📊 Reports</div>',
-                unsafe_allow_html=True)
-    if st.session_state.get("selected_report") not in REPORTS:
-        st.session_state["selected_report"] = REPORTS[0]
-    for r in REPORTS:
-        is_active = st.session_state["selected_report"] == r
-        bg = f"rgba(255,215,0,0.12)" if is_active else "transparent"
-        border = f"#ffd700" if is_active else "transparent"
-        color = "#ffd700" if is_active else "#a0aec0"
-        weight = "700" if is_active else "400"
-        st.markdown(f"""
-            <div onclick="" style="
-                background:{bg};
-                border-left: 3px solid {border};
-                border-radius: 0 6px 6px 0;
-                padding: 7px 10px;
-                margin: 0;
-                cursor: pointer;
-                font-size: 0.85em;
-                font-weight: {weight};
-                color: {color};
-                display: flex;
-                align-items: center;
-                gap: 8px;
-                line-height: 1.2;
-            ">{"▶ " if is_active else "　"}{r}</div>
-        """, unsafe_allow_html=True)
-        if st.button(r, key=f"nav_{r}", use_container_width=True):
-            st.session_state["selected_report"] = r
-            st.rerun()
-    selected_report = st.session_state["selected_report"]
+    for group, items in NAV_GROUPS:
+        visible = [(r, label, icon) for r, label, icon in items if r in REPORTS]
+        if not visible:
+            continue
+        st.markdown(f'<div class="nav-group">{group}</div>', unsafe_allow_html=True)
+        for r, label, icon in visible:
+            is_active = st.session_state["selected_report"] == r
+            if st.button(label, key=f"nav_{r}", icon=icon, use_container_width=True,
+                         type="primary" if is_active else "secondary"):
+                st.session_state["selected_report"] = r
+                st.rerun()
 
-selected_report = st.session_state.get("selected_report", REPORTS[0])
+    loaded = data_loaded_at()
+    st.markdown(f'<div class="side-footer"><div class="side-updated">Data updated {loaded.strftime("%-I:%M %p").lower()} {loaded.strftime("%Z")}</div></div>',
+                unsafe_allow_html=True)
+    if st.button("Refresh data", icon=":material/refresh:", use_container_width=True):
+        st.cache_data.clear(); st.rerun()
+    initial = (user_name or user_email or "?").strip()[:1].upper()
+    st.markdown(f"""<div class="user-card">
+        <div class="user-avatar">{html.escape(initial)}</div>
+        <div class="user-text"><div class="user-name">{html.escape(user_name)}</div>
+        <div class="user-mail">{html.escape(user_email)}</div></div>
+    </div>""", unsafe_allow_html=True)
+    if st.button("Log out", icon=":material/logout:", use_container_width=True):
+        log_access(
+            st.session_state.get("user_email",""),
+            st.session_state.get("user_name",""),
+            "Logout"
+        )
+        st.session_state.clear()
+        st.rerun()
 
-hdr_col1, hdr_col2 = st.columns([1, 8])
-with hdr_col1:
-    if os.path.exists("logo.png"):
-        st.image("logo.png", width=110)
-with hdr_col2:
-    st.markdown(f'<h2 style="color:{BI_TEXT};font-weight:700;margin-bottom:2px;margin-top:8px">Success Tutoring Dashboard</h2>',
-                unsafe_allow_html=True)
-    st.markdown(f'<p style="color:{BI_SUBTEXT};margin-bottom:16px;font-size:0.9em">Business intelligence and performance analytics</p>',
-                unsafe_allow_html=True)
+selected_report = st.session_state["selected_report"]
+
+# Top bar: dashboard name, current report, and who is signed in
+st.markdown(f"""<div class="topbar">
+    <div class="topbar-title">Success Tutoring Dashboard <span>/ {REPORT_LABELS.get(selected_report, selected_report)}</span></div>
+    <div class="topbar-meta"><b>{html.escape(st.session_state.get("access_level", ""))}</b> · {html.escape(user_name)}</div>
+</div>""", unsafe_allow_html=True)
 
 with st.spinner("Loading data..."):
     try:
