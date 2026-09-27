@@ -1084,31 +1084,51 @@ def centre_performance_index(df_f):
     wk["Average"] = wk.groupby(group)["# Active members"].transform("mean")
     wk["Index"] = wk["# Active members"] / wk["Average"]
 
+    # State totals: the state's average per trading centre against the same basis (whole network)
+    state_wk = wk.groupby(["State", "Week"]).agg(StateMean=("# Active members", "mean"),
+                                                 Basis=("Average", "first")).reset_index()
+    state_wk["Index"] = state_wk["StateMean"] / state_wk["Basis"]
+    state_totals = state_wk.pivot_table(index="State", columns="Week", values="Index")
+
     shown = set(df_f[loc_col].dropna().unique())
     wk = wk[wk[loc_col].isin(shown)]
     if wk.empty:
         st.info("No trading centres match the selected filters for that year."); return
-    table = wk.pivot_table(index=loc_col, columns="Week", values="Index")
-    table = table.reindex(columns=sorted(table.columns))
-    latest = table.columns.max()
-    table = table.sort_values(latest, ascending=False, na_position="last")
-    table.columns = [f"Wk {w}" for w in table.columns]
-    table.index = [l.replace("Success Tutoring - ", "") for l in table.index]
-    table.index.name = "Location"
-    table = table.reset_index()
+    centres = wk.pivot_table(index=[loc_col, "State"], columns="Week", values="Index")
+    weeks = sorted(set(centres.columns) | set(state_totals.columns))
+    centres = centres.reindex(columns=weeks); state_totals = state_totals.reindex(columns=weeks)
+    latest = max(weeks)
+
+    # States A–Z; centres within a state highest index first; state total after its centres
+    rows, total_rows = [], []
+    for state in sorted(centres.index.get_level_values("State").unique()):
+        grp = centres.xs(state, level="State").sort_values(latest, ascending=False, na_position="last")
+        for loc, vals in grp.iterrows():
+            rows.append({"State": state, "Location": loc.replace("Success Tutoring - ", ""), **vals.to_dict()})
+        total_rows.append(len(rows))
+        rows.append({"State": state, "Location": f"{state} total", **state_totals.loc[state].to_dict()})
+    table = pd.DataFrame(rows)
+    table = table.rename(columns={w: f"Wk {w}" for w in weeks})
 
     def shade(v):
         if pd.isna(v): return ""
         strength = min(abs(v - 1) / 0.5, 1) * 0.55
         rgb = "46,133,64" if v >= 1 else "200,50,47"
         return f"background-color: rgba({rgb},{strength:.2f})"
-    week_cols = [c for c in table.columns if c != "Location"]
-    styled = table.style.map(shade, subset=week_cols).format("{:.2f}", subset=week_cols, na_rep="–")
+    def bold_totals(row):
+        style = "font-weight: 700; border-top: 1px solid #b9c7cb"
+        return [style if row.name in total_rows else "" for _ in row]
+    week_cols = [c for c in table.columns if c not in ("State", "Location")]
+    styled = (table.style.map(shade, subset=week_cols).apply(bold_totals, axis=1)
+              .format("{:.2f}", subset=week_cols, na_rep="–"))
     st.dataframe(styled, use_container_width=True, hide_index=True,
-                 height=min(600, 35 * (len(table) + 1) + 3),
-                 column_config={"Location": st.column_config.TextColumn("Location", pinned=True, width=170)})
+                 height=min(700, 35 * (len(table) + 1) + 3),
+                 column_config={"State": st.column_config.TextColumn("State", pinned=True, width=70),
+                                "Location": st.column_config.TextColumn("Location", pinned=True, width=170)})
     avg_note = "all trading centres" if basis == "All centres" else "trading centres in the same state (all of NZ counts as one)"
     st.caption(f"Averages use {avg_note} across the whole network, whatever filters are applied. "
+               f"State totals compare the state's average per trading centre with that average"
+               f"{' (so they are always 1.00 in State mode)' if basis == 'State' else ''}. "
                f"Weeks where a centre had no active members show –.")
 
 # ══════════════════════════════════════════════════════════════════════════════
