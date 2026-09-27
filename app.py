@@ -2475,7 +2475,7 @@ def login_section():
         import urllib.parse
         CLIENT_ID = st.secrets["GOOGLE_CLIENT_ID"]
         CLIENT_SECRET = st.secrets["GOOGLE_CLIENT_SECRET"]
-        REDIRECT_URI = "https://j7ky6kl5hwlbrjpxtuk8ce.streamlit.app/"
+        REDIRECT_URI = st.secrets.get("REDIRECT_URI", "https://j7ky6kl5hwlbrjpxtuk8ce.streamlit.app/")
         AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
         TOKEN_URL = "https://oauth2.googleapis.com/token"
         USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
