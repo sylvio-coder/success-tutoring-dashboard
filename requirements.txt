@@ -9,3 +9,4 @@ streamlit-echarts
 google-auth
 python-dotenv
 httpx
+openpyxl
