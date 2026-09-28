@@ -81,3 +81,13 @@ def test_broken_formulas():
     ss = make()
     ss.worksheet("Revenue").cells[1][4] = "#REF!"
     assert sheet_setup.broken_formulas(ss) == {"Revenue": 1}
+
+
+def test_formatting_keeps_existing_unlisted_bands():
+    ss = make()
+    ss.worksheet("Weekly Membership").hidden_banding = True
+    report = dict(sheet_setup.apply_formatting(ss))
+    assert "kept its existing alternating rows" in report["Weekly Membership"]
+    assert "alternating rows" in report["Revenue"]
+    assert ss.worksheet("Weekly Membership").frozen_rows == 1     # rest still applied
+    assert ss.worksheet("Revenue").banded_ranges                  # other tabs unaffected
