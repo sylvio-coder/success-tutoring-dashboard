@@ -388,3 +388,39 @@ def test_hapana_revenue_row_shared_by_two_sites_is_left_out():
     assert res["revenue"]["Location"].tolist() == ["Success Tutoring - Belmont"]
     w = next(w for w in res["warnings"] if "one 'Epping' row" in w)
     assert "Success Tutoring - Epping, Success Tutoring - Epping VIC" in w
+
+
+def test_hapana_revenue_with_region_and_no_member_column():
+    # Revenue report after adding Region and removing the members column.
+    members = xlsx([
+        ["Country", "Region", "Business name", "Date - Week/Year", "# Active members",
+         "# Suspended members", "# Cancelled members", "# New members"],
+        ["Australia", "New South Wales", "Epping", "37/2026", 100, 12, 0, 2],
+        [None, "Victoria", "Belmont", "37/2026", 17, 3, 0, 0],
+        [None, None, "Epping", "37/2026", 46, 10, 0, 1],
+        ["New Zealand", "New Zealand", "Howick", "37/2026", 19, 3, 0, 0],
+    ])
+    revenue = xlsx([
+        ["SA - Revenue Location Summary"],
+        ["Business name", "Region", "Date - Week/Year", "Total Sessions",
+         "Average Gross Revenue per Location"],
+        ["Belmont", "Victoria", "37/2026", 12, "1,334"],
+        ["Epping", "New South Wales", "37/2026", 23, "7,152"],
+        ["Epping", "Victoria", "37/2026", 22, "3,533"],
+        ["Howick", "New Zealand", "37/2026", 17, "1,346"],
+    ])
+    master = MASTER.assign(Region=["New South Wales", "New South Wales", "Victoria",
+                                   "Victoria", "Western Australia", "Auckland",
+                                   "New South Wales", "Western Australia"])
+    res = ingest.combine([ingest.read_export("Weekly Membership.xlsx", members),
+                          ingest.read_export("SA - Revenue Location Summary (19).xlsx", revenue)],
+                         master)
+    assert res["errors"] == [] and res["unknown"] == {}
+    assert not any("one 'Epping' row" in w for w in res["warnings"])
+    rev = res["revenue"].set_index("Location")
+    assert rev.loc["Success Tutoring - Epping", "gross"] == 7152
+    assert rev.loc["Success Tutoring - Epping VIC", "gross"] == 3533
+    assert rev.loc["Success Tutoring - Epping VIC", "active"] == 46     # from members
+    assert rev.loc["Success Tutoring - Epping VIC", "net"] == round(3533 / 1.1, 2)
+    assert rev.loc["Success Tutoring - Howick", "net"] == round(1346 / 1.15, 2)
+    assert rev.loc["Success Tutoring - Howick", "active"] == 19
