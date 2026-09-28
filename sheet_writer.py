@@ -31,6 +31,14 @@ def _text_safe(value):
     return value
 
 
+def _grid_rows(ws):
+    meta = ws.spreadsheet.fetch_sheet_metadata()
+    for sheet in meta["sheets"]:
+        if sheet["properties"]["sheetId"] == ws.id:
+            return sheet["properties"]["gridProperties"]["rowCount"]
+    return ws.row_count
+
+
 def read_tab(ws):
     """Returns (headers, rows) with rows as lists of formatted strings."""
     values = ws.get_all_values()
@@ -94,8 +102,10 @@ def append_records(ws, records, prefer_formula=()):
 
     first_new = last + 1
     last_new = last + len(rows)
-    if ws.row_count < last_new:
-        ws.add_rows(last_new - ws.row_count)
+    # ws.row_count is cached when the worksheet is opened and goes stale
+    # after rows are deleted, so ask the API for the real size.
+    if _grid_rows(ws) < last_new:
+        ws.resize(rows=last_new)
 
     requests = []
     if last >= 2:
@@ -125,14 +135,19 @@ def append_records(ws, records, prefer_formula=()):
 
 
 def replace_week(ws, records, name_header, week_label, prefer_formula=()):
-    """Remove existing rows for these locations in this week, then append."""
+    """Replace this week's rows for these locations.
+
+    New rows are added first and the old ones removed afterwards, so a
+    failure part-way leaves the week in twice rather than missing.
+    """
     headers, rows = read_tab(ws)
     ni, wi = headers.index(name_header), headers.index("Date - Week/Year")
     names = {r[name_header] for r in records}
     old = [i + 2 for i, r in enumerate(rows)
            if len(r) > max(ni, wi) and r[wi].strip() == week_label and r[ni] in names]
-    delete_rows(ws, old)
-    return len(old), append_records(ws, records, prefer_formula)
+    added = append_records(ws, records, prefer_formula)
+    delete_rows(ws, old)          # rows above the new ones: numbers still valid
+    return len(old), added
 
 
 def update_cells(ws, updates):

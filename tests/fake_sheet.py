@@ -17,7 +17,8 @@ class FakeWorksheet:
         self.title = title
         self.id = sheet_id
         self.cells = [list(r) for r in rows]        # raw input (formulas kept)
-        self.row_count = max(len(rows), 1) + 5
+        self.grid_rows = max(len(rows), 1)       # real grid size, like a full sheet
+        self.row_count = self.grid_rows          # gspread's cached copy (can go stale)
         self.formats_copied = []
 
     # values as displayed: formulas shown as "<f>"
@@ -46,6 +47,11 @@ class FakeWorksheet:
         return [[str(x) for x in (self.cells[r][c0 - 1:c1] if r < len(self.cells) else [])]
                 for r in range(r0 - 1, r1)]
 
+    def _check(self, r):
+        if r > self.grid_rows:
+            raise gspread.exceptions.GSpreadException(
+                f"Range exceeds grid limits. Max rows: {self.grid_rows}")
+
     def _set(self, r, c, v):
         while len(self.cells) < r:
             self.cells.append([])
@@ -61,6 +67,7 @@ class FakeWorksheet:
             rng = d["range"]
             start = rng.split(":")[0]
             r0, c0 = a1_to_rowcol(start)
+            self._check(r0 + len(d["values"]) - 1)
             for i, vals in enumerate(d["values"]):
                 for j, v in enumerate(vals):
                     self._set(r0 + i, c0 + j, v)
@@ -69,11 +76,16 @@ class FakeWorksheet:
         self.batch_update([{"range": rng, "values": values}])
 
     def add_rows(self, n):
-        self.row_count += n
+        self.resize(rows=self.row_count + n)
+
+    def resize(self, rows=None, cols=None):
+        if rows is not None:
+            self.grid_rows = self.row_count = rows
 
     def append_rows(self, values, value_input_option=None):
         self._trim()
         start = len(self.cells) + 1
+        self.grid_rows = max(self.grid_rows, start + len(values) - 1)
         for i, r in enumerate(values):
             for j, v in enumerate(r):
                 self._set(start + i, j + 1, v)
@@ -95,6 +107,11 @@ class FakeSpreadsheet:
         self.tabs[title] = ws
         return ws
 
+    def fetch_sheet_metadata(self, params=None):
+        return {"sheets": [{"properties": {"sheetId": w.id, "title": w.title,
+                                           "gridProperties": {"rowCount": w.grid_rows}}}
+                           for w in self.tabs.values()]}
+
     def _by_id(self, sid):
         return next(w for w in self.tabs.values() if w.id == sid)
 
@@ -105,6 +122,7 @@ class FakeSpreadsheet:
                 ws = self._by_id(r["sheetId"])
                 del ws.cells[r["startIndex"]:r["endIndex"]]
                 n = r["endIndex"] - r["startIndex"]
+                ws.grid_rows -= n                        # row_count is NOT updated
                 for row in ws.cells[r["startIndex"]:]:   # Sheets re-points same-row refs
                     for i, c in enumerate(row):
                         if str(c).startswith("="):
@@ -113,6 +131,7 @@ class FakeSpreadsheet:
                 cp = req["copyPaste"]
                 src, dst = cp["source"], cp["destination"]
                 ws = self._by_id(src["sheetId"])
+                ws._check(dst["endRowIndex"])
                 if cp["pasteType"] == "PASTE_FORMAT":
                     ws.formats_copied.append((dst["startRowIndex"], dst["endRowIndex"]))
                     continue
