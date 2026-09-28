@@ -1441,72 +1441,154 @@ def report_net_growth(df_wm):
 # ══════════════════════════════════════════════════════════════════════════════
 # REPORT 9 — Onboarding Progress
 # ══════════════════════════════════════════════════════════════════════════════
+# Onboarding target: active members expected in each week since opening (week 1 = first week with members)
+ONBOARDING_TARGET = [2, 6, 10, 14, 18, 22, 30, 38, 41, 44, 47, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60]
+ONBOARDING_MILESTONES = [(7, "Assessments"), (9, "Sessions"), (19, "Grand Opening")]
+ONBOARDING_MAX_WEEKS = 22          # show locations under this many weeks old
+
 def report_onboarding(df_wm):
-    st.markdown('<div class="report-title">Onboarding Progress</div>',unsafe_allow_html=True)
-    st.markdown('<div class="report-subtitle">Source: Vlookup (Weeks old) and Weekly Membership — onboarding week progress and pre-sale member counts</div>',unsafe_allow_html=True)
+    st.markdown('<div class="report-title">Onboarding Progress</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="report-subtitle">Locations under {ONBOARDING_MAX_WEEKS} weeks old (not Closed) — '
+                'active members by week since opening, against the onboarding target</div>', unsafe_allow_html=True)
+    loc_col = "Success Tutoring - Business name"
+    short = lambda x: str(x).replace("Success Tutoring - ", "")
     df_wm = apply_gpm_filter(df_wm)
-    vl=apply_gpm_filter(load_vlookup())
+    vl = apply_gpm_filter(load_vlookup())
     if vl.empty: st.warning("Vlookup tab not available."); return
-    vl_f=report_filters(vl.copy(),key_prefix="r7",show_date=False,
-                         show_country=True,show_state=True,show_stage=True,show_gpm=True,show_status=True)
-    loc_col="Success Tutoring - Business name"
-    if "Stage" not in vl_f.columns: st.warning("Stage column not found."); return
-    onb=vl_f[vl_f["Status"]=="Pre-Sale"].copy()
-    if onb.empty: st.info("No locations in Pre-Sale status for selected filters."); return
-    if "Weeks old" in onb.columns:
-        # Onboarding week = weeks since the first member; members = latest week's active members.
-        onb["Onboarding week"]=onb["Weeks old"]
-        latest=df_wm[df_wm["Date"]==df_wm["Date"].max()].set_index(loc_col)["# Active members"]
-        onb["Onboarding Members"]=onb[loc_col].map(latest).fillna(0)
-    st.markdown('<div class="section-header">Onboarding Status by Week</div>',unsafe_allow_html=True)
-    if "Onboarding week" in onb.columns:
-        onb_w=onb.sort_values("Onboarding week")
-        gpm_list=onb_w["GPM"].dropna().unique().tolist() if "GPM" in onb_w.columns else []
-        gpm_color_map={g:SERIES_COLORS[i % len(SERIES_COLORS)] for i,g in enumerate(gpm_list)}
-        bar_colors=[gpm_color_map.get(str(row.get("GPM","")),BI_ACCENT) for _,row in onb_w.iterrows()]
-        fig,ax=bi_fig(14,max(6,len(onb_w)*0.45))
-        bars=ax.barh(onb_w[loc_col],onb_w["Onboarding week"],color=bar_colors,height=0.6)
-        # Dual labels: week number INSIDE bar, pre-sale members OUTSIDE
-        has_members = "Onboarding Members" in onb_w.columns
-        for bar,(_,row) in zip(bars,onb_w.iterrows()):
-            bar_w = bar.get_width()
-            bar_y = bar.get_y() + bar.get_height()/2
-            week_val = int(row["Onboarding week"])
-            # Week number inside the bar (white, right-aligned)
-            if bar_w > 1.5:
-                ax.text(bar_w - 0.2, bar_y, str(week_val),
-                        va="center", ha="right", color="white",
-                        fontsize=8, fontweight="bold")
-            # Pre-sale member count outside bar
-            if has_members:
-                members_val = int(row.get("Onboarding Members", 0))
-                ax.text(bar_w + 0.2, bar_y,
-                        f"{members_val} members",
-                        va="center", ha="left", color=BI_SUBTEXT,
-                        fontsize=7.5)
+    vl_f = report_filters(vl.copy(), key_prefix="r7", show_date=False,
+                          show_country=True, show_state=True, show_stage=True, show_gpm=True, show_status=True)
+    if "Status" in vl_f.columns:
+        vl_f = vl_f[vl_f["Status"].astype(str).str.strip() != "Closed"]
 
-        # Updated milestones
-        milestones={"Pre-Sale":0,"Assessments":7,"Soft Open":9,"Grand Opening":16}
-        m_colors={"Pre-Sale":BI_BLUE,"Assessments":BI_ORANGE,"Soft Open":BI_PURPLE,"Grand Opening":BI_ACCENT}
-        for name,week in milestones.items():
-            ax.axvline(x=week,color=m_colors[name],linestyle="--",linewidth=1.2,alpha=0.9)
-            ax.text(week+0.1,len(onb_w)-0.5,name,color=m_colors[name],fontsize=7,rotation=90,va="top")
+    # Week 1 = first week with active members (same rule as Location Start / Weeks old in the Sheet)
+    wm = df_wm[[loc_col, "Date", "# Active members"]].copy()
+    wm["# Active members"] = pd.to_numeric(wm["# Active members"], errors="coerce").fillna(0)
+    wm = wm.groupby([loc_col, "Date"])["# Active members"].sum().reset_index()
+    starts = wm[wm["# Active members"] > 0].groupby(loc_col)["Date"].min()
+    latest_date = load_weekly_membership()["Date"].max()     # latest week in the whole Sheet
+    weeks_old = ((latest_date - starts).dt.days // 7 + 1).astype(int)
 
-        ax.set_xlabel("Onboarding Week",color=BI_TEXT,fontsize=9)
-        ax.set_title("Onboarding Status by Week",color=BI_TEXT,fontsize=11,fontweight="bold")
-        ax.invert_yaxis()
-        # Extra right padding so "X members" labels aren't clipped
-        x_max = onb_w["Onboarding week"].max()
-        ax.set_xlim(right=x_max + (5 if has_members else 2))
-        if gpm_list:
-            patches=[mpatches.Patch(color=gpm_color_map[g],label=g) for g in gpm_list]
-            ax.legend(handles=patches,loc="center right",bbox_to_anchor=(1.18,0.5),
-                      facecolor=BI_CARD,edgecolor=BI_BORDER,labelcolor=BI_TEXT,fontsize=10)
-        plt.tight_layout(); st.pyplot(fig); plt.close()
-    with st.expander("Onboarding Location Detail",expanded=False):
-            show_cols=[c for c in [loc_col,"Onboarding week","Onboarding Members","GPM","Country","Region","Weeks old","Age (Months)"] if c in onb.columns]
-            st.dataframe(onb[show_cols].sort_values("Onboarding week").reset_index(drop=True),
-                         use_container_width=True,hide_index=True)
+    locs = [l for l in vl_f[loc_col].dropna().unique()
+            if l in weeks_old.index and 1 <= weeks_old[l] < ONBOARDING_MAX_WEEKS]
+    if not locs:
+        st.info(f"No locations under {ONBOARDING_MAX_WEEKS} weeks old match the selected filters."); return
+    locs = sorted(locs, key=lambda l: (weeks_old[l], short(l)))
+    palette = [c for c in SERIES_COLORS if c != BI_ORANGE]      # orange is reserved for the target
+    colors = {l: palette[i % len(palette)] for i, l in enumerate(locs)}
+
+    # ── Location checkboxes ───────────────────────────────────────────────
+    st.markdown('<div class="section-header">Active Members vs Target by Week</div>', unsafe_allow_html=True)
+    key = lambda l: f"onb_sel_{l}"
+    for l in locs:
+        st.session_state.setdefault(key(l), True)
+    def set_all(value):
+        for l in locs:
+            st.session_state[key(l)] = value
+    b1, b2, _ = st.columns([1, 1, 6])
+    b1.button("Select all", on_click=set_all, args=(True,), key="onb_all", use_container_width=True)
+    b2.button("Clear all", on_click=set_all, args=(False,), key="onb_none", use_container_width=True)
+    per_row = 4
+    for i in range(0, len(locs), per_row):
+        cols = st.columns(per_row)
+        for c, l in zip(cols, locs[i:i + per_row]):
+            with c:
+                dot, box = st.columns([1, 14], gap="small")
+                dot.markdown(f'<div style="width:12px;height:12px;border-radius:50%;background:{colors[l]};'
+                             f'margin-top:6px"></div>', unsafe_allow_html=True)
+                box.checkbox(f"{short(l)} (wk {weeks_old[l]})", key=key(l))
+    selected = [l for l in locs if st.session_state.get(key(l))]
+
+    # ── Chart ─────────────────────────────────────────────────────────────
+    weeks = list(range(1, len(ONBOARDING_TARGET) + 1))
+    fig = go.Figure()
+    # Target: soft shaded band underneath, a wide pale halo and a bold line, labelled at its end
+    fig.add_trace(go.Scatter(x=weeks, y=ONBOARDING_TARGET, mode="lines", fill="tozeroy",
+                             fillcolor="rgba(224,86,42,0.07)", line=dict(width=0),
+                             hoverinfo="skip", showlegend=False))
+    fig.add_trace(go.Scatter(x=weeks, y=ONBOARDING_TARGET, mode="lines", hoverinfo="skip", showlegend=False,
+                             line=dict(color="rgba(224,86,42,0.25)", width=10, shape="spline", smoothing=0.6)))
+    fig.add_trace(go.Scatter(x=weeks, y=ONBOARDING_TARGET, name="Target", mode="lines",
+                             line=dict(color=BI_ORANGE, width=3.5, shape="spline", smoothing=0.6),
+                             hovertemplate="<b>Target: %{y}</b><extra></extra>"))
+    ends = [[weeks[-1], ONBOARDING_TARGET[-1], f"Target {ONBOARDING_TARGET[-1]}", BI_ORANGE, True]]
+    for l in selected:
+        g = wm[(wm[loc_col] == l) & (wm["Date"] >= starts[l])].copy()
+        g["Week"] = (g["Date"] - starts[l]).dt.days // 7 + 1
+        g = g[g["Week"] <= len(ONBOARDING_TARGET)].sort_values("Week")
+        if g.empty: continue
+        fig.add_trace(go.Scatter(x=g["Week"], y=g["# Active members"], name=short(l), mode="lines",
+                                 line=dict(color=colors[l], width=2.25, shape="spline", smoothing=0.8),
+                                 opacity=0.9, hovertemplate=f"{short(l)}: %{{y:,.0f}}<extra></extra>"))
+        last = g.iloc[-1]
+        fig.add_trace(go.Scatter(x=[last["Week"]], y=[last["# Active members"]], mode="markers",
+                                 marker=dict(color=colors[l], size=8, line=dict(color="#ffffff", width=1.5)),
+                                 hoverinfo="skip", showlegend=False))
+        ends.append([last["Week"], float(last["# Active members"]), short(l), colors[l], False])
+    # End-of-line labels, nudged apart where lines finish close together
+    annotations = []
+    by_week = {}
+    for e in ends:
+        by_week.setdefault(e[0], []).append(e)
+    gap = max(ONBOARDING_TARGET) * 0.045
+    for wk, group in by_week.items():
+        group.sort(key=lambda e: e[1]); placed = []
+        for e in group:
+            placed.append(e[1] if not placed or e[1] - placed[-1] >= gap else placed[-1] + gap)
+        for e, y in zip(group, placed):
+            annotations.append(dict(x=wk, y=y, xref="x", yref="y", xanchor="left", xshift=8, showarrow=False,
+                                    text=f"<b>{e[2]}</b>", font=dict(color=e[3], size=12 if e[4] else 11),
+                                    bgcolor="rgba(255,255,255,0.9)", borderpad=2))
+    # Labels alternate left/right of their line so close milestones (weeks 7 and 9) don't overlap
+    for i, (wk, name) in enumerate(ONBOARDING_MILESTONES):
+        fig.add_vline(x=wk, line_dash="dot", line_color=BI_SUBTEXT, line_width=1.25,
+                      annotation_text=f"Wk {wk} {name}",
+                      annotation_position="top left" if i % 2 == 0 else "top right",
+                      annotation_font=dict(size=11, color=BI_TEXT))
+    layout = std_layout("", "Active members", 480)
+    layout.update(showlegend=False, hovermode="x unified", margin=dict(l=60, r=110, t=50, b=50))
+    layout["xaxis"] = dict(PLOTLY_LAYOUT["xaxis"], tickmode="linear", dtick=1, range=[0.5, len(weeks) + 0.5],
+                           title=dict(text="Weeks", font=dict(color=BI_SUBTEXT, size=11)),
+                           hoverformat="d", tickprefix="")
+    layout["yaxis"] = dict(layout["yaxis"], rangemode="tozero")
+    fig.update_layout(**layout)
+    for a in annotations:          # added after the layout so the milestone labels are kept
+        fig.add_annotation(**a)
+    show_chart(fig, use_container_width=True)
+    st.caption("Orange line and shading = target. Week 1 is each location's first week with active members.")
+
+    # ── Table ─────────────────────────────────────────────────────────────
+    st.markdown('<div class="section-header">Onboarding Locations</div>', unsafe_allow_html=True)
+    meta = vl_f.set_index(loc_col)
+    latest_active = wm.sort_values("Date").groupby(loc_col)["# Active members"].last()
+    rows = []
+    for l in locs:
+        w = int(weeks_old[l]); active = float(latest_active.get(l, 0))
+        target = ONBOARDING_TARGET[w - 1] if w <= len(ONBOARDING_TARGET) else None
+        row = {"Location": short(l),
+               "Stage": meta.at[l, "Stage"] if "Stage" in meta.columns else "",
+               "GPM": meta.at[l, "GPM"] if "GPM" in meta.columns else "",
+               "Weeks old": w, "Active members": int(active), "Target": target,
+               "vs Target": (active - target) if target is not None else None,
+               "vs Target %": ((active - target) / target * 100) if target else None,
+               "Location Start": starts[l]}
+        for wk, name in ONBOARDING_MILESTONES:
+            row[name] = starts[l] + pd.Timedelta(weeks=wk - 1)
+        rows.append(row)
+    tbl = pd.DataFrame(rows).sort_values("vs Target %", na_position="last")
+    date_cols = ["Location Start"] + [name for _, name in ONBOARDING_MILESTONES]
+    def colour(v):
+        if pd.isna(v) or v == 0: return ""
+        return f"color: {BI_GREEN if v > 0 else BI_RED}; font-weight: 600"
+    def past(v):
+        return f"color: {BI_SUBTEXT}" if pd.notna(v) and v <= latest_date else ""
+    styled = (tbl.style.map(colour, subset=["vs Target", "vs Target %"]).map(past, subset=date_cols[1:])
+              .format({"vs Target": "{:+,.0f}", "vs Target %": "{:+.0f}%", "Target": "{:,.0f}",
+                       **{c: (lambda d: d.strftime("%d %b %Y")) for c in date_cols}}, na_rep="–"))
+    st.dataframe(styled, use_container_width=True, hide_index=True,
+                 height=min(600, 35 * (len(tbl) + 1) + 3),
+                 column_config={"Location": st.column_config.TextColumn("Location", pinned=True)})
+    st.caption(f"Milestone dates = Location Start + (milestone week − 1) weeks. Dates already passed are shown in grey. "
+               f"Sorted by vs Target %, furthest behind first.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # REPORT 10 — Revenue
