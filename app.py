@@ -13,6 +13,7 @@ from streamlit_echarts import st_echarts
 from google.oauth2.service_account import Credentials
 import anthropic
 import os
+import admin_pages
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -21,7 +22,7 @@ SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
 ANTHROPIC_KEY = st.secrets.get("ANTHROPIC_API_KEY", "") or os.getenv("ANTHROPIC_API_KEY", "")
 SERVICE_ACCOUNT_FILE = "service_account.json"
 SCOPES_SHEETS = [
-    "https://www.googleapis.com/auth/spreadsheets.readonly",
+    "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive.readonly",
 ]
 
@@ -317,9 +318,13 @@ def load_vlookup():
             "Months old": "Age (Months)",
             "Onboarding Week": "Onboarding week",
         })
-        for c in ["Onboarding week","Onboarding Members","Age (Months)"]:
+        for c in ["Onboarding week","Onboarding Members","Age (Months)","Weeks old"]:
             if c in df.columns:
                 df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+        if "Weeks old" in df.columns:
+            # Week 1 = first week with members; months = whole months elapsed since then.
+            elapsed_days = (df["Weeks old"] - 1).clip(lower=0) * 7
+            df["Age (Months)"] = (elapsed_days / 30.4375).astype(int)
         return df
     except:
         return pd.DataFrame()
@@ -1467,7 +1472,7 @@ def report_net_growth(df_wm):
 # ══════════════════════════════════════════════════════════════════════════════
 def report_onboarding(df_wm):
     st.markdown('<div class="report-title">8 · Onboarding Progress</div>',unsafe_allow_html=True)
-    st.markdown('<div class="report-subtitle">Source: Vlookup — onboarding week progress and pre-sale member counts</div>',unsafe_allow_html=True)
+    st.markdown('<div class="report-subtitle">Source: Vlookup (Weeks old) and Weekly Membership — onboarding week progress and pre-sale member counts</div>',unsafe_allow_html=True)
     df_wm = apply_gpm_filter(df_wm)
     vl=apply_gpm_filter(load_vlookup())
     if vl.empty: st.warning("Vlookup tab not available."); return
@@ -1477,6 +1482,11 @@ def report_onboarding(df_wm):
     if "Stage" not in vl_f.columns: st.warning("Stage column not found."); return
     onb=vl_f[vl_f["Status"]=="Pre-Sale"].copy()
     if onb.empty: st.info("No locations in Pre-Sale status for selected filters."); return
+    if "Weeks old" in onb.columns:
+        # Onboarding week = weeks since the first member; members = latest week's active members.
+        onb["Onboarding week"]=onb["Weeks old"]
+        latest=df_wm[df_wm["Date"]==df_wm["Date"].max()].set_index(loc_col)["# Active members"]
+        onb["Onboarding Members"]=onb[loc_col].map(latest).fillna(0)
     st.markdown('<div class="section-header">Onboarding Status by Week</div>',unsafe_allow_html=True)
     if "Onboarding week" in onb.columns:
         onb_w=onb.sort_values("Onboarding week")
@@ -1524,7 +1534,7 @@ def report_onboarding(df_wm):
                       facecolor=BI_CARD,edgecolor=BI_BORDER,labelcolor=BI_TEXT,fontsize=10)
         plt.tight_layout(); st.pyplot(fig); plt.close()
     with st.expander("📋 Onboarding Location Detail",expanded=False):
-            show_cols=[c for c in [loc_col,"Onboarding week","Onboarding Members","GPM","Country","Region","Age (Months)"] if c in onb.columns]
+            show_cols=[c for c in [loc_col,"Onboarding week","Onboarding Members","GPM","Country","Region","Weeks old","Age (Months)"] if c in onb.columns]
             st.dataframe(onb[show_cols].sort_values("Onboarding week").reset_index(drop=True),
                          use_container_width=True,hide_index=True)
 
@@ -2585,6 +2595,7 @@ def report_allowed(report, allowed_tabs):
     return num in tabs or name.lower() in tabs or report.lower() in tabs
 
 REPORTS = [r for r in REPORTS if report_allowed(r, st.session_state.get("allowed_tabs", []))]
+ADMIN_PAGES = ["⚙ Weekly Upload", "⚙ Locations", "⚙ Sheet Setup"] if st.session_state.get("access_level") == "admin" else []
 if not REPORTS:
     st.warning("⛔ No reports are assigned to your account. Please contact your administrator."); st.stop()
 
@@ -2614,9 +2625,13 @@ with st.sidebar:
     st.markdown("---")
     st.markdown(f'<div style="color:{BI_ACCENT};font-size:0.72em;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;padding:4px 0 6px 2px">📊 Reports</div>',
                 unsafe_allow_html=True)
-    if st.session_state.get("selected_report") not in REPORTS:
+    if st.session_state.get("selected_report") not in REPORTS + ADMIN_PAGES:
         st.session_state["selected_report"] = REPORTS[0]
-    for r in REPORTS:
+    for r in REPORTS + ADMIN_PAGES:
+        if ADMIN_PAGES and r == ADMIN_PAGES[0]:
+            st.markdown("---")
+            st.markdown(f'<div style="color:{BI_ACCENT};font-size:0.72em;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;padding:4px 0 6px 2px">⚙ Admin</div>',
+                        unsafe_allow_html=True)
         is_active = st.session_state["selected_report"] == r
         bg = f"rgba(255,215,0,0.12)" if is_active else "transparent"
         border = f"#ffd700" if is_active else "transparent"
@@ -2688,3 +2703,9 @@ elif selected_report=="9 · Onboarding Progress":      report_onboarding(df_wm)
 elif selected_report=="10 · Revenue":                 report_revenue(df_rv)
 elif selected_report=="11 · AI Outlier Analysis":     report_claude_outliers(df_wm)
 elif selected_report=="12 · Location Performance Analysis": report_location_performance(df_wm, df_rv)
+elif selected_report in ADMIN_PAGES:
+    spreadsheet = get_sheets_client().open_by_key(SHEET_ID)
+    page = {"⚙ Weekly Upload": admin_pages.page_weekly_upload,
+            "⚙ Locations": admin_pages.page_locations,
+            "⚙ Sheet Setup": admin_pages.page_sheet_setup}[selected_report]
+    page(spreadsheet, df_wm, df_rv, st.cache_data.clear)
