@@ -521,12 +521,25 @@ def combine(exports, master, aliases=None):
     if empty_inhouse:
         names = sorted(empty_inhouse.values())
         info.append("Left out in-house rows with no members and no revenue: " + ", ".join(names))
-        for raw in names:
-            loc = matcher.resolve(raw, "", "In-house")
-            if loc and loc not in members and loc not in revenue and \
-                    status_of.get(loc) == "trading":
-                warnings.append(f"{loc} is Trading but has no members or revenue in any "
-                                "export this week.")
+
+    # Trading sites missing from both CRMs get a 0-member row so the gap shows
+    # in the charts, and are flagged: the partner may not be using the system.
+    missing = sorted(loc for loc, s_ in status_of.items()
+                     if s_ == "trading" and loc not in members)
+    if missing:
+        if {HAPANA_MEMBERS, INHOUSE_MEMBERS} <= kinds:
+            for loc in missing:
+                members[loc] = {"active": 0.0, "suspended": 0.0, "cancelled": 0.0,
+                                "new": 0.0, "source": "Not in either CRM (follow up)"}
+            warnings.append("**Follow up:** these Trading locations have no data from either "
+                            "CRM this week and will be written with 0 members. The franchise "
+                            "partner may not be recording at location level: "
+                            + ", ".join(missing) + ". If a site has closed, change its Status "
+                            "on the Locations page.")
+        else:
+            warnings.append("**Follow up:** these Trading locations have no membership row: "
+                            + ", ".join(missing) + ". 0-member rows are only added when both "
+                            "the Hapana and in-house members files are uploaded.")
     no_members = sorted(set(revenue) - set(members))
     if no_members:
         info.append("Revenue but no membership row (normal for presale sites): "

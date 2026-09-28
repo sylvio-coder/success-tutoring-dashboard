@@ -361,7 +361,20 @@ def test_trading_site_with_nothing_is_warned():
     res = ingest.combine([ingest.read_export(
         "members-report-2026-09-14-to-2026-09-20.xlsx", members)],
         MASTER.assign(Status="Trading"))
-    assert any("Burwood is Trading" in w for w in res["warnings"])
+    w = next(w for w in res["warnings"] if w.startswith("**Follow up:**"))
+    assert "Success Tutoring - Burwood" in w and "only added when both" in w
+    assert res["membership"].empty                      # no 0-rows with one file
+
+
+def test_trading_site_missing_from_both_crms_gets_zero_row():
+    master = MASTER.assign(Status="Trading")
+    res = ingest.combine(all_exports(), master)
+    mem = res["membership"].set_index("Location")
+    # Landsdale only has revenue: no members row in either CRM.
+    assert mem.loc["Success Tutoring - Landsdale", "active"] == 0
+    assert mem.loc["Success Tutoring - Landsdale", "source"] == "Not in either CRM (follow up)"
+    w = next(w for w in res["warnings"] if w.startswith("**Follow up:**"))
+    assert "Success Tutoring - Landsdale" in w and "0 members" in w
 
 
 def test_hapana_revenue_row_shared_by_two_sites_is_left_out():

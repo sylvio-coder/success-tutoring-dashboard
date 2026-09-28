@@ -254,15 +254,6 @@ def _preview(mem, rev, master, df_wm, df_rv, week_end):
                        ", ".join(f"{n} ({a:.0f} → {b:.0f})"
                                  for n, (a, b) in both.iterrows()))
 
-    status = master["Status"] if "Status" in master.columns else pd.Series("", index=master.index)
-    trading = master[status.astype(str).str.lower() == "trading"]["Location"]
-    missing = sorted(set(trading) - set(mem["Location"]))
-    if missing:
-        st.warning("**Follow up:** these Trading locations have no data from either CRM "
-                   "this week, so no row is written for them. The franchise partner may not "
-                   "be recording at location level: " + ", ".join(missing) + ". If a site "
-                   "has closed, change its Status on the Locations page.")
-
     with st.expander(f"Membership rows ({len(mem)})"):
         st.dataframe(mem, hide_index=True, use_container_width=True)
     with st.expander(f"Revenue rows ({len(rev)})"):
