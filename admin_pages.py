@@ -37,7 +37,9 @@ def _pending():
 
 
 def _options(df, col, extra=()):
-    vals = {str(v).strip() for v in df.get(col, pd.Series(dtype=str)).tolist()} | set(extra)
+    added = st.session_state.get("extra_options", {}).get(col, set())
+    vals = {str(v).strip() for v in df.get(col, pd.Series(dtype=str)).tolist()} | \
+        set(extra) | added
     return sorted(v for v in vals if v)
 
 
@@ -256,8 +258,10 @@ def _preview(mem, rev, master, df_wm, df_rv, week_end):
     trading = master[status.astype(str).str.lower() == "trading"]["Location"]
     missing = sorted(set(trading) - set(mem["Location"]))
     if missing:
-        st.warning("Trading locations with no membership row in this upload: " +
-                   ", ".join(missing))
+        st.warning("**Follow up:** these Trading locations have no data from either CRM "
+                   "this week, so no row is written for them. The franchise partner may not "
+                   "be recording at location level: " + ", ".join(missing) + ". If a site "
+                   "has closed, change its Status on the Locations page.")
 
     with st.expander(f"Membership rows ({len(mem)})"):
         st.dataframe(mem, hide_index=True, use_container_width=True)
@@ -411,8 +415,15 @@ def _master_editor(vl_ws, vl_headers, master, df_wm, clear_cache):
     cfg["Location"] = st.column_config.TextColumn("Location", disabled=True)
     for c in ["Months old", "Onboarding Week", "Active members", "Last week with members"]:
         cfg[c] = st.column_config.Column(c, disabled=True)
-    st.caption("Edit cells directly, then save. To add a value that isn't in a list "
-               "(e.g. a new GPM), use a location's setup form or type it in the Sheet once.")
+    with st.expander("Add a new option to a list (e.g. Status 'Closed' or a new GPM)"):
+        a1, a2, a3 = st.columns([1, 2, 1])
+        field = a1.selectbox("List", EDITABLE, key="new_opt_field")
+        value = a2.text_input("New value", key="new_opt_value")
+        if a3.button("Add option", key="new_opt_add") and value.strip():
+            st.session_state.setdefault("extra_options", {}).setdefault(field, set()).add(
+                value.strip())
+            st.rerun()
+    st.caption("Edit cells directly, then save.")
     edited = st.data_editor(view[show], column_config=cfg, hide_index=True,
                             use_container_width=True, key="master_editor")
 

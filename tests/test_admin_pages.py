@@ -195,3 +195,25 @@ def test_upload_lists_old_rows_it_will_not_replace(ss):
     assert not at.exception, at.exception
     w = next(w.value for w in at.warning if "not in this upload" in w.value)
     assert w.startswith("Revenue already has week 38/2026") and "Belmont (WA)" in w
+
+
+def test_missing_trading_site_is_flagged_but_upload_proceeds(ss):
+    ss.worksheet("Vlookup").cells.append(
+        ["Success Tutoring - Remuera", "Growth", "Trading", "Sara Walliar", "New Zealand",
+         "Auckland", "1-Jan-2024", "", "", ""])
+    at = run_page("page_weekly_upload", ss, FILES)
+    at.selectbox(key="map_Success Tutoring - Torquay").set_value("Leave out this week").run()
+    assert not at.exception, at.exception
+    w = next(w.value for w in at.warning if w.value.startswith("**Follow up:**"))
+    assert "Success Tutoring - Remuera" in w
+    confirm = next(b for b in at.button if b.label.startswith("✅ Confirm"))
+    assert not confirm.disabled
+
+
+def test_locations_page_add_option(ss):
+    at = run_page("page_locations", ss)
+    at.text_input(key="new_opt_value").set_value("Closed")
+    at.selectbox(key="new_opt_field").set_value("Status")
+    at.button(key="new_opt_add").click().run()
+    assert not at.exception, at.exception
+    assert at.session_state["extra_options"] == {"Status": {"Closed"}}
