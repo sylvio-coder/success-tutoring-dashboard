@@ -304,3 +304,61 @@ def test_scoped_alias_keys():
     assert ingest.alias_key("In-house: Success Tutoring - Belmont") == "in-house:belmont"
     assert ingest.alias_key("Belmont WA") == "belmont wa"
     assert ingest.canonical_new_name("In-house: Epping") == "Success Tutoring - Epping"
+
+
+def test_region_spelling_differences_still_match():
+    data = xlsx([
+        ["Country", "Region", "Business name", "Date - Week/Year", "# Active members",
+         "# Suspended members", "# Cancelled members", "# New members"],
+        ["Australia", "Australian Capital Territory", "Dickson", "38/2026", 47, 10, 3, 1],
+        [None, "Victoria", "Epping", "38/2026", 46, 10, 0, 1],
+    ])
+    master = pd.DataFrame([
+        {"Location": "Success Tutoring - Dickson", "Region": "ACT", "Country": "Australia"},
+        {"Location": "Success Tutoring - Epping", "Region": "NSW", "Country": "Australia"},
+        {"Location": "Success Tutoring - Epping VIC", "Region": "", "Country": "Australia"},
+    ])
+    res = ingest.combine([ingest.read_export("wm.xlsx", data)], master)
+    assert res["unknown"] == {}
+    assert res["membership"]["Location"].tolist() == [
+        "Success Tutoring - Dickson", "Success Tutoring - Epping VIC"]
+
+
+def test_empty_inhouse_rows_are_left_out():
+    members = xlsx([
+        ["Location Name", "Active Members", "Suspended Members", "Cancelled Members",
+         "New Members"],
+        ["Success Tutoring - Epping", 0, 0, 0, 0],
+        ["Success Tutoring - Head Office", 0, 0, 0, 0],
+        ["Success Tutoring - Burwood", 56, 11, 3, 1],
+        ["Success Tutoring - Landsdale", 0, 0, 0, 0],
+    ])
+    revenue = xlsx([
+        ["Location Name", "Sessions", "Gross Revenue", "Net Revenue (ex tax)"],
+        ["Success Tutoring - Epping", 0, 0, 0],
+        ["Success Tutoring - Burwood", 44, 4863.23, 4429.79],
+        ["Success Tutoring - Landsdale", 0, 864.5, 785.91],   # presale: revenue only
+    ])
+    master = MASTER.assign(Status="Trading")
+    exports = [ingest.read_export("members-report-2026-09-14-to-2026-09-20.xlsx", members),
+               ingest.read_export("revenue-report-2026-09-14-to-2026-09-20.xlsx", revenue),
+               ingest.read_export("Weekly Membership.xlsx", HAPANA_MEMBERS)]
+    res = ingest.combine(exports, master)
+    assert res["errors"] == [] and res["clashes"] == [] and res["unknown"] == {}
+    mem = res["membership"].set_index("Location")["active"]
+    assert mem["Success Tutoring - Epping"] == 100          # Hapana's Epping only
+    assert "Success Tutoring - Landsdale" in mem.index      # kept: has revenue
+    assert any("Head Office" in i and "Epping" in i for i in res["info"])
+    assert not any("Epping" in w for w in res["warnings"])  # Epping has Hapana data
+
+
+def test_trading_site_with_nothing_is_warned():
+    members = xlsx([
+        ["Location Name", "Active Members", "Suspended Members", "Cancelled Members",
+         "New Members"],
+        ["Success Tutoring - Burwood", 0, 0, 0, 0],
+    ])
+    res = ingest.combine([ingest.read_export(
+        "members-report-2026-09-14-to-2026-09-20.xlsx", members)],
+        MASTER.assign(Status="Trading"))
+    assert any("Burwood is Trading" in w for w in res["warnings"])

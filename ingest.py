@@ -31,6 +31,14 @@ AU_STATES = {
     "australian capital territory": "ACT", "northern territory": "NT",
 }
 
+
+def state_abbr(region):
+    """'Victoria' or 'VIC' -> 'VIC'; None for anything else."""
+    r = str(region or "").strip().lower()
+    if r in AU_STATES:
+        return AU_STATES[r]
+    return r.upper() if r.upper() in AU_STATES.values() else None
+
 HAPANA_MEMBERS = "hapana_members"
 HAPANA_REVENUE = "hapana_revenue"
 INHOUSE_MEMBERS = "inhouse_members"
@@ -305,7 +313,7 @@ class LocationMatcher:
             scoped = self.aliases.get(alias_key(scoped_alias(crm, raw)))
             if scoped:
                 return scoped
-        abbr = AU_STATES.get(str(region or "").strip().lower())
+        abbr = state_abbr(region)
         if not abbr:
             k = location_key(raw)
             return self.aliases.get(k) or self.master.get(k)
@@ -314,14 +322,15 @@ class LocationMatcher:
             if k in self.aliases:
                 return self.aliases[k]
             loc = self.master.get(k)
-            if loc and self.region.get(k, "") in ("", region.strip().lower()):
+            # Only a different known state rules a match out.
+            if loc and state_abbr(self.region.get(k)) in (None, abbr):
                 return loc
         return None
 
     def unknown_label(self, raw, region=""):
         """Name to show for an unmatched row: 'Epping VIC' when 'Epping' exists
         but in another state."""
-        abbr = AU_STATES.get(str(region or "").strip().lower())
+        abbr = state_abbr(region)
         if abbr and location_key(raw) in self.master:
             return f"{raw} {abbr}"
         return raw
@@ -371,6 +380,20 @@ def combine(exports, master, aliases=None):
                               master["Region"].tolist() if "Region" in master.columns else None)
     country_of = {location_key(r["Location"]): str(r.get("Country", "")).strip()
                   for _, r in master.iterrows()}
+    status_of = {r["Location"]: str(r.get("Status", "")).strip().lower()
+                 for _, r in master.iterrows()}
+
+    # The in-house CRM lists sites with no members and no revenue (e.g. a
+    # placeholder "Epping", Head Office): leave those out.
+    inhouse = {}
+    for e in exports:
+        if CRM_OF[e["kind"]] != "In-house":
+            continue
+        for _, r in e["rows"].iterrows():
+            t = inhouse.setdefault(location_key(r["name"]), {"name": r["name"], "any": 0.0})
+            for f in ("active", "gross", "net"):
+                t["any"] += abs(float(r.get(f, 0) or 0))
+    empty_inhouse = {k: t["name"] for k, t in inhouse.items() if t["any"] == 0}
 
     errors, warnings, info = [], [], []
     for e in exports:
@@ -419,6 +442,8 @@ def combine(exports, master, aliases=None):
             if is_excluded(raw):
                 excluded.add(raw)
                 continue
+            if crm == "In-house" and location_key(raw) in empty_inhouse:
+                continue
             region = r.get("region", "") or ""
             loc = matcher.resolve(raw, region, crm)
             if loc is None:
@@ -459,6 +484,15 @@ def combine(exports, master, aliases=None):
 
     if excluded:
         info.append("Excluded test account(s): " + ", ".join(sorted(excluded)))
+    if empty_inhouse:
+        names = sorted(empty_inhouse.values())
+        info.append("Left out in-house rows with no members and no revenue: " + ", ".join(names))
+        for raw in names:
+            loc = matcher.resolve(raw, "", "In-house")
+            if loc and loc not in members and loc not in revenue and \
+                    status_of.get(loc) == "trading":
+                warnings.append(f"{loc} is Trading but has no members or revenue in any "
+                                "export this week.")
     no_members = sorted(set(revenue) - set(members))
     if no_members:
         info.append("Revenue but no membership row (normal for presale sites): "

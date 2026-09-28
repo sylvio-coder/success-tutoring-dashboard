@@ -82,18 +82,20 @@ def page_weekly_upload(spreadsheet, df_wm, df_rv, clear_cache):
     extra_aliases, left_out = {}, set()
     if res["unknown"]:
         st.markdown("#### Locations not in the master list")
-        st.caption("Pick the existing location each name refers to, or set it up as a "
-                   "new location. A mapping you choose is remembered for future uploads.")
+        st.caption("Pick the existing location each name refers to (likely matches are "
+                   "listed first), or set it up as a new location. A mapping you choose is "
+                   "remembered for future uploads.")
         all_names = master["Location"].tolist()
         NEW, SKIP, CHOOSE = "➕ New location (set up on the Locations page)", \
             "Leave out this week", "— choose —"
         for raw, u in sorted(res["unknown"].items()):
-            opts = [CHOOSE, NEW, SKIP] + u["suggestions"] + \
+            opts = [CHOOSE] + u["suggestions"] + [NEW, SKIP] + \
                 [n for n in all_names if n not in u["suggestions"]]
             c1, c2 = st.columns([2, 3])
             c1.markdown(f"**{raw}**  \n<span style='font-size:0.8em'>{', '.join(u['sources'])}"
                         f" · {u['active']:.0f} active</span>", unsafe_allow_html=True)
-            choice = c2.selectbox("Maps to", opts, key=f"map_{raw}", label_visibility="collapsed")
+            choice = c2.selectbox("Maps to", opts, key=f"map_{raw}", label_visibility="collapsed",
+                                  format_func=lambda o: f"Existing: {o}" if o in all_names else o)
             if choice == NEW:
                 _pending()[raw] = {"week_end": res["week_end"], "sources": u["sources"]}
             else:
@@ -119,7 +121,8 @@ def page_weekly_upload(spreadsheet, df_wm, df_rv, clear_cache):
                         f"clashes with {c['other']} ({c['location']})</span>",
                         unsafe_allow_html=True)
             choice = c2.selectbox("Is", opts, key=f"clash_{scoped}",
-                                  label_visibility="collapsed")
+                                  label_visibility="collapsed",
+                                  format_func=lambda o: f"Existing: {o}" if o in all_names else o)
             if choice == NEW:
                 _pending()[scoped] = {"week_end": res["week_end"], "sources": [c["crm"]]}
             else:
