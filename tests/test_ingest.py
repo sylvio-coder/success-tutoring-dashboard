@@ -223,3 +223,51 @@ def test_duplicate_weeks():
     df = pd.DataFrame({"Location": ["A", "A", "B"], "Date - Week/Year": ["1/2024"] * 3})
     out = ingest.duplicate_weeks(df, "Location")
     assert out["Location"].tolist() == ["A"]
+
+
+def test_hapana_region_separates_same_names():
+    # Current Hapana layout: Country/Region filled on the first row of each
+    # group, both Eppings called plain "Epping".
+    data = xlsx([
+        ["Country", "Region", "Business name", "Date - Week/Year", "# Active members",
+         "# Suspended members", "# Cancelled members", "# New members"],
+        ["Australia", "New South Wales", "Auburn", "38/2026", 83, 9, 3, 1],
+        [None, None, "Epping", "38/2026", 100, 12, 0, 2],
+        [None, "Victoria", "Belmont", "38/2026", 17, 3, 0, 0],
+        [None, None, "Epping", "38/2026", 46, 10, 0, 1],
+        ["New Zealand", "New Zealand", "Howick", "38/2026", 19, 3, 0, 0],
+    ])
+    master = MASTER.assign(Region=["New South Wales", "New South Wales", "Victoria",
+                                   "Victoria", "Western Australia", "Auckland",
+                                   "New South Wales", "Western Australia"])
+    res = ingest.combine([ingest.read_export("Weekly Membership (4).xlsx", data)], master)
+    assert res["errors"] == [] and res["unknown"] == {}
+    mem = res["membership"].set_index("Location")["active"]
+    assert mem["Success Tutoring - Epping"] == 100
+    assert mem["Success Tutoring - Epping VIC"] == 46
+    assert mem["Success Tutoring - Belmont"] == 17
+    assert mem["Success Tutoring - Howick"] == 19
+
+
+def test_region_mismatch_is_flagged_not_merged():
+    data = xlsx([
+        ["Country", "Region", "Business name", "Date - Week/Year", "# Active members",
+         "# Suspended members", "# Cancelled members", "# New members"],
+        ["Australia", "Queensland", "Epping", "38/2026", 5, 0, 0, 0],
+    ])
+    master = MASTER.assign(Region="New South Wales")
+    res = ingest.combine([ingest.read_export("wm.xlsx", data)], master)
+    assert list(res["unknown"]) == ["Epping QLD"]
+
+
+def test_inhouse_dash_names_and_total_rows():
+    data = xlsx([
+        ["Location Name", "Sessions", "Gross Revenue", "Net Revenue (ex tax)"],
+        ["Success Tutoring – Burwood", 44, 4863.23, 4429.79],
+        ["Total (AUD) — 1 centres", 44, 4863.23, 4429.79],
+        ["Total (NZD) — 3 centres", 0, 0, 0],
+    ])
+    res = ingest.combine([ingest.read_export("revenue-report-2026-09-14-to-2026-09-20.xlsx",
+                                             data)], MASTER)
+    assert res["unknown"] == {}
+    assert res["revenue"]["Location"].tolist() == ["Success Tutoring - Burwood"]

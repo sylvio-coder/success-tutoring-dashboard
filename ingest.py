@@ -23,6 +23,14 @@ GST_DIVISOR = {"australia": 1.10, "new zealand": 1.15}
 
 STUDENT_VISITS_PER_STUDENT = 1.96
 
+# Hapana names two sites "Epping" and relies on the Region column to tell them
+# apart; the master list calls the Victorian one "Epping VIC".
+AU_STATES = {
+    "new south wales": "NSW", "victoria": "VIC", "queensland": "QLD",
+    "western australia": "WA", "south australia": "SA", "tasmania": "TAS",
+    "australian capital territory": "ACT", "northern territory": "NT",
+}
+
 HAPANA_MEMBERS = "hapana_members"
 HAPANA_REVENUE = "hapana_revenue"
 INHOUSE_MEMBERS = "inhouse_members"
@@ -77,7 +85,8 @@ def norm_header(value):
 
 def location_key(name):
     """Comparison key for a location name: case-insensitive, prefix removed."""
-    s = re.sub(r"\s+", " ", str(name or "")).strip().lower()
+    s = re.sub(r"[\u2010-\u2015\u2212]", "-", str(name or ""))   # en/em dashes -> "-"
+    s = re.sub(r"\s+", " ", s).strip().lower()
     for p in ("success tutoring - ", "success tutoring -", "success tutoring "):
         if s.startswith(p):
             s = s[len(p):]
@@ -205,6 +214,7 @@ def read_export(filename, data):
     headers = [norm_header(v) for v in grid.iloc[hdr].tolist()]
     body = grid.iloc[hdr + 1:].reset_index(drop=True)
 
+    region_idx = headers.index("region") if "region" in headers else None
     name_idx = next((i for i, h in enumerate(headers)
                      if h in ("location name", "business name")
                      or h.endswith("business name")), 0)
@@ -217,15 +227,21 @@ def read_export(filename, data):
     warnings = []
 
     records, weeks = [], set()
+    region = ""
     for _, r in body.iterrows():
         vals = r.tolist()
+        # Region is only filled in on the first row of each group.
+        if region_idx is not None and region_idx < len(vals):
+            v = vals[region_idx]
+            if v is not None and not (isinstance(v, float) and pd.isna(v)) and str(v).strip():
+                region = str(v).strip()
         name = vals[name_idx] if name_idx < len(vals) else None
         if name is None or (isinstance(name, float) and pd.isna(name)) or not str(name).strip():
             continue
         name = re.sub(r"\s+", " ", str(name)).strip()
-        if norm_header(name) in ("total", "grand total"):
+        if norm_header(name).startswith(("total", "grand total")):
             continue
-        rec = {"name": name}
+        rec = {"name": name, "region": region}
         for f, i in field_idx.items():
             rec[f] = parse_number(vals[i]) if i < len(vals) else 0.0
         if week_idx is not None and week_idx < len(vals) and vals[week_idx] is not None:
@@ -266,19 +282,41 @@ def read_export(filename, data):
 
 # ── Name matching ─────────────────────────────────────────────────────────────
 class LocationMatcher:
-    def __init__(self, master_names, aliases=None):
-        self.master = {}
-        for n in master_names:
+    def __init__(self, master_names, aliases=None, regions=None):
+        self.master, self.region = {}, {}
+        for i, n in enumerate(master_names):
             if str(n).strip():
                 self.master.setdefault(location_key(n), str(n).strip())
+                if regions is not None:
+                    self.region.setdefault(location_key(n), str(regions[i] or "").strip().lower())
         self.aliases = {}
         for alias, target in (aliases or {}).items():
             if str(alias).strip() and str(target).strip():
                 self.aliases[location_key(alias)] = str(target).strip()
 
-    def resolve(self, raw):
-        k = location_key(raw)
-        return self.aliases.get(k) or self.master.get(k)
+    def resolve(self, raw, region=""):
+        """Master name for raw, or None. With an Australian region, 'Epping' in
+        Victoria resolves to 'Epping VIC' rather than the NSW 'Epping'."""
+        abbr = AU_STATES.get(str(region or "").strip().lower())
+        if not abbr:
+            k = location_key(raw)
+            return self.aliases.get(k) or self.master.get(k)
+        for cand in (f"{raw} {abbr}", raw):
+            k = location_key(cand)
+            if k in self.aliases:
+                return self.aliases[k]
+            loc = self.master.get(k)
+            if loc and self.region.get(k, "") in ("", region.strip().lower()):
+                return loc
+        return None
+
+    def unknown_label(self, raw, region=""):
+        """Name to show for an unmatched row: 'Epping VIC' when 'Epping' exists
+        but in another state."""
+        abbr = AU_STATES.get(str(region or "").strip().lower())
+        if abbr and location_key(raw) in self.master:
+            return f"{raw} {abbr}"
+        return raw
 
     def suggestions(self, raw, n=3):
         keys = difflib.get_close_matches(location_key(raw), list(self.master), n=n, cutoff=0.6)
@@ -306,7 +344,8 @@ def combine(exports, master, aliases=None):
     Returns dict with membership / revenue DataFrames (keyed by master
     location name), unknown names, issues and the detected week.
     """
-    matcher = LocationMatcher(master["Location"].tolist(), aliases)
+    matcher = LocationMatcher(master["Location"].tolist(), aliases,
+                              master["Region"].tolist() if "Region" in master.columns else None)
     country_of = {location_key(r["Location"]): str(r.get("Country", "")).strip()
                   for _, r in master.iterrows()}
 
@@ -349,8 +388,10 @@ def combine(exports, master, aliases=None):
             if is_excluded(raw):
                 excluded.add(raw)
                 continue
-            loc = matcher.resolve(raw)
+            region = r.get("region", "") or ""
+            loc = matcher.resolve(raw, region)
             if loc is None:
+                raw = matcher.unknown_label(raw, region)
                 u = unknown.setdefault(raw, {"sources": set(),
                                              "suggestions": matcher.suggestions(raw),
                                              "active": 0.0})
