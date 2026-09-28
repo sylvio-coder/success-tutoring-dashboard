@@ -20,6 +20,9 @@ class FakeWorksheet:
         self.grid_rows = max(len(rows), 1)       # real grid size, like a full sheet
         self.row_count = self.grid_rows          # gspread's cached copy (can go stale)
         self.formats_copied = []
+        self.banded_ranges = []                  # [{"bandedRangeId": ...}]
+        self.tables = []                         # Sheets tables (styled by Sheets)
+        self.frozen_rows = 0
 
     # values as displayed: formulas shown as "<f>"
     def _display(self, v):
@@ -33,6 +36,10 @@ class FakeWorksheet:
         self._trim()
         w = max((len(r) for r in self.cells), default=0)
         return [[self._display(c) for c in r] + [""] * (w - len(r)) for r in self.cells]
+
+    def row_values(self, row):
+        vals = self.get_all_values()
+        return [v for v in vals[row - 1]] if row <= len(vals) else []
 
     def get_all_records(self):
         vals = self.get_all_values()
@@ -92,7 +99,13 @@ class FakeWorksheet:
 
 
 class FakeSpreadsheet:
-    def __init__(self, tabs):
+    FORMAT_REQUESTS = ("repeatCell", "updateSheetProperties", "updateDimensionProperties",
+                       "autoResizeDimensions")
+
+    def __init__(self, tabs, title="Weekly Membership - App (TEST)"):
+        self.title = title
+        self.format_requests = []
+        self._next_band = 100
         self.tabs = {}
         for i, (title, rows) in enumerate(tabs.items()):
             self.tabs[title] = FakeWorksheet(self, title, rows, i + 1)
@@ -109,7 +122,10 @@ class FakeSpreadsheet:
 
     def fetch_sheet_metadata(self, params=None):
         return {"sheets": [{"properties": {"sheetId": w.id, "title": w.title,
-                                           "gridProperties": {"rowCount": w.grid_rows}}}
+                                           "gridProperties": {"rowCount": w.grid_rows,
+                                                              "columnCount": 26}},
+                            "bandedRanges": list(w.banded_ranges),
+                            "tables": list(w.tables)}
                            for w in self.tabs.values()]}
 
     def _by_id(self, sid):
@@ -117,7 +133,26 @@ class FakeSpreadsheet:
 
     def batch_update(self, body):
         for req in body["requests"]:
-            if "deleteDimension" in req:
+            if "deleteDimension" in req and req["deleteDimension"]["range"]["dimension"] == "COLUMNS":
+                r = req["deleteDimension"]["range"]
+                ws = self._by_id(r["sheetId"])
+                for row in ws.cells:
+                    del row[r["startIndex"]:r["endIndex"]]
+            elif any(k in req for k in self.FORMAT_REQUESTS):
+                self.format_requests.append(req)
+                if "updateSheetProperties" in req:
+                    p = req["updateSheetProperties"]["properties"]
+                    self._by_id(p["sheetId"]).frozen_rows = p["gridProperties"]["frozenRowCount"]
+            elif "deleteBanding" in req:
+                bid = req["deleteBanding"]["bandedRangeId"]
+                for w in self.tabs.values():
+                    w.banded_ranges = [b for b in w.banded_ranges if b["bandedRangeId"] != bid]
+            elif "addBanding" in req:
+                br = req["addBanding"]["bandedRange"]
+                self._next_band += 1
+                self._by_id(br["range"]["sheetId"]).banded_ranges.append(
+                    {"bandedRangeId": self._next_band, **br})
+            elif "deleteDimension" in req:
                 r = req["deleteDimension"]["range"]
                 ws = self._by_id(r["sheetId"])
                 del ws.cells[r["startIndex"]:r["endIndex"]]

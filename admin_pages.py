@@ -399,12 +399,13 @@ def _master_editor(vl_ws, vl_headers, master, df_wm, clear_cache):
         view = view[view["Location"].str.contains(search, case=False, regex=False)]
 
     show = ["Location"] + [c for c in EDITABLE + ["Location Start"] if c in view.columns] + \
-        [c for c in ["Months old", "Onboarding Week", "Active members",
+        [c for c in ["Weeks old", "Months old", "Onboarding Week", "Active members",
                      "Last week with members"] if c in view.columns]
     cfg = {c: st.column_config.SelectboxColumn(c, options=_options(master, c))
            for c in EDITABLE if c in view.columns}
     cfg["Location"] = st.column_config.TextColumn("Location", disabled=True)
-    for c in ["Months old", "Onboarding Week", "Active members", "Last week with members"]:
+    for c in ["Weeks old", "Months old", "Onboarding Week", "Active members",
+              "Last week with members"]:
         cfg[c] = st.column_config.Column(c, disabled=True)
     with st.expander("Add a new option to a list (e.g. Status 'Closed' or a new GPM)"):
         a1, a2, a3 = st.columns([1, 2, 1])
@@ -503,3 +504,49 @@ def _nz_gst_fix(spreadsheet, clear_cache):
             st.rerun()
         except Exception as e:
             st.error(f"{e}\n\n{WRITE_HINT}")
+
+
+# ── Sheet setup (one-off maintenance) ─────────────────────────────────────────
+def page_sheet_setup(spreadsheet, df_wm, df_rv, clear_cache):
+    import sheet_setup
+    st.markdown('<div class="report-title">Sheet Setup</div>', unsafe_allow_html=True)
+    _subtitle("One-off changes to the Google Sheet itself. Run them on a test copy first.")
+    st.info(f"Connected to: **{spreadsheet.title}**")
+    backup = st.checkbox("I've downloaded a backup of this Sheet (File → Download → Excel)",
+                         key="setup_backup")
+
+    st.markdown("#### Consistent formatting")
+    st.caption("Every tab: Arial 10 and rows aligned to the middle. Tabs that aren't a Sheets "
+               "table also get the same dark header row (frozen), alternating row colours, "
+               "number formats ($, dates, decimals) and fitted column widths. Only formatting "
+               "changes; no values.")
+    if st.button("Apply formatting", disabled=not backup, key="setup_format"):
+        try:
+            report = sheet_setup.apply_formatting(spreadsheet)
+            st.success("Formatting applied.")
+            st.dataframe(pd.DataFrame(report, columns=["Tab", "Applied"]), hide_index=True,
+                         use_container_width=True)
+        except Exception as e:
+            st.error(f"Formatting failed: {e}")
+
+    st.markdown("#### Vlookup: Weeks old instead of Months old")
+    st.caption("Replaces 'Months old' with a 'Weeks old' formula per location: week 1 is the "
+               "first week the location had active members in Weekly Membership, counted to "
+               "the latest week in the Sheet. Removes 'Onboarding Week' and 'Onboarding "
+               "Members' from Vlookup, and the 'Age (Months)', 'Onboarding week' and "
+               "'Onboarding Members' columns from Weekly Membership and Revenue. The dashboard "
+               "works out age in months and onboarding from Weeks old.")
+    if st.button("Switch to Weeks old", disabled=not backup, key="setup_weeks"):
+        try:
+            for line in sheet_setup.switch_to_weeks_old(spreadsheet):
+                st.write("• " + line)
+            clear_cache()
+            broken = sheet_setup.broken_formulas(spreadsheet)
+            if broken:
+                st.error("Some formulas now show #REF!: " +
+                         ", ".join(f"{t} ({n} cells)" for t, n in broken.items()) +
+                         ". Restore from the backup or send me a screenshot.")
+            else:
+                st.success("Done. No broken formulas found in any tab.")
+        except Exception as e:
+            st.error(f"The change failed: {e}")
