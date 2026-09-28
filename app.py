@@ -13,6 +13,7 @@ from streamlit_echarts import st_echarts
 from google.oauth2.service_account import Credentials
 import anthropic
 import os
+import admin_pages
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -21,7 +22,7 @@ SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
 ANTHROPIC_KEY = st.secrets.get("ANTHROPIC_API_KEY", "") or os.getenv("ANTHROPIC_API_KEY", "")
 SERVICE_ACCOUNT_FILE = "service_account.json"
 SCOPES_SHEETS = [
-    "https://www.googleapis.com/auth/spreadsheets.readonly",
+    "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive.readonly",
 ]
 
@@ -2585,6 +2586,7 @@ def report_allowed(report, allowed_tabs):
     return num in tabs or name.lower() in tabs or report.lower() in tabs
 
 REPORTS = [r for r in REPORTS if report_allowed(r, st.session_state.get("allowed_tabs", []))]
+ADMIN_PAGES = ["⚙ Weekly Upload", "⚙ Locations"] if st.session_state.get("access_level") == "admin" else []
 if not REPORTS:
     st.warning("⛔ No reports are assigned to your account. Please contact your administrator."); st.stop()
 
@@ -2614,9 +2616,13 @@ with st.sidebar:
     st.markdown("---")
     st.markdown(f'<div style="color:{BI_ACCENT};font-size:0.72em;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;padding:4px 0 6px 2px">📊 Reports</div>',
                 unsafe_allow_html=True)
-    if st.session_state.get("selected_report") not in REPORTS:
+    if st.session_state.get("selected_report") not in REPORTS + ADMIN_PAGES:
         st.session_state["selected_report"] = REPORTS[0]
-    for r in REPORTS:
+    for r in REPORTS + ADMIN_PAGES:
+        if ADMIN_PAGES and r == ADMIN_PAGES[0]:
+            st.markdown("---")
+            st.markdown(f'<div style="color:{BI_ACCENT};font-size:0.72em;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;padding:4px 0 6px 2px">⚙ Admin</div>',
+                        unsafe_allow_html=True)
         is_active = st.session_state["selected_report"] == r
         bg = f"rgba(255,215,0,0.12)" if is_active else "transparent"
         border = f"#ffd700" if is_active else "transparent"
@@ -2688,3 +2694,7 @@ elif selected_report=="9 · Onboarding Progress":      report_onboarding(df_wm)
 elif selected_report=="10 · Revenue":                 report_revenue(df_rv)
 elif selected_report=="11 · AI Outlier Analysis":     report_claude_outliers(df_wm)
 elif selected_report=="12 · Location Performance Analysis": report_location_performance(df_wm, df_rv)
+elif selected_report in ADMIN_PAGES:
+    spreadsheet = get_sheets_client().open_by_key(SHEET_ID)
+    page = admin_pages.page_weekly_upload if selected_report == "⚙ Weekly Upload" else admin_pages.page_locations
+    page(spreadsheet, df_wm, df_rv, st.cache_data.clear)
