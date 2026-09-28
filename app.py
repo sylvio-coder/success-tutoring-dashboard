@@ -197,12 +197,22 @@ def get_sheets_client():
         creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES_SHEETS)
     return gspread.authorize(creds)
 @st.cache_data(ttl=300)
-def load_sheet_data(tab_name):
-    client = get_sheets_client()
-    sheet = client.open_by_key(SHEET_ID)
-    worksheet = sheet.worksheet(tab_name)
-    data = worksheet.get_all_records()
-    return pd.DataFrame(data)
+def load_sheet_data(tab_name, attempts=3):
+    """Read a whole tab. Retries brief network failures (e.g. 'Response ended prematurely');
+    a missing tab fails straight away."""
+    import time
+    for attempt in range(attempts):
+        try:
+            client = get_sheets_client()
+            sheet = client.open_by_key(SHEET_ID)
+            worksheet = sheet.worksheet(tab_name)
+            return pd.DataFrame(worksheet.get_all_records())
+        except gspread.exceptions.WorksheetNotFound:
+            raise
+        except Exception:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(2 ** attempt)
 
 @st.cache_data(ttl=300)
 def load_weekly_membership():
@@ -219,52 +229,62 @@ def load_weekly_membership():
 
 
 @st.cache_data(ttl=300)
+def _load_school_holidays():
+    df = load_sheet_data("School Holidays")
+    df["Year"]       = pd.to_numeric(df["Year"],       errors="coerce")
+    df["Start_Week"] = pd.to_numeric(df["Start_Week"], errors="coerce")
+    df["End_Week"]   = pd.to_numeric(df["End_Week"],   errors="coerce")
+    return df.dropna(subset=["Year","Start_Week","End_Week"])
+
 def load_school_holidays():
     try:
-        df = load_sheet_data("School Holidays")
-        df["Year"]       = pd.to_numeric(df["Year"],       errors="coerce")
-        df["Start_Week"] = pd.to_numeric(df["Start_Week"], errors="coerce")
-        df["End_Week"]   = pd.to_numeric(df["End_Week"],   errors="coerce")
-        return df.dropna(subset=["Year","Start_Week","End_Week"])
-    except:
+        return _load_school_holidays()
+    except Exception:
         return pd.DataFrame()
 
 @st.cache_data(ttl=300)
+def _load_revenue():
+    df = load_sheet_data("Revenue")
+    df = df.rename(columns={"Location": "Success Tutoring - Business name"})
+    df["Date"] = pd.to_datetime(df["Date"], dayfirst=True, errors="coerce")
+    for c in ["# Active Students","Total Sessions","Gross Revenue","Net Revenue",
+              "Student Visits","Revenue per Session","Revenue per Student",
+              "Sessions per Student","Student per Session",
+              "Sessions per Student Visit","Student Visits per Session"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c].astype(str).str.replace("[$,]","",regex=True), errors="coerce").fillna(0)
+    return df
+
 def load_revenue():
     try:
-        df = load_sheet_data("Revenue")
-        df = df.rename(columns={"Location": "Success Tutoring - Business name"})
-        df["Date"] = pd.to_datetime(df["Date"], dayfirst=True, errors="coerce")
-        for c in ["# Active Students","Total Sessions","Gross Revenue","Net Revenue",
-                  "Student Visits","Revenue per Session","Revenue per Student",
-                  "Sessions per Student","Student per Session",
-                  "Sessions per Student Visit","Student Visits per Session"]:
-            if c in df.columns:
-                df[c] = pd.to_numeric(df[c].astype(str).str.replace("[$,]","",regex=True), errors="coerce").fillna(0)
-        return df
+        return _load_revenue()
     except Exception as e:
-        st.error(f"Could not load Revenue sheet: {e}")
+        st.error(f"Could not load the Revenue sheet ({e}). Click Refresh data to try again.")
         return pd.DataFrame()
 
 @st.cache_data(ttl=300)
+def _load_vlookup():
+    df = load_sheet_data("Vlookup")
+    df = df.rename(columns={
+        "Location": "Success Tutoring - Business name",
+        "Location Start": "Location Start Date",
+        "Months old": "Age (Months)",
+        "Onboarding Week": "Onboarding week",
+    })
+    for c in ["Onboarding week","Onboarding Members","Age (Months)","Weeks old"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+    if "Weeks old" in df.columns:
+        # Week 1 = first week with members; months = whole months elapsed since then.
+        elapsed_days = (df["Weeks old"] - 1).clip(lower=0) * 7
+        df["Age (Months)"] = (elapsed_days / 30.4375).astype(int)
+    return df
+
 def load_vlookup():
+    """Cached Vlookup; a failed read is not cached, so the next page load tries again."""
     try:
-        df = load_sheet_data("Vlookup")
-        df = df.rename(columns={
-            "Location": "Success Tutoring - Business name",
-            "Location Start": "Location Start Date",
-            "Months old": "Age (Months)",
-            "Onboarding Week": "Onboarding week",
-        })
-        for c in ["Onboarding week","Onboarding Members","Age (Months)","Weeks old"]:
-            if c in df.columns:
-                df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
-        if "Weeks old" in df.columns:
-            # Week 1 = first week with members; months = whole months elapsed since then.
-            elapsed_days = (df["Weeks old"] - 1).clip(lower=0) * 7
-            df["Age (Months)"] = (elapsed_days / 30.4375).astype(int)
-        return df
-    except:
+        return _load_vlookup()
+    except Exception:
         return pd.DataFrame()
 
 @st.cache_data(ttl=300)
