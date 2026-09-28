@@ -395,6 +395,16 @@ def combine(exports, master, aliases=None):
                 t["any"] += abs(float(r.get(f, 0) or 0))
     empty_inhouse = {k: t["name"] for k, t in inhouse.items() if t["any"] == 0}
 
+    # Hapana's members export separates same-named sites by Region, but its
+    # revenue export has no Region and adds them together into one row.
+    shared = {}
+    for e in exports:
+        if e["kind"] == HAPANA_MEMBERS:
+            for _, r in e["rows"].iterrows():
+                if r.get("region"):
+                    shared.setdefault(location_key(r["name"]), set()).add(r["region"])
+    shared = {k: v for k, v in shared.items() if len(v) > 1}
+
     errors, warnings, info = [], [], []
     for e in exports:
         warnings.extend(e["warnings"])
@@ -443,6 +453,17 @@ def combine(exports, master, aliases=None):
                 excluded.add(raw)
                 continue
             if crm == "In-house" and location_key(raw) in empty_inhouse:
+                continue
+            if e["kind"] == HAPANA_REVENUE and not r.get("region") and \
+                    location_key(raw) in shared:
+                sites = sorted(filter(None, (matcher.resolve(raw, reg, crm)
+                                             for reg in shared[location_key(raw)])))
+                warnings.append(
+                    f"Hapana revenue has one '{raw}' row for {len(sites)} sites "
+                    f"({', '.join(sites)}): Hapana adds same-named sites together in that "
+                    "report, so this row is left out and those sites get no revenue this "
+                    "week. To fix it at the source, give the sites different names in Hapana "
+                    "or add Region to the revenue report.")
                 continue
             region = r.get("region", "") or ""
             loc = matcher.resolve(raw, region, crm)

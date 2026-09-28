@@ -362,3 +362,29 @@ def test_trading_site_with_nothing_is_warned():
         "members-report-2026-09-14-to-2026-09-20.xlsx", members)],
         MASTER.assign(Status="Trading"))
     assert any("Burwood is Trading" in w for w in res["warnings"])
+
+
+def test_hapana_revenue_row_shared_by_two_sites_is_left_out():
+    members = xlsx([
+        ["Country", "Region", "Business name", "Date - Week/Year", "# Active members",
+         "# Suspended members", "# Cancelled members", "# New members"],
+        ["Australia", "New South Wales", "Epping", "38/2026", 100, 12, 0, 2],
+        [None, "Victoria", "Epping", "38/2026", 46, 10, 0, 1],
+        [None, None, "Belmont", "38/2026", 17, 3, 0, 0],
+    ])
+    revenue = xlsx([
+        ["Business name", "Date - Week/Year", "# Active members - Date range end",
+         "Total Sessions", "Average Gross Revenue per Location"],
+        ["Epping", "38/2026", 146, 45, "10,685"],
+        ["Belmont", "38/2026", 17, 13, "1,088"],
+    ])
+    master = MASTER.assign(Region=["New South Wales", "New South Wales", "Victoria",
+                                   "Victoria", "Western Australia", "Auckland",
+                                   "New South Wales", "Western Australia"])
+    res = ingest.combine([ingest.read_export("Weekly Membership.xlsx", members),
+                          ingest.read_export("SA - Revenue Location Summary.xlsx", revenue)],
+                         master)
+    assert res["errors"] == []
+    assert res["revenue"]["Location"].tolist() == ["Success Tutoring - Belmont"]
+    w = next(w for w in res["warnings"] if "one 'Epping' row" in w)
+    assert "Success Tutoring - Epping, Success Tutoring - Epping VIC" in w
