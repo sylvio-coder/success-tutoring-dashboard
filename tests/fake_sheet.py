@@ -22,6 +22,7 @@ class FakeWorksheet:
         self.formats_copied = []
         self.banded_ranges = []                  # [{"bandedRangeId": ...}]
         self.tables = []                         # Sheets tables (styled by Sheets)
+        self.hidden_banding = False              # bands the metadata doesn't list
         self.frozen_rows = 0
 
     # values as displayed: formulas shown as "<f>"
@@ -121,6 +122,7 @@ class FakeSpreadsheet:
         return ws
 
     def fetch_sheet_metadata(self, params=None):
+        self.metadata_params = params
         return {"sheets": [{"properties": {"sheetId": w.id, "title": w.title,
                                            "gridProperties": {"rowCount": w.grid_rows,
                                                               "columnCount": 26}},
@@ -149,6 +151,10 @@ class FakeSpreadsheet:
                     w.banded_ranges = [b for b in w.banded_ranges if b["bandedRangeId"] != bid]
             elif "addBanding" in req:
                 br = req["addBanding"]["bandedRange"]
+                if self._by_id(br["range"]["sheetId"]).hidden_banding:
+                    raise gspread.exceptions.GSpreadException(
+                        "Invalid addBanding: You cannot add alternating background colors "
+                        "to a range that already has alternating background colors.")
                 self._next_band += 1
                 self._by_id(br["range"]["sheetId"]).banded_ranges.append(
                     {"bandedRangeId": self._next_band, **br})

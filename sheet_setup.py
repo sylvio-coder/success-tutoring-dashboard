@@ -60,12 +60,30 @@ def _table_colours(meta):
     return HEADER_BG, BAND_BG
 
 
+def _metadata(spreadsheet):
+    try:
+        return spreadsheet.fetch_sheet_metadata(
+            params={"fields": "sheets(properties,bandedRanges,tables)"})
+    except Exception:
+        return spreadsheet.fetch_sheet_metadata()
+
+
+def _already_banded(err):
+    return "alternating background colors" in str(err)
+
+
 def apply_formatting(spreadsheet):
-    """Returns a list of (tab, what was done)."""
-    meta = spreadsheet.fetch_sheet_metadata()
+    """Returns a list of (tab, what was done).
+
+    Each tab is formatted in its own request, so one tab can't block the
+    rest. A tab that already has alternating colours the API doesn't list
+    (e.g. a Sheets table) keeps them and gets everything else.
+    """
+    meta = _metadata(spreadsheet)
     header_bg, band_bg = _table_colours(meta)
-    requests, report = [], []
+    report = []
     for sheet in meta["sheets"]:
+        requests = []
         p = sheet["properties"]
         sid, title = p["sheetId"], p["title"]
         grid = p.get("gridProperties", {})
@@ -80,12 +98,14 @@ def apply_formatting(spreadsheet):
                       "userEnteredFormat.textFormat.fontSize,"
                       "userEnteredFormat.verticalAlignment"}})
         if title in FONT_ONLY_TABS:
+            spreadsheet.batch_update({"requests": requests})
             report.append((title, "font only (merged header layout)"))
             continue
         if is_table:
             # A Sheets table styles its own header, bands and column types.
             requests.append({"autoResizeDimensions": {"dimensions": {
                 "sheetId": sid, "dimension": "COLUMNS", "startIndex": 0, "endIndex": ncols}}})
+            spreadsheet.batch_update({"requests": requests})
             report.append((title, "font (table keeps its own styling)"))
             continue
 
@@ -110,9 +130,9 @@ def apply_formatting(spreadsheet):
                           "endIndex": nrows},
                 "properties": {"pixelSize": 21}, "fields": "pixelSize"}},
         ]
-        for b in sheet.get("bandedRanges", []):
-            requests.append({"deleteBanding": {"bandedRangeId": b["bandedRangeId"]}})
-        requests.append({"addBanding": {"bandedRange": {
+        banding = [{"deleteBanding": {"bandedRangeId": b["bandedRangeId"]}}
+                   for b in sheet.get("bandedRanges", [])]
+        banding.append({"addBanding": {"bandedRange": {
             "range": _rng(sid, 0, nrows, 0, width),
             "rowProperties": {"headerColor": header_bg, "firstBandColor": WHITE,
                               "secondBandColor": band_bg}}}})
@@ -127,9 +147,15 @@ def apply_formatting(spreadsheet):
                     "fields": "userEnteredFormat.numberFormat"}})
         requests.append({"autoResizeDimensions": {"dimensions": {
             "sheetId": sid, "dimension": "COLUMNS", "startIndex": 0, "endIndex": width}}})
-        report.append((title, f"font, header row, alternating rows, "
-                              f"{formatted} number formats"))
-    spreadsheet.batch_update({"requests": requests})
+        try:
+            spreadsheet.batch_update({"requests": requests + banding})
+            bands = "alternating rows"
+        except Exception as e:
+            if not _already_banded(e):
+                raise
+            spreadsheet.batch_update({"requests": requests})
+            bands = "kept its existing alternating rows"
+        report.append((title, f"font, header row, {bands}, {formatted} number formats"))
     return report
 
 
