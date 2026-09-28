@@ -170,6 +170,27 @@ def test_rejects_monthly_and_unknown_files():
         ingest.read_export("other.xlsx", xlsx([["Full Name", "Email"], ["x", "y"]]))
 
 
+def test_hapana_export_with_data_on_second_tab():
+    wb = openpyxl.Workbook()
+    info = wb.active
+    info.title = "Export info"
+    for r in [["Exported at", "28/09/2026, 5:37 am (GMT+00:00)"], ["Filters"],
+              ["Date range", "21/09/2026 - 27/09/2026"]]:
+        info.append(r)
+    data = wb.create_sheet("Weekly Membership")
+    for r in [["Success Tutoring - Business name", "Date - Week/Year", "# Active members",
+               "# Suspended members", "# Cancelled members", "# New members"],
+              ["Success Tutoring - Auburn", "39/2026", 84, 9, 2, 3]]:
+        data.append(r)
+    buf = io.BytesIO()
+    wb.save(buf)
+    e = ingest.read_export("Weekly Membership (4).xlsx", buf.getvalue())
+    assert e["kind"] == ingest.HAPANA_MEMBERS
+    assert e["week_end"] == date(2026, 9, 27)
+    assert e["rows"].iloc[0]["active"] == 84
+    assert e["warnings"] == []
+
+
 def test_csv_export():
     data = (b"Location Name,Sessions,Gross Revenue,Net Revenue (ex tax)\n"
             b"Burwood,44,\"4,863.23\",$4429.79\n")

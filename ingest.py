@@ -142,12 +142,15 @@ def is_excluded(name):
 
 
 # ── Reading one export ────────────────────────────────────────────────────────
-def _read_grid(filename, data):
+def _read_grids(filename, data):
+    """All tabs of the file as grids (Hapana puts 'Export info' on the first
+    tab and the data on the second)."""
     if filename.lower().endswith(".csv"):
-        return pd.read_csv(io.BytesIO(data), header=None, dtype=str,
-                           keep_default_na=False, skip_blank_lines=False,
-                           on_bad_lines="skip", engine="python")
-    return pd.read_excel(io.BytesIO(data), header=None, dtype=object)
+        return [pd.read_csv(io.BytesIO(data), header=None, dtype=str,
+                            keep_default_na=False, skip_blank_lines=False,
+                            on_bad_lines="skip", engine="python")]
+    return list(pd.read_excel(io.BytesIO(data), header=None, dtype=object,
+                              sheet_name=None).values())
 
 
 def _find_header(grid):
@@ -186,10 +189,15 @@ def read_export(filename, data):
     columns 'name' plus the standard fields for that kind.
     """
     try:
-        grid = _read_grid(filename, data)
+        grids = _read_grids(filename, data)
     except Exception as e:
         raise ExportError(f"{filename}: could not be read ({e})")
-    hdr, kind = _find_header(grid)
+    grid, hdr, kind = None, None, None
+    for g in grids:
+        hdr, kind = _find_header(g)
+        if kind is not None:
+            grid = g
+            break
     if kind is None:
         raise ExportError(f"{filename}: not recognised as a Hapana or in-house "
                           "members/revenue export")
@@ -232,7 +240,9 @@ def read_export(filename, data):
 
     # Work out the week this export covers.
     week_end = None
-    rng = _date_range_from_cells(v for row in grid.iloc[:hdr].values.tolist() for v in row) \
+    info_cells = [v for row in grid.iloc[:hdr].values.tolist() for v in row] + \
+        [v for g in grids if g is not grid for row in g.head(40).values.tolist() for v in row]
+    rng = _date_range_from_cells(info_cells) \
         or _date_range_from_filename(filename)
     if rng and all(rng):
         start, end = rng
