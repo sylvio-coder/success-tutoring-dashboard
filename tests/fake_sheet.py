@@ -6,9 +6,9 @@ from gspread.utils import a1_to_rowcol
 
 
 def _shift_formula(f, delta):
-    # Relative refs like F12 -> F13; absolute ($F$12) left alone.
-    return re.sub(r"(?<![$A-Z])([A-Z]{1,2})(\d+)\b",
-                  lambda m: f"{m.group(1)}{int(m.group(2)) + delta}", f)
+    # Like Google Sheets: F12 -> F13 and $F12 -> $F13 (row relative); F$12 and $F$12 stay.
+    return re.sub(r"(?<![$A-Z])(\$?[A-Z]{1,2})(\$?)(\d+)\b",
+                  lambda m: m.group(0) if m.group(2) else f"{m.group(1)}{int(m.group(3)) + delta}", f)
 
 
 class FakeWorksheet:

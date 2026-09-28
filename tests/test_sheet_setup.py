@@ -1,4 +1,5 @@
 import sheet_setup
+import pytest
 from fake_sheet import FakeSpreadsheet
 
 
@@ -91,3 +92,40 @@ def test_formatting_keeps_existing_unlisted_bands():
     assert "alternating rows" in report["Revenue"]
     assert ss.worksheet("Weekly Membership").frozen_rows == 1     # rest still applied
     assert ss.worksheet("Revenue").banded_ranges                  # other tabs unaffected
+
+
+def test_location_start_formula_text():
+    f = sheet_setup.location_start_formula(5, "A", "C", "D")
+    assert f == ("=IF(COUNTIFS('Weekly Membership'!$A:$A,$A5,'Weekly Membership'!$D:$D,\">0\")"
+                 "=0,\"\",MINIFS('Weekly Membership'!$C:$C,'Weekly Membership'!$A:$A,$A5,"
+                 "'Weekly Membership'!$D:$D,\">0\"))")
+    assert sheet_setup.weeks_from_start_formula(5, "G", "C") == \
+        "=IF($G5=\"\",\"\",INT((MAX('Weekly Membership'!$C:$C)-$G5)/7)+1)"
+
+
+def test_link_location_start():
+    ss = make()
+    sheet_setup.switch_to_weeks_old(ss)
+    assert not sheet_setup.start_is_formula(ss.worksheet("Vlookup"),
+                                            ss.worksheet("Vlookup").row_values(1))
+    done = sheet_setup.link_location_start(ss)
+    vl = ss.worksheet("Vlookup").cells
+    assert vl[0] == ["Location", "Stage", "Status", "GPM", "Country", "Region",
+                     "Location Start", "Weeks old"]           # headers unchanged
+    for row in (2, 3):
+        assert vl[row - 1][6] == sheet_setup.location_start_formula(row, "A", "C", "D")
+        assert vl[row - 1][7] == sheet_setup.weeks_from_start_formula(row, "G", "C")
+    fmt = [r["repeatCell"] for r in ss.format_requests if "repeatCell" in r][-1]
+    assert fmt["range"]["startColumnIndex"] == 6
+    assert fmt["cell"]["userEnteredFormat"]["numberFormat"]["type"] == "DATE"
+    assert any("Location Start is now the first week" in d for d in done)
+    assert sheet_setup.start_is_formula(ss.worksheet("Vlookup"), ss.worksheet("Vlookup").row_values(1))
+    # Running it again is harmless.
+    sheet_setup.link_location_start(ss)
+    assert ss.worksheet("Vlookup").cells[1][6] == sheet_setup.location_start_formula(2, "A", "C", "D")
+
+
+def test_link_location_start_needs_weeks_old():
+    ss = make()        # still has 'Months old'
+    with pytest.raises(ValueError, match="Weeks old"):
+        sheet_setup.link_location_start(ss)

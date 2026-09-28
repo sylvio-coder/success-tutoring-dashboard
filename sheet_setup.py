@@ -167,6 +167,70 @@ def weeks_old_formula(row, name_col, date_col, active_col, tab="Weekly Membershi
             f'INT((MAX({dates})-MINIFS({dates},{names},$A{row},{active},">0"))/7)+1)')
 
 
+def location_start_formula(row, name_col, date_col, active_col, tab="Weekly Membership"):
+    """First week (Date) the location had active members; blank if none yet."""
+    t = f"'{tab}'"
+    names, dates, active = (f"{t}!${c}:${c}" for c in (name_col, date_col, active_col))
+    return (f'=IF(COUNTIFS({names},$A{row},{active},">0")=0,"",'
+            f'MINIFS({dates},{names},$A{row},{active},">0"))')
+
+
+def weeks_from_start_formula(row, start_col, date_col, tab="Weekly Membership"):
+    """Weeks old counted from Location Start: week 1 = the start week, to the latest week."""
+    dates = f"'{tab}'!${date_col}:${date_col}"
+    return f'=IF(${start_col}{row}="","",INT((MAX({dates})-${start_col}{row})/7)+1)'
+
+
+def link_location_start(spreadsheet):
+    """Vlookup: Location Start = first week with active members (formula), and Weeks old
+    counted from Location Start. Returns a list of change descriptions."""
+    wm_headers = spreadsheet.worksheet("Weekly Membership").row_values(1)
+    name_col = _col_letter(wm_headers.index("Success Tutoring - Business name"))
+    date_col = _col_letter(wm_headers.index("Date"))
+    active_col = _col_letter(wm_headers.index("# Active members"))
+
+    vl = spreadsheet.worksheet("Vlookup")
+    values = vl.get_all_values()
+    headers = [h.strip() for h in values[0]]
+    for needed in ("Location Start", "Weeks old"):
+        if needed not in headers:
+            raise ValueError(f"Vlookup has no '{needed}' column. Run 'Switch to Weeks old' first.")
+    start_i, weeks_i = headers.index("Location Start"), headers.index("Weeks old")
+    start_l, weeks_l = _col_letter(start_i), _col_letter(weeks_i)
+    last = max((i + 1 for i, r in enumerate(values) if r and str(r[0]).strip()), default=1)
+    if last < 2:
+        return ["Vlookup has no locations; nothing to change."]
+    rows = range(2, last + 1)
+    vl.batch_update([
+        {"range": f"{start_l}2:{start_l}{last}",
+         "values": [[location_start_formula(r, name_col, date_col, active_col)] for r in rows]},
+        {"range": f"{weeks_l}2:{weeks_l}{last}",
+         "values": [[weeks_from_start_formula(r, start_l, date_col)] for r in rows]},
+    ], value_input_option="USER_ENTERED")
+    # Show the start formula's result as a date.
+    spreadsheet.batch_update({"requests": [{"repeatCell": {
+        "range": {"sheetId": vl.id, "startRowIndex": 1, "endRowIndex": last,
+                  "startColumnIndex": start_i, "endColumnIndex": start_i + 1},
+        "cell": {"userEnteredFormat": {"numberFormat": {"type": "DATE", "pattern": "d-mmm-yyyy"}}},
+        "fields": "userEnteredFormat.numberFormat"}}]})
+    return [f"Vlookup: Location Start is now the first week with active members (formula on "
+            f"{last - 1} locations; blank until a location has members)",
+            "Vlookup: Weeks old now counts from Location Start (week 1 = the start week)"]
+
+
+def start_is_formula(ws, headers):
+    """True when Vlookup's Location Start column is calculated (checked on the last row)."""
+    if "Location Start" not in headers:
+        return False
+    values = ws.get_all_values()
+    last = len(values)
+    if last < 2:
+        return False
+    cell = rowcol_to_a1(last, headers.index("Location Start") + 1)
+    got = ws.get(f"{cell}:{cell}", value_render_option="FORMULA")
+    return bool(got and got[0] and str(got[0][0]).startswith("="))
+
+
 def _col_letter(i):
     return rowcol_to_a1(1, i + 1)[:-1]
 

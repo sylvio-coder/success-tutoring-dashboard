@@ -148,6 +148,24 @@ def test_locations_page_adds_new_location(ss):
     assert vl[-1][7] == f"=DATEDIF(G{len(vl)},TODAY(),\"M\")"
 
 
+def test_locations_page_new_location_uses_start_formula(ss):
+    # Once Location Start is a formula, the form has no date box and the new row gets the formula.
+    vl = ss.worksheet("Vlookup")
+    for i in range(1, len(vl.cells)):
+        vl.cells[i][6] = f"=MINIFS(X:X,A:A,$A{i + 1})"
+    at = run_page("page_locations", ss, frames=torquay_frames)
+    assert not at.exception, at.exception
+    assert not [d for d in at.date_input if d.label.startswith("Location start")]
+    for col, v in [("Stage", "Growth"), ("Status", "Trading"), ("GPM", "Sara Walliar"),
+                   ("Country", "Australia"), ("Region", "Victoria")]:
+        at.selectbox(key=f"{col}_Success Tutoring - Torquay").set_value(v)
+    next(b for b in at.button if b.label == "Add to master list").click().run()
+    assert not at.exception, at.exception
+    cells = ss.worksheet("Vlookup").cells
+    assert cells[-1][0] == "Success Tutoring - Torquay"
+    assert cells[-1][6] == f"=MINIFS(X:X,A:A,$A{len(cells)})"
+
+
 def test_locations_page_nz_gst_fix(ss):
     at = run_page("page_locations", ss)
     assert not at.exception, at.exception
