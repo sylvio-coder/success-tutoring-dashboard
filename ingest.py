@@ -233,6 +233,9 @@ def read_export(filename, data):
     field_idx = {}
     for i, h in enumerate(headers):
         f = COLUMNS[kind].get(h)
+        # In-house foundation members count as active members.
+        if kind == INHOUSE_MEMBERS and "foundation" in h:
+            f = "foundation"
         if f and f not in field_idx:
             field_idx[f] = i
     warnings = []
@@ -263,6 +266,8 @@ def read_export(filename, data):
         rec = {"name": name, "region": region}
         for f, i in field_idx.items():
             rec[f] = parse_number(vals[i]) if i < len(vals) else 0.0
+        if "foundation" in rec:
+            rec["active"] = rec.get("active", 0.0) + rec.pop("foundation")
         if week_idx is not None and week_idx < len(vals) and vals[week_idx] is not None:
             w = str(vals[week_idx]).strip()
             if w and w.lower() != "nan":

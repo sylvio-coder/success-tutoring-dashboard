@@ -446,3 +446,21 @@ def test_hapana_blank_repeated_business_name():
     rev = ingest.combine([e], master)["revenue"].set_index("Location")["gross"]
     assert rev["Success Tutoring - Epping VIC"] == 3545
     assert rev["Success Tutoring - Epping"] == 7079
+
+
+def test_inhouse_foundation_members_count_as_active():
+    members = xlsx([
+        ["Location Name", "Active Members", "Foundation Members", "Suspended Members",
+         "Cancelled Members", "New Members"],
+        ["Success Tutoring - Belmont WA", 0, 24, 0, 0, 1],
+        ["Success Tutoring - Burwood", 50, 6, 11, 3, 1],
+        ["Success Tutoring - Epping", 0, 0, 0, 0, 0],
+    ])
+    e = ingest.read_export("members-report-2026-09-14-to-2026-09-20.xlsx", members)
+    assert e["rows"].set_index("name")["active"].to_dict() == {
+        "Success Tutoring - Belmont WA": 24, "Success Tutoring - Burwood": 56,
+        "Success Tutoring - Epping": 0}
+    res = ingest.combine([e], MASTER)
+    mem = res["membership"].set_index("Location")["active"]
+    assert mem["Success Tutoring - Belmont WA"] == 24      # not skipped as empty
+    assert "Success Tutoring - Epping" not in mem.index
