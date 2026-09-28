@@ -6,6 +6,8 @@
   "Weeks old" formula (week 1 = first week with members) and remove the
   onboarding columns from Vlookup, Weekly Membership and Revenue.
 """
+import re
+
 from gspread.utils import rowcol_to_a1
 
 FONT = {"fontFamily": "Arial", "fontSize": 10}
@@ -175,10 +177,18 @@ def location_start_formula(row, name_col, date_col, active_col, tab="Weekly Memb
             f'MINIFS({dates},{names},$A{row},{active},">0"))')
 
 
-def weeks_from_start_formula(row, start_col, date_col, tab="Weekly Membership"):
-    """Weeks old counted from Location Start: week 1 = the start week, to the latest week."""
-    dates = f"'{tab}'!${date_col}:${date_col}"
-    return f'=IF(${start_col}{row}="","",INT((MAX({dates})-${start_col}{row})/7)+1)'
+def weeks_from_start_formula(row, start_col, date_col, name_col=None, active_col=None,
+                             status_col=None, tab="Weekly Membership"):
+    """Weeks old counted from Location Start: week 1 = the start week, up to the latest week,
+    or (when Status is Closed) up to the location's last week with active members."""
+    t = f"'{tab}'"
+    dates = f"{t}!${date_col}:${date_col}"
+    end = f"MAX({dates})"
+    if status_col and name_col and active_col:
+        names, active = f"{t}!${name_col}:${name_col}", f"{t}!${active_col}:${active_col}"
+        end = (f'IF(${status_col}{row}="Closed",MAXIFS({dates},{names},$A{row},{active},">0"),'
+               f'{end})')
+    return f'=IF(${start_col}{row}="","",INT(({end}-${start_col}{row})/7)+1)'
 
 
 def link_location_start(spreadsheet):
@@ -197,6 +207,8 @@ def link_location_start(spreadsheet):
             raise ValueError(f"Vlookup has no '{needed}' column. Run 'Switch to Weeks old' first.")
     start_i, weeks_i = headers.index("Location Start"), headers.index("Weeks old")
     start_l, weeks_l = _col_letter(start_i), _col_letter(weeks_i)
+    status_l = _col_letter(headers.index("Status")) if "Status" in headers else None
+    done = repair_text_dates(spreadsheet)     # formulas can't use dates stored as text
     last = max((i + 1 for i, r in enumerate(values) if r and str(r[0]).strip()), default=1)
     if last < 2:
         return ["Vlookup has no locations; nothing to change."]
@@ -205,7 +217,8 @@ def link_location_start(spreadsheet):
         {"range": f"{start_l}2:{start_l}{last}",
          "values": [[location_start_formula(r, name_col, date_col, active_col)] for r in rows]},
         {"range": f"{weeks_l}2:{weeks_l}{last}",
-         "values": [[weeks_from_start_formula(r, start_l, date_col)] for r in rows]},
+         "values": [[weeks_from_start_formula(r, start_l, date_col, name_col, active_col, status_l)]
+                    for r in rows]},
     ], value_input_option="USER_ENTERED")
     # Show the start formula's result as a date.
     spreadsheet.batch_update({"requests": [{"repeatCell": {
@@ -213,9 +226,41 @@ def link_location_start(spreadsheet):
                   "startColumnIndex": start_i, "endColumnIndex": start_i + 1},
         "cell": {"userEnteredFormat": {"numberFormat": {"type": "DATE", "pattern": "d-mmm-yyyy"}}},
         "fields": "userEnteredFormat.numberFormat"}}]})
-    return [f"Vlookup: Location Start is now the first week with active members (formula on "
-            f"{last - 1} locations; blank until a location has members)",
-            "Vlookup: Weeks old now counts from Location Start (week 1 = the start week)"]
+    return done + [
+        f"Vlookup: Location Start is now the first week with active members (formula on "
+        f"{last - 1} locations; blank until a location has members)",
+        "Vlookup: Weeks old now counts from Location Start (week 1 = the start week); "
+        "for Closed locations it stops at their last week with active members"]
+
+
+DMY_TEXT = re.compile(r"(\d{1,2})/(\d{1,2})/(\d{4})")
+
+
+def repair_text_dates(spreadsheet, tabs=("Weekly Membership", "Revenue")):
+    """Turn Date cells stored as text (e.g. '20/9/2026', written by earlier uploads) into real
+    dates, read as day/month/year. Returns a list of change descriptions."""
+    done = []
+    for title in tabs:
+        ws = spreadsheet.worksheet(title)
+        headers = [h.strip() for h in ws.row_values(1)]
+        if "Date" not in headers:
+            continue
+        letter = _col_letter(headers.index("Date"))
+        last = len(ws.get_all_values())
+        if last < 2:
+            continue
+        cells = ws.get(f"{letter}2:{letter}{last}", value_render_option="UNFORMATTED_VALUE")
+        updates = []
+        for i, row in enumerate(cells, start=2):
+            v = row[0] if row else ""
+            m = DMY_TEXT.fullmatch(v.strip()) if isinstance(v, str) else None
+            if m:
+                d, mth, y = (int(x) for x in m.groups())
+                updates.append({"range": f"{letter}{i}", "values": [[f"{y:04d}-{mth:02d}-{d:02d}"]]})
+        if updates:
+            ws.batch_update(updates, value_input_option="USER_ENTERED")
+            done.append(f"{title}: {len(updates)} date(s) stored as text converted to real dates")
+    return done
 
 
 def start_is_formula(ws, headers):

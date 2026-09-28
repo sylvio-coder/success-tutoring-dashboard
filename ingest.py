@@ -153,7 +153,9 @@ def week_label_to_date(label):
 
 
 def sheet_date(d):
-    return f"{d.day}/{d.month}/{d.year}"
+    """ISO date (2026-09-20). Sheets reads this as a real date in any locale; 20/9/2026
+    stays text in a US-locale Sheet, and 4/10/2026 would be read as 10 April."""
+    return f"{d.year:04d}-{d.month:02d}-{d.day:02d}"
 
 
 def is_excluded(name):
