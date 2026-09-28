@@ -102,7 +102,32 @@ def page_weekly_upload(spreadsheet, df_wm, df_rv, clear_cache):
                 left_out.add(raw)
             elif choice not in (CHOOSE, NEW):
                 extra_aliases[raw] = choice
-        if extra_aliases:
+
+    # Two rows landing on one site: ask which site the in-house row really is.
+    if res["clashes"]:
+        st.markdown("#### Same name in both CRMs")
+        st.caption("Both CRMs use this name for different sites. Pick the site this row "
+                   "is; the choice applies to that CRM only and is remembered.")
+        all_names = master["Location"].tolist()
+        CHOOSE, NEW = "— choose —", "➕ New location (set up on the Locations page)"
+        for c in res["clashes"]:
+            scoped = ingest.scoped_alias(c["crm"], c["name"])
+            sugg = [n for n in c["suggestions"] if n != c["location"]]
+            opts = [CHOOSE, NEW] + sugg + [n for n in all_names if n not in sugg]
+            c1, c2 = st.columns([2, 3])
+            c1.markdown(f"**{c['crm']}: {c['name']}**  \n<span style='font-size:0.8em'>"
+                        f"clashes with {c['other']} ({c['location']})</span>",
+                        unsafe_allow_html=True)
+            choice = c2.selectbox("Is", opts, key=f"clash_{scoped}",
+                                  label_visibility="collapsed")
+            if choice == NEW:
+                _pending()[scoped] = {"week_end": res["week_end"], "sources": [c["crm"]]}
+            else:
+                _pending().pop(scoped, None)
+                if choice != CHOOSE:
+                    extra_aliases[scoped] = choice
+
+    if extra_aliases:
             res = ingest.combine(exports, master, {**aliases, **extra_aliases})
 
     unresolved = [n for n in res["unknown"] if n not in left_out]
@@ -112,6 +137,11 @@ def page_weekly_upload(spreadsheet, df_wm, df_rv, clear_cache):
         st.warning(msg)
     for msg in res["info"]:
         st.info(msg)
+    new_clash = [ingest.scoped_alias(c["crm"], c["name"]) for c in res["clashes"]
+                 if ingest.scoped_alias(c["crm"], c["name"]) in _pending()]
+    if new_clash:
+        st.warning("Set up these new locations on the **Locations** page, then come "
+                   "back here: " + ", ".join(new_clash))
     if unresolved:
         new = [n for n in unresolved if n in _pending()]
         if new:

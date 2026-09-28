@@ -158,3 +158,26 @@ def test_locations_page_nz_gst_fix(ss):
     assert howick[6] == round(1320 / 1.15, 2)
     assert howick[8] == round(round(1320 / 1.15, 2) / 17, 2)
     assert ss.worksheet("Revenue").cells[2][6] == "$5,000"   # AU untouched
+
+
+def test_upload_resolves_same_name_clash(ss):
+    from test_ingest import RAW_INHOUSE_MEMBERS
+    files = [Upload("Weekly Membership.xlsx", HAPANA_MEMBERS),
+             Upload("members-report-2026-09-14-to-2026-09-20.xlsx", RAW_INHOUSE_MEMBERS)]
+    at = run_page("page_weekly_upload", ss, files)
+    assert not at.exception, at.exception
+    confirm = next(b for b in at.button if b.label.startswith("✅ Confirm"))
+    assert confirm.disabled
+    at.selectbox(key="clash_In-house: Success Tutoring - Belmont").set_value(
+        "Success Tutoring - Belmont WA").run()
+    assert not at.exception, at.exception
+    assert not any("more than once" in e.value for e in at.error)
+    next(b for b in at.button if b.label.startswith("✅ Confirm")).click().run()
+    assert not at.exception, at.exception
+    aliases = ss.worksheet("Location Aliases").get_all_records()
+    assert aliases == [{"Alias": "In-house: Success Tutoring - Belmont",
+                        "Location": "Success Tutoring - Belmont WA"}]
+    wm = ss.worksheet("Weekly Membership").cells
+    wa = next(r for r in wm if r[0] == "Success Tutoring - Belmont WA" and r[1] == "38/2026")
+    vic = next(r for r in wm if r[0] == "Success Tutoring - Belmont" and r[1] == "38/2026")
+    assert (wa[3], vic[3]) == (28, 17)

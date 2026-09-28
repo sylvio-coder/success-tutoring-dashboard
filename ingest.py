@@ -36,6 +36,9 @@ HAPANA_REVENUE = "hapana_revenue"
 INHOUSE_MEMBERS = "inhouse_members"
 INHOUSE_REVENUE = "inhouse_revenue"
 
+CRM_OF = {HAPANA_MEMBERS: "Hapana", HAPANA_REVENUE: "Hapana",
+          INHOUSE_MEMBERS: "In-house", INHOUSE_REVENUE: "In-house"}
+
 KIND_LABELS = {
     HAPANA_MEMBERS: "Hapana – members",
     HAPANA_REVENUE: "Hapana – revenue",
@@ -292,11 +295,16 @@ class LocationMatcher:
         self.aliases = {}
         for alias, target in (aliases or {}).items():
             if str(alias).strip() and str(target).strip():
-                self.aliases[location_key(alias)] = str(target).strip()
+                self.aliases[alias_key(alias)] = str(target).strip()
 
-    def resolve(self, raw, region=""):
-        """Master name for raw, or None. With an Australian region, 'Epping' in
+    def resolve(self, raw, region="", crm=None):
+        """Master name for raw, or None. A mapping saved for this CRM only
+        (e.g. 'In-house: Belmont') wins. With an Australian region, 'Epping' in
         Victoria resolves to 'Epping VIC' rather than the NSW 'Epping'."""
+        if crm:
+            scoped = self.aliases.get(alias_key(scoped_alias(crm, raw)))
+            if scoped:
+                return scoped
         abbr = AU_STATES.get(str(region or "").strip().lower())
         if not abbr:
             k = location_key(raw)
@@ -319,8 +327,8 @@ class LocationMatcher:
         return raw
 
     def suggestions(self, raw, n=3):
-        keys = difflib.get_close_matches(location_key(raw), list(self.master), n=n, cutoff=0.6)
-        k = location_key(raw)
+        k = location_key(split_scope(raw)[1])
+        keys = difflib.get_close_matches(k, list(self.master), n=n, cutoff=0.6)
         # "Belmont WA" -> also suggest "Belmont" (prefix/containment matches)
         for mk in self.master:
             if mk not in keys and (k.startswith(mk + " ") or mk.startswith(k + " ")):
@@ -328,8 +336,23 @@ class LocationMatcher:
         return [self.master[x] for x in keys[:n]]
 
 
+def scoped_alias(crm, raw):
+    """Alias text that applies to one CRM's exports only."""
+    return f"{crm}: {raw}"
+
+
+def split_scope(alias):
+    m = re.match(r"\s*(hapana|in-house)\s*:\s*(.*)$", str(alias), re.I)
+    return (m.group(1).lower(), m.group(2)) if m else (None, str(alias))
+
+
+def alias_key(alias):
+    crm, name = split_scope(alias)
+    return f"{crm}:{location_key(name)}" if crm else location_key(name)
+
+
 def canonical_new_name(raw):
-    s = re.sub(r"\s+", " ", str(raw)).strip()
+    s = re.sub(r"\s+", " ", split_scope(raw)[1]).strip()
     return s if s.lower().startswith("success tutoring") else PREFIX + s
 
 
@@ -369,27 +392,35 @@ def combine(exports, master, aliases=None):
     unknown = {}      # raw name -> {sources, suggestions}
     excluded = set()
     members, revenue = {}, {}   # location -> record
-    seen = {}                   # (table, location) -> first source
+    seen = {}                   # (table, location) -> (source, crm, raw)
+    clashes = {}                # (crm, raw) to remap -> clash details
 
-    def take(table, store, loc, rec, source, raw):
+    def take(table, store, loc, rec, source, raw, crm):
         key = (table, loc)
         if key in seen:
+            s0, c0, r0 = seen[key]
             errors.append(f"{loc} appears more than once in the {table} data "
-                          f"({seen[key]} and {source}, as '{raw}'). "
-                          "Two different sites may be mapped to the same name.")
+                          f"({s0} '{r0}' and {source} '{raw}'). "
+                          "Two different sites have the same name.")
+            # Ask about the in-house row (Hapana rows carry a region).
+            pick = (c0, r0) if c0 == "In-house" and crm != "In-house" else (crm, raw)
+            other = (crm, raw) if pick == (c0, r0) else (c0, r0)
+            clashes.setdefault(pick, {"crm": pick[0], "name": pick[1], "location": loc,
+                                      "other": f"{other[0]} '{other[1]}'",
+                                      "suggestions": matcher.suggestions(pick[1])})
             return
-        seen[key] = f"{source} ('{raw}')"
+        seen[key] = (source, crm, raw)
         store[loc] = rec
 
     for e in exports:
-        source = KIND_LABELS[e["kind"]]
+        source, crm = KIND_LABELS[e["kind"]], CRM_OF[e["kind"]]
         for _, r in e["rows"].iterrows():
             raw = r["name"]
             if is_excluded(raw):
                 excluded.add(raw)
                 continue
             region = r.get("region", "") or ""
-            loc = matcher.resolve(raw, region)
+            loc = matcher.resolve(raw, region, crm)
             if loc is None:
                 raw = matcher.unknown_label(raw, region)
                 u = unknown.setdefault(raw, {"sources": set(),
@@ -402,7 +433,7 @@ def combine(exports, master, aliases=None):
                 take("membership", members, loc, {
                     "active": r.get("active", 0.0), "suspended": r.get("suspended", 0.0),
                     "cancelled": r.get("cancelled", 0.0), "new": r.get("new", 0.0),
-                    "source": source}, source, raw)
+                    "source": source}, source, raw, crm)
             else:
                 rec = {"active": r.get("active"), "sessions": r.get("sessions", 0.0),
                        "gross": r.get("gross", 0.0), "source": source}
@@ -419,7 +450,7 @@ def combine(exports, master, aliases=None):
                         rec["net"] = 0.0
                     else:
                         rec["net"] = round(rec["gross"] / div, 2)
-                take("revenue", revenue, loc, rec, source, raw)
+                take("revenue", revenue, loc, rec, source, raw, crm)
 
     # In-house revenue has no member count: take it from the members export.
     for loc, rec in revenue.items():
@@ -445,7 +476,8 @@ def combine(exports, master, aliases=None):
         u["sources"] = sorted(u["sources"])
 
     return {"week_end": week_end, "membership": mem_df, "revenue": rev_df,
-            "unknown": unknown, "errors": errors, "warnings": warnings, "info": info}
+            "unknown": unknown, "clashes": list(clashes.values()),
+            "errors": errors, "warnings": warnings, "info": info}
 
 
 def _div(a, b):

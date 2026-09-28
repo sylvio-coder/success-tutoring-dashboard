@@ -271,3 +271,36 @@ def test_inhouse_dash_names_and_total_rows():
                                              data)], MASTER)
     assert res["unknown"] == {}
     assert res["revenue"]["Location"].tolist() == ["Success Tutoring - Burwood"]
+
+
+RAW_INHOUSE_MEMBERS = xlsx([
+    ["Location Name", "Active Members", "Suspended Members", "Cancelled Members",
+     "New Members"],
+    ["Success Tutoring - Belmont", 28, 0, 0, 4],
+    ["Success Tutoring – Burwood", 56, 11, 3, 1],
+])
+
+
+def test_same_name_in_both_crms_is_a_clash_to_resolve():
+    exports = [ingest.read_export("members-report-2026-09-14-to-2026-09-20.xlsx",
+                                  RAW_INHOUSE_MEMBERS),
+               ingest.read_export("Weekly Membership.xlsx", HAPANA_MEMBERS)]
+    res = ingest.combine(exports, MASTER)
+    assert [(c["crm"], c["name"], c["location"]) for c in res["clashes"]] == [
+        ("In-house", "Success Tutoring - Belmont", "Success Tutoring - Belmont")]
+    assert "Success Tutoring - Belmont WA" in res["clashes"][0]["suggestions"]
+
+    # Mapping for the in-house CRM only: Hapana's Belmont is unaffected.
+    alias = {ingest.scoped_alias("In-house", "Success Tutoring - Belmont"):
+             "Success Tutoring - Belmont WA"}
+    res = ingest.combine(exports, MASTER, alias)
+    assert res["errors"] == [] and res["clashes"] == []
+    mem = res["membership"].set_index("Location")["active"]
+    assert mem["Success Tutoring - Belmont WA"] == 28
+    assert mem["Success Tutoring - Belmont"] == 17
+
+
+def test_scoped_alias_keys():
+    assert ingest.alias_key("In-house: Success Tutoring - Belmont") == "in-house:belmont"
+    assert ingest.alias_key("Belmont WA") == "belmont wa"
+    assert ingest.canonical_new_name("In-house: Epping") == "Success Tutoring - Epping"
