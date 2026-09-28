@@ -424,3 +424,25 @@ def test_hapana_revenue_with_region_and_no_member_column():
     assert rev.loc["Success Tutoring - Epping VIC", "net"] == round(3533 / 1.1, 2)
     assert rev.loc["Success Tutoring - Howick", "net"] == round(1346 / 1.15, 2)
     assert rev.loc["Success Tutoring - Howick", "active"] == 19
+
+
+def test_hapana_blank_repeated_business_name():
+    revenue = xlsx([
+        ["Business name", "Region", "Date - Week/Year", "Total Sessions",
+         "Average Gross Revenue per Location"],
+        ["Ellenbrook", "Western Australia", "38/2026", 108, "20,350"],
+        ["Epping", "New South Wales", "38/2026", 23, "7,079"],
+        [None, "Victoria", "38/2026", 22, "3,545"],
+        ["Forrestfield", "Western Australia", "38/2026", 43, "4,671"],
+        [None, None, None, None, None],
+    ])
+    e = ingest.read_export("SA - Revenue Location Summary (20).xlsx", revenue)
+    assert [(r["name"], r["region"], r["gross"]) for _, r in e["rows"].iterrows()] == [
+        ("Ellenbrook", "Western Australia", 20350), ("Epping", "New South Wales", 7079),
+        ("Epping", "Victoria", 3545), ("Forrestfield", "Western Australia", 4671)]
+    master = MASTER.assign(Region=["New South Wales", "New South Wales", "Victoria",
+                                   "Victoria", "Western Australia", "Auckland",
+                                   "New South Wales", "Western Australia"])
+    rev = ingest.combine([e], master)["revenue"].set_index("Location")["gross"]
+    assert rev["Success Tutoring - Epping VIC"] == 3545
+    assert rev["Success Tutoring - Epping"] == 7079

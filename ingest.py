@@ -237,19 +237,27 @@ def read_export(filename, data):
             field_idx[f] = i
     warnings = []
 
+    def cell(vals, i):
+        if i is None or i >= len(vals):
+            return ""
+        v = vals[i]
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            return ""
+        return re.sub(r"\s+", " ", str(v)).strip()
+
+    # Hapana blanks a cell that repeats the row above: Region within a group,
+    # and the Business name of the second "Epping" when two sit together.
     records, weeks = [], set()
-    region = ""
+    region = last_name = ""
     for _, r in body.iterrows():
         vals = r.tolist()
-        # Region is only filled in on the first row of each group.
-        if region_idx is not None and region_idx < len(vals):
-            v = vals[region_idx]
-            if v is not None and not (isinstance(v, float) and pd.isna(v)) and str(v).strip():
-                region = str(v).strip()
-        name = vals[name_idx] if name_idx < len(vals) else None
-        if name is None or (isinstance(name, float) and pd.isna(name)) or not str(name).strip():
+        region = cell(vals, region_idx) or region
+        name = cell(vals, name_idx)
+        if not name and last_name and cell(vals, week_idx):
+            name = last_name
+        if not name:
             continue
-        name = re.sub(r"\s+", " ", str(name)).strip()
+        last_name = name
         if norm_header(name).startswith(("total", "grand total")):
             continue
         rec = {"name": name, "region": region}
