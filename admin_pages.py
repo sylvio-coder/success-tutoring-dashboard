@@ -169,6 +169,18 @@ def page_weekly_upload(spreadsheet, df_wm, df_rv, clear_cache):
     mem, rev = res["membership"], res["revenue"]
     if mem.empty and rev.empty:
         return
+
+    # Rows already in the sheet for this week that this upload won't replace.
+    for label, df, new in (("Weekly Membership", df_wm, mem), ("Revenue", df_rv, rev)):
+        if df.empty or "Date - Week/Year" not in df.columns or WM_NAME not in df.columns:
+            continue
+        this_week = df[df["Date - Week/Year"].astype(str).str.strip() == wl][WM_NAME]
+        left = sorted(set(this_week) - set(new.get("Location", [])))
+        if left:
+            st.warning(f"{label} already has week {wl} rows for locations not in this upload, "
+                       "which will be kept as they are: " + ", ".join(map(str, left)) +
+                       ". If a name is an old spelling of a location in this upload, delete "
+                       "that row in the Sheet after confirming.")
     _preview(mem, rev, master, df_wm, df_rv, week_end)
 
     blocked = bool(res["errors"] or unresolved)

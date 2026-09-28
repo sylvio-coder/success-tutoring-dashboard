@@ -181,3 +181,17 @@ def test_upload_resolves_same_name_clash(ss):
     wa = next(r for r in wm if r[0] == "Success Tutoring - Belmont WA" and r[1] == "38/2026")
     vic = next(r for r in wm if r[0] == "Success Tutoring - Belmont" and r[1] == "38/2026")
     assert (wa[3], vic[3]) == (28, 17)
+
+
+def test_upload_lists_old_rows_it_will_not_replace(ss):
+    def frames_with_old_row():
+        df_wm, df_rv = frames()
+        old = pd.DataFrame([{"Success Tutoring - Business name": "Success Tutoring - Belmont (WA)",
+                             "Date - Week/Year": "38/2026", "Date": pd.Timestamp(2026, 9, 20),
+                             "Net Revenue": 90.0, "Country": "Australia"}])
+        return df_wm, pd.concat([df_rv, old], ignore_index=True)
+
+    at = run_page("page_weekly_upload", ss, FILES, frames=frames_with_old_row)
+    assert not at.exception, at.exception
+    w = next(w.value for w in at.warning if "not in this upload" in w.value)
+    assert w.startswith("Revenue already has week 38/2026") and "Belmont (WA)" in w
