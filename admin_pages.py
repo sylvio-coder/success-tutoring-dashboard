@@ -5,6 +5,7 @@ import pandas as pd
 import streamlit as st
 
 import ingest
+import sheet_setup
 import sheet_writer as sw
 
 WM_NAME = "Success Tutoring - Business name"
@@ -340,6 +341,7 @@ def _new_location_form(spreadsheet, vl_ws, master, matcher, raw, first_week, upl
 
     start = first_week.get(k)
     start = start.date() if start is not None else (upload_week or date.today())
+    start_calc = sheet_setup.start_is_formula(vl_ws, vl_ws.row_values(1))
     with st.form(f"new_{raw}"):
         name = st.text_input("Location name", ingest.canonical_new_name(raw))
         c1, c2, c3 = st.columns(3)
@@ -350,8 +352,12 @@ def _new_location_form(spreadsheet, vl_ws, master, matcher, raw, first_week, upl
                                                       index=None, placeholder="Choose…")
         other = st.text_input("Or type a new value, e.g. GPM=Jane Citizen",
                               key=f"other_{raw}", help="Use Field=Value for a value not in the lists.")
-        started = st.date_input("Location start (first week with members)", start,
-                                format="DD/MM/YYYY", key=f"start_{raw}")
+        if start_calc:
+            st.caption("Location Start and Weeks old are calculated from the first week "
+                       "this location has active members.")
+        else:
+            started = st.date_input("Location start (first week with members)", start,
+                                    format="DD/MM/YYYY", key=f"start_{raw}")
         if st.form_submit_button("Add to master list", type="primary"):
             if "=" in other:
                 f, v = [x.strip() for x in other.split("=", 1)]
@@ -364,8 +370,9 @@ def _new_location_form(spreadsheet, vl_ws, master, matcher, raw, first_week, upl
             if ingest.location_key(name) in matcher.master:
                 st.error(f"{name} is already in the master list.")
                 return
-            rec = {"Location": name.strip(), **vals,
-                   "Location Start": f"{started.day}-{started:%b-%Y}"}
+            rec = {"Location": name.strip(), **vals}
+            if not start_calc:
+                rec["Location Start"] = f"{started.day}-{started:%b-%Y}"
             try:
                 sw.append_records(vl_ws, [rec])
                 if ingest.location_key(name) != k:
@@ -404,6 +411,10 @@ def _master_editor(vl_ws, vl_headers, master, df_wm, clear_cache):
     cfg = {c: st.column_config.SelectboxColumn(c, options=_options(master, c))
            for c in EDITABLE if c in view.columns}
     cfg["Location"] = st.column_config.TextColumn("Location", disabled=True)
+    start_calc = sheet_setup.start_is_formula(vl_ws, vl_headers)
+    if start_calc:
+        cfg["Location Start"] = st.column_config.Column(
+            "Location Start", disabled=True, help="Calculated: first week with active members")
     for c in ["Weeks old", "Months old", "Onboarding Week", "Active members",
               "Last week with members"]:
         cfg[c] = st.column_config.Column(c, disabled=True)
@@ -422,7 +433,7 @@ def _master_editor(vl_ws, vl_headers, master, df_wm, clear_cache):
     changes = []
     orig = view[show]
     for idx in edited.index:
-        for c in [c for c in EDITABLE + ["Location Start"] if c in show]:
+        for c in [c for c in EDITABLE + ([] if start_calc else ["Location Start"]) if c in show]:
             if str(edited.at[idx, c]) != str(orig.at[idx, c]):
                 changes.append((int(master.at[idx, "_row"]), vl_headers.index(c) + 1,
                                 edited.at[idx, c], master.at[idx, "Location"], c))
@@ -508,7 +519,6 @@ def _nz_gst_fix(spreadsheet, clear_cache):
 
 # ── Sheet setup (one-off maintenance) ─────────────────────────────────────────
 def page_sheet_setup(spreadsheet, df_wm, df_rv, clear_cache):
-    import sheet_setup
     st.markdown('<div class="report-title">Sheet Setup</div>', unsafe_allow_html=True)
     _subtitle("One-off changes to the Google Sheet itself. Run them on a test copy first.")
     st.info(f"Connected to: **{spreadsheet.title}**")
@@ -528,6 +538,30 @@ def page_sheet_setup(spreadsheet, df_wm, df_rv, clear_cache):
                          use_container_width=True)
         except Exception as e:
             st.error(f"Formatting failed: {e}")
+
+    st.markdown("#### Vlookup: Location Start from Weekly Membership")
+    st.caption("Sets Location Start to the first week each location had more than 0 active "
+               "members in Weekly Membership (a formula, so it stays correct), unless you type a "
+               "date in the 'Start Override' column (added as the last column if it isn't there; "
+               "your typed dates are never changed). Makes Weeks "
+               "old count from Location Start, with the start week as week 1 (Closed locations "
+               "stop at their last week with members). Locations with no active members yet show "
+               "blank. New locations pick up both formulas automatically. Also converts any "
+               "Weekly Membership or Revenue dates stored as text into real dates.")
+    if st.button("Set Location Start from data", disabled=not backup, key="setup_start"):
+        try:
+            for line in sheet_setup.link_location_start(spreadsheet):
+                st.write("• " + line)
+            clear_cache()
+            broken = sheet_setup.broken_formulas(spreadsheet)
+            if broken:
+                st.error("Some formulas now show #REF!: " +
+                         ", ".join(f"{t} ({n} cells)" for t, n in broken.items()) +
+                         ". Restore from the backup or send me a screenshot.")
+            else:
+                st.success("Done. No broken formulas found in any tab.")
+        except Exception as e:
+            st.error(f"The change failed: {e}")
 
     st.markdown("#### Vlookup: Weeks old instead of Months old")
     st.caption("Replaces 'Months old' with a 'Weeks old' formula per location: week 1 is the "

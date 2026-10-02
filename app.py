@@ -11,39 +11,43 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 from streamlit_echarts import st_echarts
 from google.oauth2.service_account import Credentials
-import anthropic
 import os
+import html
 import admin_pages
 from dotenv import load_dotenv
 
 load_dotenv()
 
 SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
-ANTHROPIC_KEY = st.secrets.get("ANTHROPIC_API_KEY", "") or os.getenv("ANTHROPIC_API_KEY", "")
 SERVICE_ACCOUNT_FILE = "service_account.json"
 SCOPES_SHEETS = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive.readonly",
 ]
 
-st.set_page_config(page_title="Success Tutoring Dashboard", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Success Tutoring Dashboard", page_icon="logo.png" if os.path.exists("logo.png") else None, layout="wide")
 
 # ── Theme ─────────────────────────────────────────────────────────────────────
-BI_BG       = "#1a1a2e"
-BI_CARD     = "#16213e"
-BI_ACCENT   = "#01b8aa"
-BI_BLUE     = "#4da6ff"
-BI_GREEN    = "#107c10"
-BI_ORANGE   = "#fd7e14"
-BI_RED      = "#d13438"
-BI_YELLOW   = "#ffd700"
-BI_PURPLE   = "#8764b8"
-BI_GRAY     = "#2d3748"
-BI_BORDER   = "#2d3748"
-BI_TEXT     = "#f3f2f1"
-BI_SUBTEXT  = "#a0aec0"
-BI_CHART_BG = "#1f2937"
-BI_GRID     = "#2d3748"
+BI_BG       = "#f3f5f6"   # report canvas (light grey)
+BI_CARD     = "#ffffff"   # cards and panels
+BI_ACCENT   = "#1f9a9a"   # Success Tutoring teal
+BI_BLUE     = "#2f6fb5"
+BI_GREEN    = "#2e8540"
+BI_ORANGE   = "#e0562a"   # Success Tutoring orange
+BI_RED      = "#c8322f"
+BI_YELLOW   = "#c99a06"
+BI_PURPLE   = "#7a5cb0"
+BI_GRAY     = "#e3e8ea"
+BI_BORDER   = "#dde5e6"
+BI_TEXT     = "#1c2a30"
+BI_SUBTEXT  = "#5d6d73"
+BI_CHART_BG = "#ffffff"
+BI_GRID     = "#e8edee"
+BI_INK      = "#1c2a30"   # top bar
+
+# One chart palette used across all reports, led by the brand teal and orange
+SERIES_COLORS = [BI_ACCENT, BI_ORANGE, BI_BLUE, BI_PURPLE, BI_YELLOW,
+                 "#3b8f5a", "#d4679b", "#8a5a44", "#4fb3d9", "#5d6d73"]
 REGION_TO_STATE = {
     "New South Wales": "NSW",
     "Victoria": "VIC",
@@ -64,185 +68,119 @@ HOLIDAY_COLORS = {
 }
 st.markdown(f"""
 <style>
-* {{ box-sizing: border-box; }}
-    [data-baseweb="select"] * {{ 
-        background-color: #1a2744 !important; 
-        color: white !important; 
-    }}
-    [data-baseweb="select"] [role="option"] {{
-        background-color: #1a2744 !important;
-        color: white !important;
-    }}
-    [data-baseweb="select"] [aria-selected="true"] {{
-        background-color: #2d3f6e !important;
-    }}
-    [data-baseweb="popover"] * {{
-        background-color: #1a2744 !important;
-        color: white !important;
-    }}
-    [data-baseweb="base-input"] * {{
-        background-color: #1a2744 !important;
-        color: white !important;
-    }}
-    [data-baseweb="tag"] {{
-        background-color: #2d3f6e !important;
-        color: white !important;
-    }}
     html, body, [class*="css"] {{
-        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        color: {BI_TEXT};
+        font-family: 'Segoe UI', 'Source Sans Pro', 'Source Sans 3', system-ui, sans-serif;
     }}
     .stApp {{ background-color: {BI_BG}; }}
-    .main .block-container {{ padding-top: 1rem; max-width: 1400px; }}
+    .main .block-container, div[data-testid="stMainBlockContainer"] {{ padding-top: 3.75rem; max-width: 1400px; }}
+
+    /* Top bar */
+    .topbar {{
+        background: {BI_INK}; color: #ffffff; border-radius: 8px;
+        padding: 10px 18px; margin-bottom: 18px;
+        display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;
+    }}
+    .topbar-title {{ font-size: 1.05em; font-weight: 600; }}
+    .topbar-title span {{ color: #9fb3b9; font-weight: 400; }}
+    .topbar-meta {{ font-size: 0.85em; color: #b9c7cb; }}
+    .topbar-meta b {{ color: #ffffff; font-weight: 600; text-transform: capitalize; }}
+
+    /* KPI cards */
     .metric-card {{
         background: {BI_CARD}; border: 1px solid {BI_BORDER};
-        border-radius: 4px; padding: 18px 16px;
-        text-align: left; margin: 4px;
-        box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+        border-radius: 8px; padding: 14px 16px; margin: 4px 0 10px;
+        box-shadow: 0 1px 2px rgba(28,42,48,0.05);
     }}
-    .metric-card.green  {{ border-top: 3px solid {BI_ACCENT}; }}
-    .metric-card.orange {{ border-top: 3px solid {BI_ORANGE}; }}
-    .metric-card.red    {{ border-top: 3px solid {BI_RED}; }}
-    .metric-card.blue   {{ border-top: 3px solid {BI_BLUE}; }}
-    .metric-card.purple {{ border-top: 3px solid {BI_PURPLE}; }}
-    .metric-value {{ font-size: 2.2em; font-weight: 700; color: {BI_TEXT}; line-height: 1.1; }}
-    .metric-label {{ font-size: 0.75em; color: {BI_SUBTEXT}; margin-bottom: 6px;
-                     text-transform: uppercase; letter-spacing: 0.6px; font-weight: 600; }}
-    .metric-delta {{ font-size: 0.82em; margin-top: 8px; font-weight: 600; }}
+    .metric-label {{
+        font-size: 0.78em; color: {BI_SUBTEXT}; margin-bottom: 4px; font-weight: 600;
+        display: flex; align-items: center; gap: 6px;
+    }}
+    .metric-label::before {{
+        content: ""; width: 8px; height: 8px; border-radius: 50%; background: {BI_SUBTEXT}; flex: none;
+    }}
+    .metric-card.green  .metric-label::before {{ background: {BI_ACCENT}; }}
+    .metric-card.orange .metric-label::before {{ background: {BI_ORANGE}; }}
+    .metric-card.red    .metric-label::before {{ background: {BI_RED}; }}
+    .metric-card.blue   .metric-label::before {{ background: {BI_BLUE}; }}
+    .metric-card.purple .metric-label::before {{ background: {BI_PURPLE}; }}
+    .metric-value {{ font-size: 1.9em; font-weight: 700; color: {BI_TEXT}; line-height: 1.15;
+                     font-variant-numeric: tabular-nums; }}
+    .metric-delta {{ font-size: 0.8em; margin-top: 6px; font-weight: 600; }}
+    .metric-delta span {{ color: {BI_SUBTEXT}; font-weight: 400; }}
+
+    /* Titles */
+    .report-title {{ font-size: 1.5em; font-weight: 700; color: {BI_TEXT}; margin-bottom: 0; }}
+    .report-subtitle {{ font-size: 0.88em; color: {BI_SUBTEXT}; margin-bottom: 14px; }}
     .section-header {{
-        font-size: 1em; font-weight: 700; color: {BI_TEXT};
-        margin: 16px 0 8px 0; padding: 8px 12px;
-        background: {BI_CARD}; border-left: 3px solid {BI_ACCENT};
-        border-radius: 0 4px 4px 0; text-transform: uppercase; letter-spacing: 0.5px;
+        font-size: 1.02em; font-weight: 700; color: {BI_TEXT};
+        margin: 22px 0 10px 0; padding: 0 0 6px 0;
+        border-bottom: 1px solid {BI_BORDER};
     }}
-    .report-title {{ font-size: 1.3em; font-weight: 700; color: {BI_TEXT}; margin-bottom: 2px; }}
-    .report-subtitle {{ font-size: 0.85em; color: {BI_SUBTEXT}; margin-bottom: 16px; }}
     .gauge-label {{
         text-align: center; color: {BI_SUBTEXT}; font-size: 0.82em; font-weight: 600;
-        margin-top: -6px; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;
+        margin-top: -6px; margin-bottom: 8px;
     }}
-    section[data-testid="stSidebar"] {{
-        background-color: #0d1117 !important;
-        border-right: 1px solid {BI_BORDER};
-        min-width: 242px !important;
-        max-width: 242px !important;
-        width: 242px !important;
+    .filter-label {{
+        font-size: 0.72em; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+        color: {BI_SUBTEXT}; margin-bottom: 2px;
     }}
-    section[data-testid="stSidebar"] * {{ color: {BI_TEXT} !important; }}
-    section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] button {{
-        opacity: 1 !important; position: static !important; height: auto !important;
-        margin: 0 !important; padding: 6px 8px !important; border: 1px solid {BI_BORDER} !important;
-    }}
-    section[data-testid="stSidebar"] .stButton > button {{
-        font-size: 0.75em !important;
-        padding: 3px 8px !important;
-        margin: 1px 0 !important;
-    }}
-    section[data-testid="stSidebar"] .stRadio label {{
-        font-size: 0.82em !important;
-        padding: 5px 8px !important;
-        border-radius: 4px !important;
-        cursor: pointer;
-        display: block;
-        width: 100%;
-    }}
-    section[data-testid="stSidebar"] .stRadio label:hover {{
-        background: #1a2744 !important;
-        color: {BI_ACCENT} !important;
-    }}
+
+    /* Panels: filters, expanders, tables, charts */
+    div[data-testid="stVerticalBlockBorderWrapper"] {{ background: {BI_CARD}; border-radius: 8px; }}
     details[data-testid="stExpander"] {{
-        background: #0d2137 !important;
-        border: 1px solid {BI_ACCENT} !important;
-        border-radius: 6px !important;
-        margin-bottom: 12px;
+        background: {BI_CARD} !important; border: 1px solid {BI_BORDER} !important;
+        border-radius: 8px !important; margin-bottom: 12px;
     }}
-    details[data-testid="stExpander"] summary {{
-        color: {BI_ACCENT} !important;
-        font-weight: 700 !important;
-        font-size: 0.9em !important;
-        padding: 8px 12px !important;
-        background: #0d2137 !important;
-        border-radius: 6px;
+    details[data-testid="stExpander"] summary {{ font-weight: 600 !important; }}
+    .stDataFrame {{ border: 1px solid {BI_BORDER}; border-radius: 6px; }}
+    div[data-testid="stPlotlyChart"] {{
+        background: {BI_CARD}; border: 1px solid {BI_BORDER}; border-radius: 8px; padding: 6px;
     }}
-    details[data-testid="stExpander"] > div {{
-        background: #0d2137 !important;
-        padding: 8px 12px !important;
-        border-top: 1px solid {BI_BORDER};
+    .stButton > button {{ border-radius: 6px; font-weight: 600; }}
+    hr {{ border-color: {BI_BORDER}; margin: 12px 0; }}
+
+    /* Sidebar */
+    section[data-testid="stSidebar"] {{
+        background-color: {BI_CARD} !important;
+        border-right: 1px solid {BI_BORDER};
+        min-width: 260px !important; max-width: 260px !important; width: 260px !important;
     }}
-    .stButton > button {{
-        background-color: transparent; color: {BI_TEXT};
-        border: 1px solid {BI_BORDER}; border-radius: 6px;
-        font-weight: 600; font-size: 0.85em; padding: 6px 12px;
-    }}
-    .stButton > button:hover {{
-        background-color: {BI_ACCENT}; color: white; border-color: {BI_ACCENT};
+    section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"] {{ gap: 2px !important; }}
+    .nav-group {{
+        font-size: 0.7em; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+        color: #8a989d; padding: 12px 6px 0;
+        margin-bottom: calc(1rem + 4px);  /* offsets Streamlit's -1rem margin under markdown */
     }}
     section[data-testid="stSidebar"] .stButton > button {{
-        position: relative !important;
-        top: -36px !important;
-        height: 34px !important;
-        margin-bottom: -34px !important;
-        margin-top: 0 !important;
-        padding: 0 !important;
-        opacity: 0 !important;
-        width: 100% !important;
-        cursor: pointer !important;
-        pointer-events: all !important;
-        border: none !important;
+        width: 100%; justify-content: flex-start; text-align: left;
+        padding: 6px 10px; min-height: 36px; border-radius: 6px;
+        font-size: 0.9em; font-weight: 500;
     }}
-    section[data-testid="stSidebar"] .stButton {{
-        margin: 0 !important;
-        padding: 0 !important;
+    section[data-testid="stSidebar"] .stButton > button > div {{ justify-content: flex-start; }}
+    section[data-testid="stSidebar"] .stButton > button p {{ font-size: 0.95em; }}
+    section[data-testid="stSidebar"] .stButton > button[kind="secondary"],
+    section[data-testid="stSidebar"] button[data-testid="stBaseButton-secondary"] {{
+        background: transparent; border: 1px solid transparent; color: {BI_TEXT};
     }}
-    section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"] {{
-        gap: 0 !important;
+    section[data-testid="stSidebar"] .stButton > button[kind="secondary"]:hover,
+    section[data-testid="stSidebar"] button[data-testid="stBaseButton-secondary"]:hover {{
+        background: {BI_BG}; border-color: {BI_BORDER}; color: {BI_TEXT};
     }}
-    section[data-testid="stSidebar"] div[data-testid="element-container"] {{
-        margin: 0 !important;
-        padding: 0 !important;
+    section[data-testid="stSidebar"] .stButton > button[kind="primary"],
+    section[data-testid="stSidebar"] button[data-testid="stBaseButton-primary"] {{
+        background: {BI_ACCENT}; border: 1px solid {BI_ACCENT}; color: #ffffff; font-weight: 600;
     }}
-    hr {{ border-color: {BI_BORDER}; margin: 12px 0; }}
-    .stDataFrame {{ border: 1px solid {BI_BORDER}; border-radius: 2px; }}
-    div[data-baseweb="select"] label {{ color: white !important; }}
-    div[data-baseweb="select"] p {{ color: white !important; }}
-    div[data-testid="stSelectbox"] label {{ color: white !important; }}
-    div[data-testid="stSelectbox"] p {{ color: white !important; }}
-    div[data-testid="stSelectbox"] [data-testid="stWidgetLabel"] * {{ color: white !important; }}
-    div[data-testid="stCheckbox"] label {{ color: white !important; }}
-    div[data-testid="stCheckbox"] label p {{ color: white !important; }}
-    div[data-testid="stCheckbox"] span {{ color: white !important; }}
-    h4 {{ color: white !important; }}
-    h3 {{ color: white !important; }}
-    h2 {{ color: white !important; }}
-    .stMarkdown p {{ color: white !important; }}
-    .stMarkdown {{ color: white !important; }}
-    summary {{ color: white !important; }}
-    details[data-testid="stExpander"] [data-baseweb="select"] > div {{ background-color: #1a2744 !important; color: white !important; }}
-    details[data-testid="stExpander"] [data-baseweb="select"] > div > div {{ background-color: #1a2744 !important; color: white !important; }}
-    details[data-testid="stExpander"] [data-baseweb="select"] span {{ color: white !important; background-color: #1a2744 !important; }}
-    details[data-testid="stExpander"] [data-baseweb="select"] div {{ background-color: #1a2744 !important; color: white !important; }}
-    details[data-testid="stExpander"] [data-baseweb="select"] {{ background-color: #1a2744 !important; }}
-.stSelectbox > div > div {{ background-color: #1a2744 !important; color: white !important; }}
-    .stSelectbox div[data-baseweb="select"] {{ background-color: #1a2744 !important; }}
-.stSelectbox > div > div {{ background-color: #1a2744 !important; color: white !important; }}
-    .stSelectbox div[data-baseweb="select"] {{ background-color: #1a2744 !important; }}
-[data-baseweb="select"] > div {{ background-color: #1a2744 !important; }}
-    [data-baseweb="select"] > div > div {{ background-color: #1a2744 !important; color: white !important; }}
-    [data-baseweb="input"] {{ background-color: #1a2744 !important; }}
-    input {{ background-color: #1a2744 !important; color: white !important; }}
-    [class*="ValueContainer"] {{ background-color: #1a2744 !important; color: white !important; }}
-    [class*="control"] {{ background-color: #1a2744 !important; border-color: #2d3748 !important; }}
-    [class*="singleValue"] {{ color: white !important; }}
-    [class*="placeholder"] {{ color: #a0aec0 !important; }}
-    [class*="Input"] input {{ background-color: #1a2744 !important; color: white !important; }}
-    [class*="MenuList"] {{ background-color: #1a2744 !important; }}
-    [class*="option"] {{ background-color: #1a2744 !important; color: white !important; }}
-    [class*="option"]:hover {{ background-color: #2d3f6e !important; }}
-    [data-baseweb="select"] span {{ color: white !important; }}
-    [data-baseweb="select"] div {{ background-color: #1a2744 !important; color: white !important; }}
-    div[data-testid="stMultiSelect"] > div {{ background-color: #1a2744 !important; }}
-    div[data-testid="stMultiSelect"] span {{ color: white !important; }}
-    div[data-testid="stMultiSelect"] div {{ background-color: #1a2744 !important; color: white !important; }}
+    .side-footer {{ border-top: 1px solid {BI_BORDER}; margin-top: 14px; padding-top: 10px; }}
+    .side-updated {{ font-size: 0.78em; color: {BI_SUBTEXT}; }}
+    .user-card {{ display: flex; align-items: center; gap: 10px; padding: 10px 2px 8px; }}
+    .user-avatar {{
+        width: 32px; height: 32px; border-radius: 50%; flex: none;
+        background: {BI_ORANGE}; color: #ffffff; display: grid; place-items: center;
+        font-weight: 700; font-size: 0.9em;
+    }}
+    .user-text {{ min-width: 0; line-height: 1.25; }}
+    .user-name {{ font-weight: 600; font-size: 0.9em; color: {BI_TEXT}; }}
+    .user-mail {{ font-size: 0.75em; color: {BI_SUBTEXT}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -258,19 +196,38 @@ def get_sheets_client():
         # Local — read from file
         creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES_SHEETS)
     return gspread.authorize(creds)
+def parse_sheet_dates(values):
+    """Dates as the Sheet shows them: 2026-09-20 (ISO), 20/9/2026 (day first) or 20-Sep-2026.
+    ISO is checked first so 2026-10-04 is never read as 10 April."""
+    s = pd.Series(values).astype(str).str.strip()
+    iso = pd.to_datetime(s, format="%Y-%m-%d", errors="coerce")
+    dmy = pd.to_datetime(s, format="%d/%m/%Y", errors="coerce")
+    rest = pd.to_datetime(s.where(iso.isna() & dmy.isna()), format="mixed", dayfirst=True, errors="coerce")
+    return iso.fillna(dmy).fillna(rest)
+
 @st.cache_data(ttl=300)
-def load_sheet_data(tab_name):
-    client = get_sheets_client()
-    sheet = client.open_by_key(SHEET_ID)
-    worksheet = sheet.worksheet(tab_name)
-    data = worksheet.get_all_records()
-    return pd.DataFrame(data)
+def load_sheet_data(tab_name, attempts=3):
+    """Read a whole tab. Retries brief network failures (e.g. 'Response ended prematurely');
+    a missing tab fails straight away."""
+    import time
+    for attempt in range(attempts):
+        try:
+            client = get_sheets_client()
+            sheet = client.open_by_key(SHEET_ID)
+            worksheet = sheet.worksheet(tab_name)
+            return pd.DataFrame(worksheet.get_all_records())
+        except gspread.exceptions.WorksheetNotFound:
+            raise
+        except Exception:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(2 ** attempt)
 
 @st.cache_data(ttl=300)
 def load_weekly_membership():
     df = load_sheet_data("Weekly Membership")
     if "Date" in df.columns:
-        df["Date"] = pd.to_datetime(df["Date"], dayfirst=True, errors="coerce")
+        df["Date"] = parse_sheet_dates(df["Date"])
         df = df.dropna(subset=["Date"])
     num_cols = ["# Active members","# New members","# Suspended members",
                 "# Cancelled members","Onboarding Members","Onboarding week","Age (Months)"]
@@ -281,52 +238,62 @@ def load_weekly_membership():
 
 
 @st.cache_data(ttl=300)
+def _load_school_holidays():
+    df = load_sheet_data("School Holidays")
+    df["Year"]       = pd.to_numeric(df["Year"],       errors="coerce")
+    df["Start_Week"] = pd.to_numeric(df["Start_Week"], errors="coerce")
+    df["End_Week"]   = pd.to_numeric(df["End_Week"],   errors="coerce")
+    return df.dropna(subset=["Year","Start_Week","End_Week"])
+
 def load_school_holidays():
     try:
-        df = load_sheet_data("School Holidays")
-        df["Year"]       = pd.to_numeric(df["Year"],       errors="coerce")
-        df["Start_Week"] = pd.to_numeric(df["Start_Week"], errors="coerce")
-        df["End_Week"]   = pd.to_numeric(df["End_Week"],   errors="coerce")
-        return df.dropna(subset=["Year","Start_Week","End_Week"])
-    except:
+        return _load_school_holidays()
+    except Exception:
         return pd.DataFrame()
 
 @st.cache_data(ttl=300)
+def _load_revenue():
+    df = load_sheet_data("Revenue")
+    df = df.rename(columns={"Location": "Success Tutoring - Business name"})
+    df["Date"] = parse_sheet_dates(df["Date"])
+    for c in ["# Active Students","Total Sessions","Gross Revenue","Net Revenue",
+              "Student Visits","Revenue per Session","Revenue per Student",
+              "Sessions per Student","Student per Session",
+              "Sessions per Student Visit","Student Visits per Session"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c].astype(str).str.replace("[$,]","",regex=True), errors="coerce").fillna(0)
+    return df
+
 def load_revenue():
     try:
-        df = load_sheet_data("Revenue")
-        df = df.rename(columns={"Location": "Success Tutoring - Business name"})
-        df["Date"] = pd.to_datetime(df["Date"], dayfirst=True, errors="coerce")
-        for c in ["# Active Students","Total Sessions","Gross Revenue","Net Revenue",
-                  "Student Visits","Revenue per Session","Revenue per Student",
-                  "Sessions per Student","Student per Session",
-                  "Sessions per Student Visit","Student Visits per Session"]:
-            if c in df.columns:
-                df[c] = pd.to_numeric(df[c].astype(str).str.replace("[$,]","",regex=True), errors="coerce").fillna(0)
-        return df
+        return _load_revenue()
     except Exception as e:
-        st.error(f"Could not load Revenue sheet: {e}")
+        st.error(f"Could not load the Revenue sheet ({e}). Click Refresh data to try again.")
         return pd.DataFrame()
 
 @st.cache_data(ttl=300)
+def _load_vlookup():
+    df = load_sheet_data("Vlookup")
+    df = df.rename(columns={
+        "Location": "Success Tutoring - Business name",
+        "Location Start": "Location Start Date",
+        "Months old": "Age (Months)",
+        "Onboarding Week": "Onboarding week",
+    })
+    for c in ["Onboarding week","Onboarding Members","Age (Months)","Weeks old"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+    if "Weeks old" in df.columns:
+        # Week 1 = first week with members; months = whole months elapsed since then.
+        elapsed_days = (df["Weeks old"] - 1).clip(lower=0) * 7
+        df["Age (Months)"] = (elapsed_days / 30.4375).astype(int)
+    return df
+
 def load_vlookup():
+    """Cached Vlookup; a failed read is not cached, so the next page load tries again."""
     try:
-        df = load_sheet_data("Vlookup")
-        df = df.rename(columns={
-            "Location": "Success Tutoring - Business name",
-            "Location Start": "Location Start Date",
-            "Months old": "Age (Months)",
-            "Onboarding Week": "Onboarding week",
-        })
-        for c in ["Onboarding week","Onboarding Members","Age (Months)","Weeks old"]:
-            if c in df.columns:
-                df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
-        if "Weeks old" in df.columns:
-            # Week 1 = first week with members; months = whole months elapsed since then.
-            elapsed_days = (df["Weeks old"] - 1).clip(lower=0) * 7
-            df["Age (Months)"] = (elapsed_days / 30.4375).astype(int)
-        return df
-    except:
+        return _load_vlookup()
+    except Exception:
         return pd.DataFrame()
 
 @st.cache_data(ttl=300)
@@ -373,12 +340,6 @@ def flag_unknown_user(email):
             worksheet.append_row([email, timestamp, "Pending"])
     except Exception as e:
         pass
-def get_allowed_tabs(user_email):
-    permissions = load_permissions()
-    entry = permissions.get(user_email.strip().lower())
-    if not entry: return []
-    return entry["tabs"]
-
 def get_user_permissions(user_email):
     st.cache_data.clear()
     permissions = load_permissions()
@@ -412,12 +373,14 @@ def churn_rate(cancelled, active):
     except:
         return 0.0
 
-def metric_card(label, value, delta=None, color=""):
+def metric_card(label, value, delta=None, color="", higher_is_better=True):
     delta_html = ""
     if delta is not None:
         arrow = "▲" if delta > 0 else "▼" if delta < 0 else "●"
-        dcolor = BI_ACCENT if delta > 0 else BI_RED if delta < 0 else BI_SUBTEXT
-        delta_html = f'<div class="metric-delta" style="color:{dcolor}">{arrow} {abs(delta):,.0f} vs prev week</div>'
+        good = delta > 0 if higher_is_better else delta < 0
+        dcolor = BI_SUBTEXT if delta == 0 else (BI_GREEN if good else BI_RED)
+        dtext = f"{abs(delta):,.0f}" if float(delta).is_integer() or abs(delta) >= 100 else f"{abs(delta):,.1f}"
+        delta_html = f'<div class="metric-delta" style="color:{dcolor}">{arrow} {dtext} <span>vs last week</span></div>'
     st.markdown(f"""<div class="metric-card {color}">
         <div class="metric-label">{label}</div>
         <div class="metric-value">{value}</div>
@@ -466,53 +429,63 @@ def bi_fig(w=14,h=6):
     return fig,ax
 
 # ── Plotly theme ──────────────────────────────────────────────────────────────
+CHART_FONT = "Source Sans Pro, Source Sans 3, Segoe UI, Arial, sans-serif"
 PLOTLY_LAYOUT = dict(
-    paper_bgcolor="#ffffff", plot_bgcolor="#f8f9fa",
-    font=dict(color="#1a1a2e", family="Segoe UI, Helvetica Neue, Arial, sans-serif", size=12),
-    xaxis=dict(gridcolor="#1e2d3d", gridwidth=1, tickfont=dict(color="#555555", size=10),
-               linecolor="#dddddd", linewidth=1, showgrid=False, zeroline=False, tickangle=-30),
-    yaxis=dict(gridcolor="#e8e8e8", gridwidth=1, tickfont=dict(color="#555555", size=10),
-               linecolor="#dddddd", showgrid=True, zeroline=False),
-    legend=dict(bgcolor="rgba(255,255,255,0.9)", bordercolor="#cccccc", borderwidth=1,
-                font=dict(color="#1a1a2e", size=11), orientation="h",
-                yanchor="bottom", y=-0.35, xanchor="center", x=0.5, itemsizing="constant"),
+    paper_bgcolor="#ffffff", plot_bgcolor="#ffffff",
+    font=dict(color=BI_TEXT, family=CHART_FONT, size=12),
+    xaxis=dict(gridcolor=BI_GRID, gridwidth=1, tickfont=dict(color=BI_SUBTEXT, size=11),
+               linecolor=BI_BORDER, linewidth=1, showgrid=False, zeroline=False, tickangle=0),
+    yaxis=dict(gridcolor="#eef2f3", gridwidth=1, tickfont=dict(color=BI_SUBTEXT, size=11),
+               linecolor=BI_BORDER, showgrid=True, zeroline=False, tickformat=",", rangemode="tozero"),
+    legend=dict(bgcolor="rgba(0,0,0,0)", borderwidth=0, font=dict(color=BI_TEXT, size=12),
+                orientation="h", yanchor="bottom", y=1.0, xanchor="left", x=0, itemsizing="constant"),
     hovermode="x unified",
-    hoverlabel=dict(bgcolor="#1a2744", bordercolor=BI_ACCENT,
-                    font=dict(color="#ffffff", size=12, family="Segoe UI"), namelength=-1),
-    margin=dict(l=70, r=40, t=50, b=130), dragmode=False,
+    hoverlabel=dict(bgcolor="#ffffff", bordercolor=BI_BORDER,
+                    font=dict(color=BI_TEXT, size=12, family=CHART_FONT), namelength=-1),
+    margin=dict(l=60, r=30, t=40, b=50), dragmode=False,
 )
 
 def std_traces(fig, df, date_col, col_name, color, label, secondary_y=False):
+    """One clean line with a soft area fill (the fill is dropped by show_chart when a
+    chart has several lines) and a dot on the latest point."""
     try:
         r,g,b = int(color[1:3],16),int(color[3:5],16),int(color[5:7],16)
-        fill_color = f"rgba({r},{g},{b},0.18)"
-        glow_color = f"rgba({r},{g},{b},0.4)"
+        fill_color = f"rgba({r},{g},{b},0.10)"
     except:
-        fill_color = "rgba(1,184,170,0.18)"
-        glow_color = "rgba(1,184,170,0.4)"
+        fill_color = "rgba(31,154,154,0.10)"
     kwargs = dict(secondary_y=secondary_y) if secondary_y is not False else {}
     fig.add_trace(go.Scatter(
         x=df[date_col], y=df[col_name], name=label, mode="lines",
-        line=dict(color=glow_color, width=6),
-        showlegend=False, hoverinfo="skip",
+        line=dict(color=color, width=2.25),
+        fill="tozeroy", fillcolor=fill_color, xhoverformat="%d %b %Y",
+        hovertemplate=f"{label}: <b>%{{y:,.1f}}</b><extra></extra>",
     ), **kwargs)
-    fig.add_trace(go.Scatter(
-        x=df[date_col], y=df[col_name], name=label,
-        mode="lines+markers",
-        line=dict(color=color, width=2.5, shape="spline", smoothing=0.4),
-        marker=dict(color=color, size=6, symbol="circle",
-                    line=dict(color="#0f1923", width=1.5)),
-        fill="tozeroy", fillcolor=fill_color,
-        hovertemplate=f"<b>{label}</b><br>%{{x|%d %b %Y}}<br><b>%{{y:,.1f}}</b><extra></extra>",
-    ), **kwargs)
+    if len(df):
+        last = df.sort_values(date_col).iloc[-1]
+        fig.add_trace(go.Scatter(
+            x=[last[date_col]], y=[last[col_name]], mode="markers",
+            marker=dict(color=color, size=7, line=dict(color="#ffffff", width=1.5)),
+            showlegend=False, hoverinfo="skip",
+        ), **kwargs)
+
+def show_chart(fig, **kwargs):
+    """Display a Plotly chart; drops area fills when more than one line is filled."""
+    filled = [t for t in fig.data if getattr(t, "fill", None) == "tozeroy"]
+    if len(filled) > 1:
+        for t in filled:
+            t.fill = None
+    kwargs.setdefault("use_container_width", True)
+    st.plotly_chart(fig, **kwargs)
 
 def std_layout(title, yaxis_title="", height=500):
+    """Shared layout. Pass title="" when a section heading above already names the chart."""
     layout = dict(PLOTLY_LAYOUT)
-    layout["title"] = dict(text=title,
-                           font=dict(color="#1a1a2e", size=15, family="Segoe UI", weight="bold"),
-                           x=0, xanchor="left", pad=dict(l=0))
+    if title:
+        layout["title"] = dict(text=title, font=dict(color=BI_TEXT, size=14, family=CHART_FONT, weight="bold"),
+                               x=0, xanchor="left", y=0.98, yanchor="top", yref="container", pad=dict(l=4))
+        layout["margin"] = dict(PLOTLY_LAYOUT["margin"], t=80)
     layout["yaxis"] = dict(PLOTLY_LAYOUT["yaxis"],
-                           title=dict(text=yaxis_title, font=dict(color="#555555", size=11)))
+                           title=dict(text=yaxis_title, font=dict(color=BI_SUBTEXT, size=11)))
     layout["height"] = height
     return layout
 
@@ -524,37 +497,6 @@ def plotly_line(weekly_df, date_col, series, title, yaxis_title="Members", heigh
     fig.update_layout(**std_layout(title, yaxis_title, height))
     return fig
 
-def plotly_dual_axis(weekly_df, date_col, member_series, title, height=520):
-    fig = make_subplots(specs=[[{"secondary_y": True}]])
-    for col_name, color, label in member_series:
-        if col_name not in weekly_df.columns: continue
-        std_traces(fig, weekly_df, date_col, col_name, color, label, secondary_y=False)
-    if "Churn Rate %" in weekly_df.columns:
-        try:
-            r,g,b = int(BI_RED[1:3],16),int(BI_RED[3:5],16),int(BI_RED[5:7],16)
-            glow = f"rgba({r},{g},{b},0.4)"
-        except:
-            glow = "rgba(209,52,56,0.4)"
-        fig.add_trace(go.Scatter(
-            x=weekly_df[date_col], y=weekly_df["Churn Rate %"],
-            name="Churn Rate %", mode="lines",
-            line=dict(color=glow, width=6),
-            showlegend=False, hoverinfo="skip",
-        ), secondary_y=True)
-        fig.add_trace(go.Scatter(
-            x=weekly_df[date_col], y=weekly_df["Churn Rate %"],
-            name="Churn Rate %", mode="lines+markers",
-            line=dict(color=BI_RED, width=2.5, dash="dot", shape="spline", smoothing=0.4),
-            marker=dict(color=BI_RED, size=6, symbol="diamond",
-                        line=dict(color="#0f1923", width=1.5)),
-            hovertemplate="<b>Churn Rate</b>: %{y:.1f}%<extra></extra>",
-        ), secondary_y=True)
-    layout = std_layout(title, "Members", height)
-    layout["yaxis2"] = dict(
-        title=dict(text="Churn Rate %", font=dict(color=BI_RED, size=11)),
-        tickfont=dict(color=BI_RED), gridcolor="#e8e8e8", showgrid=False, zeroline=False)
-    fig.update_layout(**layout)
-    return fig
 def apply_gpm_filter(df):
     """Filter data based on logged-in user's allowed locations.
     Only admins see every location; anyone else sees only their allowed
@@ -584,14 +526,19 @@ def get_13m_filtered(df_wm, df_filtered):
 
 def report_filters(df, key_prefix="", show_date=True,
                    show_country=True, show_state=True,
-                   show_stage=True, show_gpm=True, show_location=False, show_status=True):
+                   show_stage=True, show_gpm=True, show_location=False, show_status=True, panel=None):
+    """Filters in one labelled panel. Pass `panel` to add more controls to the same panel."""
     loc_col = "Success Tutoring - Business name"
-    with st.expander("🔍 Filter this report", expanded=True):
-        cols = st.columns(5); i = 0
+    if panel is None:
+        panel = st.container(border=True)
+    with panel:
+        st.markdown('<div class="filter-label">Filters</div>', unsafe_allow_html=True)
+        n_cols = 6 if show_location else 5
+        cols = st.columns(n_cols); i = 0
         if show_date and "Date" in df.columns:
             max_d = df["Date"].max(); min_d = df["Date"].min()
-            with cols[i%5]:
-                period = st.selectbox("📅 Period",
+            with cols[i%n_cols]:
+                period = st.selectbox("Period",
                     ["All Time","Last Month","Last Quarter","Last 6 Months","Last Year","Latest Week","Custom"],
                     index=0, key=f"{key_prefix}_date")
             i += 1
@@ -601,7 +548,7 @@ def report_filters(df, key_prefix="", show_date=True,
             elif period=="Last 6 Months": df=df[df["Date"]>=max_d-pd.DateOffset(months=6)]
             elif period=="Last Year": df=df[df["Date"]>=max_d-pd.DateOffset(years=1)]
             elif period=="Custom":
-                with cols[i%5]:
+                with cols[i%n_cols]:
                     cr=st.date_input("Range",value=(min_d.date(),max_d.date()),
                                      min_value=min_d.date(),max_value=max_d.date(),
                                      key=f"{key_prefix}_custom")
@@ -609,39 +556,40 @@ def report_filters(df, key_prefix="", show_date=True,
                 if isinstance(cr,tuple) and len(cr)==2:
                     df=df[(df["Date"].dt.date>=cr[0])&(df["Date"].dt.date<=cr[1])]
         if show_country and "Country" in df.columns:
-            with cols[i%5]:
+            with cols[i%n_cols]:
                 opts=["All"]+sorted(df["Country"].dropna().unique().tolist())
-                sel=st.selectbox("🌏 Country",opts,key=f"{key_prefix}_country")
+                sel=st.selectbox("Country",opts,key=f"{key_prefix}_country")
             if sel!="All": df=df[df["Country"]==sel]
             i+=1
         if show_state and "Region" in df.columns:
-            with cols[i%5]:
+            with cols[i%n_cols]:
                 opts=["All"]+sorted(df["Region"].dropna().unique().tolist())
-                sel=st.selectbox("📍 State",opts,key=f"{key_prefix}_state")
+                sel=st.selectbox("State",opts,key=f"{key_prefix}_state")
             if sel!="All": df=df[df["Region"]==sel]
             i+=1
         if show_stage and "Stage" in df.columns:
-            with cols[i%5]:
+            with cols[i%n_cols]:
                 opts=["All"]+sorted(df["Stage"].dropna().unique().tolist())
-                sel=st.selectbox("📊 Stage",opts,key=f"{key_prefix}_stage")
+                sel=st.selectbox("Stage",opts,key=f"{key_prefix}_stage")
             if sel!="All": df=df[df["Stage"]==sel]
             i+=1
         if show_gpm and "GPM" in df.columns:
-            with cols[i%5]:
+            with cols[i%n_cols]:
                 opts=["All"]+sorted(df["GPM"].dropna().unique().tolist())
-                sel=st.selectbox("👤 GPM",opts,key=f"{key_prefix}_gpm")
+                sel=st.selectbox("GPM",opts,key=f"{key_prefix}_gpm")
             if sel!="All": df=df[df["GPM"]==sel]
             i+=1
         if show_location and loc_col in df.columns:
-            with cols[i%5]:
-                opts=["All Locations"]+sorted(df[loc_col].dropna().unique().tolist())
-                sel=st.selectbox("🏢 Location",opts,key=f"{key_prefix}_loc")
-            if sel!="All Locations": df=df[df[loc_col]==sel]
+            with cols[i%n_cols]:
+                opts=sorted(df[loc_col].dropna().unique().tolist())
+                sel=st.multiselect("Location",opts,key=f"{key_prefix}_loc",placeholder="All locations",
+                                   format_func=lambda x: x.replace("Success Tutoring - ",""))
+            if sel: df=df[df[loc_col].isin(sel)]
             i+=1
         if show_status and "Status" in df.columns:
-            with cols[i%5]:
+            with cols[i%n_cols]:
                 opts=["All"]+sorted(df["Status"].dropna().unique().tolist())
-                sel=st.selectbox("🔵 Status",opts,key=f"{key_prefix}_status")
+                sel=st.selectbox("Status",opts,key=f"{key_prefix}_status")
             if sel!="All": df=df[df["Status"]==sel]
             i+=1
     return df
@@ -650,12 +598,9 @@ def checkbox_date_filter(df, key_prefix=""):
     if "Date" not in df.columns or df.empty: return df
     all_dates = sorted(df["Date"].dropna().unique(),reverse=True)
     date_labels = [d.strftime("%d %b %Y") for d in all_dates]
-    st.markdown(f"""<div style="background:#0d2137;border:1px solid {BI_ACCENT};
-                border-radius:6px;padding:12px 16px;margin-bottom:12px">
-        <span style="color:{BI_ACCENT};font-weight:700;font-size:0.9em">📅 Select Weeks to Display</span>
-        <p style="color:{BI_SUBTEXT};font-size:0.8em;margin:4px 0 8px 0">
-        Newest first. Default is latest 2 weeks.</p>
-    </div>""", unsafe_allow_html=True)
+    st.markdown(f"""<div class="filter-label">Weeks</div>
+        <p style="color:{BI_SUBTEXT};font-size:0.8em;margin:0 0 4px 0">Newest first. Default is the latest 2 weeks.</p>""",
+        unsafe_allow_html=True)
     default_sel = date_labels[:2] if len(date_labels) >= 2 else date_labels
     selected_labels = st.multiselect(
         "Select one or more weeks:",
@@ -667,66 +612,19 @@ def checkbox_date_filter(df, key_prefix=""):
     selected_dt = [pd.Timestamp(d) for d in selected_labels]
     return df[df["Date"].isin(selected_dt)]
 
-def draw_per_location_trend(df_13m, metric_col, metric_label, color, key_prefix):
-    loc_col = "Success Tutoring - Business name"
-    if metric_col not in df_13m.columns:
-        st.warning(f"Column '{metric_col}' not found."); return
-    vl = load_vlookup()
-    all_stages = vl["Stage"].dropna().unique().tolist() if not vl.empty and "Stage" in vl.columns else []
-    stage_opts = ["All"]+sorted(all_stages)
-    default_s = "Growth" if "Growth" in stage_opts else stage_opts[0]
-    sel_s = st.selectbox("Filter by Stage:",stage_opts,
-                          index=stage_opts.index(default_s),key=f"{key_prefix}_stage")
-    df_plot = df_13m.copy()
-    if sel_s!="All" and not vl.empty and "Stage" in vl.columns:
-        stage_locs = vl[vl["Stage"]==sel_s][loc_col].tolist()
-        df_plot = df_plot[df_plot[loc_col].isin(stage_locs)]
-    if df_plot.empty: st.info(f"No data for {sel_s} stage."); return
-    avg_df = df_plot.groupby("Date").apply(
-        lambda x: x.groupby(loc_col)[metric_col].sum().mean()
-    ).reset_index(); avg_df.columns=["Date","Avg"]; avg_df=avg_df.sort_values("Date")
-    stage_lbl = f"— {sel_s}" if sel_s!="All" else "— All Stages"
-    fig = go.Figure()
-    std_traces(fig, avg_df, "Date", "Avg", color, f"Network Avg {stage_lbl}")
-    show_indiv = st.checkbox("Show individual locations",value=False,key=f"{key_prefix}_indiv")
-    if show_indiv:
-        locs = sorted(df_plot[loc_col].dropna().unique().tolist())
-        sel_locs = st.multiselect("Select locations:",locs,default=locs[:3],
-                                   max_selections=8,key=f"{key_prefix}_locs")
-        colors_indiv = [BI_BLUE,BI_ORANGE,BI_PURPLE,BI_RED,BI_YELLOW,"#00b4d8","#e91e8c","#33cc99"]
-        for i,loc in enumerate(sel_locs):
-            loc_df = df_plot[df_plot[loc_col]==loc].groupby("Date")[metric_col].sum().reset_index().sort_values("Date")
-            loc_name = loc.replace("Success Tutoring - ","")
-            std_traces(fig, loc_df, "Date", metric_col, colors_indiv[i%len(colors_indiv)], loc_name)
-    fig.update_layout(**std_layout(
-        f"Avg {metric_label} per Location {stage_lbl} — Last 13 Months",
-        f"Avg {metric_label}", 420))
-    st.plotly_chart(fig, use_container_width=True)
-
-def latest_week_table(df_wm, df_filtered, metric_col, label_col, table_title):
-    loc_col = "Success Tutoring - Business name"
-    latest_wk = df_wm["Date"].max()
-    df_tbl = df_wm[df_wm["Date"]==latest_wk].copy()
-    for col in ["Country","Region","Stage","GPM","Status"]:
-        if col in df_filtered.columns and col in df_tbl.columns:
-            df_tbl = df_tbl[df_tbl[col].isin(df_filtered[col].unique())]
-    df_tbl[metric_col] = pd.to_numeric(df_tbl[metric_col],errors="coerce").fillna(0)
-    loc = df_tbl.groupby(loc_col)[metric_col].sum().reset_index()
-    loc.columns=["Location",label_col]
-    loc = loc.sort_values(label_col,ascending=False).reset_index(drop=True)
-    st.markdown(f'<div class="section-header">{table_title} — Latest Week ({latest_wk.strftime("%d %b %Y")})</div>',
-                unsafe_allow_html=True)
-    st.dataframe(loc,use_container_width=True,hide_index=True)
-
 # ══════════════════════════════════════════════════════════════════════════════
 # REPORT 1 — Locations
 # ══════════════════════════════════════════════════════════════════════════════
 def report_locations(df_wm):
-    st.markdown('<div class="report-title">1 · Campus Locations</div>', unsafe_allow_html=True)
+    st.markdown('<div class="report-title">Campus Locations</div>', unsafe_allow_html=True)
     st.markdown('<div class="report-subtitle">Source: Vlookup — all location metadata with stage, GPM, country and region</div>', unsafe_allow_html=True)
     loc_col = "Success Tutoring - Business name"
     df_wm = apply_gpm_filter(df_wm)
-    vl_full = apply_gpm_filter(load_vlookup())
+    vl_full = apply_gpm_filter(load_vlookup()).copy()
+    # Label blank metadata so gaps are easy to spot (and fix in the Vlookup sheet)
+    for c in ["Country", "Stage", "Region", "GPM", "Status"]:
+        if c in vl_full.columns:
+            vl_full[c] = vl_full[c].astype(str).str.strip().replace({"": "Not set", "nan": "Not set", "None": "Not set"})
     vl = report_filters(vl_full.copy(),key_prefix="r1vl",show_date=False,
                         show_country=True,show_state=True,show_stage=True,show_gpm=True,show_status=True)
     if not vl.empty and "Stage" in vl.columns:
@@ -744,10 +642,10 @@ def report_locations(df_wm):
     all_dates = sorted(df_wm["Date"].dropna().unique())
     latest_date = all_dates[-1] if all_dates else None
     if not vl.empty and "Country" in vl.columns and "Stage" in vl.columns:
-        with st.expander("📊 Locations by Country & Stage",expanded=True):
-            pivot = vl.groupby(["Country","Stage"]).size().unstack(fill_value=0)
-            pivot["Grand Total"]=pivot.sum(axis=1); pivot.loc["Grand Total"]=pivot.sum()
-            st.dataframe(pivot,use_container_width=True)
+        st.markdown('<div class="section-header">Locations by Country & Stage</div>',unsafe_allow_html=True)
+        pivot = vl.groupby(["Country","Stage"]).size().unstack(fill_value=0)
+        pivot["Grand Total"]=pivot.sum(axis=1); pivot.loc["Grand Total"]=pivot.sum()
+        st.dataframe(pivot,use_container_width=True)
     st.markdown('<div class="section-header">All Location Details</div>',unsafe_allow_html=True)
     if not vl.empty:
         if latest_date:
@@ -763,9 +661,10 @@ def report_locations(df_wm):
             show_cols=[c for c in [loc_col,"Stage","GPM","Status","Country","Region",
                                    "Age (Months)","# Active members","# New members",
                                    "# Suspended members","# Cancelled members","Churn %"] if c in merged.columns]
-            st.dataframe(merged[show_cols].rename(columns={loc_col:"Location"}).sort_values(
-                "# Active members",ascending=False).reset_index(drop=True),
-                use_container_width=True,hide_index=True)
+            tbl = merged[show_cols].rename(columns={loc_col:"Location"}).sort_values(
+                "# Active members",ascending=False).reset_index(drop=True)
+            tbl["Location"] = tbl["Location"].astype(str).str.replace("Success Tutoring - ","",regex=False)
+            st.dataframe(tbl, use_container_width=True, hide_index=True)
         else:
             show_cols=[c for c in [loc_col,"Stage","GPM","Status","Country","Region","Age (Months)"] if c in vl.columns]
             st.dataframe(vl[show_cols].rename(columns={loc_col:"Location"}).reset_index(drop=True),
@@ -774,386 +673,618 @@ def report_locations(df_wm):
 # ══════════════════════════════════════════════════════════════════════════════
 # REPORT 2 — Membership
 # ══════════════════════════════════════════════════════════════════════════════
-def report_membership(df_wm):
-    st.markdown('<div class="report-title">2 · Membership</div>', unsafe_allow_html=True)
-    st.markdown('<div class="report-subtitle">Source: Weekly Membership — active, new, suspended & cancelled member trends</div>', unsafe_allow_html=True)
-    df_wm = apply_gpm_filter(df_wm)
-    df_temp = report_filters(df_wm.copy(),key_prefix="r2",show_date=False,
-                              show_country=True,show_state=True,show_stage=True,show_gpm=True,show_location=True,show_status=True)
-    df = checkbox_date_filter(df_temp,key_prefix="r2")
-    num_cols=["# Active members","# New members","# Suspended members","# Cancelled members"]
-    for c in num_cols:
-        if c in df.columns: df[c]=pd.to_numeric(df[c],errors="coerce").fillna(0)
-    all_dates=sorted(df["Date"].dropna().unique())
-    latest_date=all_dates[-1] if all_dates else None
-    prev_date=all_dates[-2] if len(all_dates)>=2 else None
-    def ws(d,col):
-        if d is None or col not in df.columns: return 0
-        return df[df["Date"]==d][col].sum()
-    la=ws(latest_date,"# Active members"); pa=ws(prev_date,"# Active members")
-    ln=ws(latest_date,"# New members");    pn=ws(prev_date,"# New members")
-    ls=ws(latest_date,"# Suspended members"); ps=ws(prev_date,"# Suspended members")
-    lc=ws(latest_date,"# Cancelled members"); pc=ws(prev_date,"# Cancelled members")
-    col1,col2,col3,col4=st.columns(4)
-    with col1: metric_card("Active Members",   f"{la:,.0f}",la-pa,"green")
-    with col2: metric_card("New Members",      f"{ln:,.0f}",ln-pn,"blue")
-    with col3: metric_card("Suspended Members",f"{ls:,.0f}",ls-ps,"orange")
-    with col4: metric_card("Cancelled Members",f"{lc:,.0f}",lc-pc,"red")
-    st.markdown("<br>",unsafe_allow_html=True)
-    cr_latest=churn_rate(lc,la); cr_prev=churn_rate(pc,pa)
-    col1,col2=st.columns([1,3])
-    with col1: metric_card("Network Churn Rate",f"{cr_latest:.1f}%",round(cr_latest-cr_prev,2),"red")
-            # ── YEAR-OVER-YEAR WEEKLY COMPARISON ──────────────────────────────────
-    st.markdown('<div class="section-header">Year-over-Year Weekly Comparison</div>', unsafe_allow_html=True)
+MEMBER_METRICS = {
+    "# Active members":    "Active members",
+    "# New members":       "New members",
+    "# Suspended members": "Suspended members",
+    "# Cancelled members": "Cancelled members",
+}
+# For these, a fall is good news
+LOWER_IS_BETTER = {"# Suspended members", "# Cancelled members", "Churn %"}
 
-    df_yoy = df_wm.copy()
-    df_yoy["Week"] = df_yoy["Date - Week/Year"].str.split("/").str[0].astype(int)
-    df_yoy["Year"] = df_yoy["Date - Week/Year"].str.split("/").str[1].astype(int)
-    df_yoy["State"] = df_yoy["Region"].map(REGION_TO_STATE).fillna("Other")
-
-    # Independent filters
-    yoy_cols = st.columns(3)
-    all_locs_yoy    = sorted(df_yoy["Success Tutoring - Business name"].dropna().unique().tolist())
-    sel_locs_yoy    = yoy_cols[0].multiselect("📍 Location(s)", all_locs_yoy, default=[], key="yoy_locs", placeholder="All Locations")
-    all_gpms_yoy    = sorted(df_yoy["GPM"].dropna().unique().tolist()) if "GPM" in df_yoy.columns else []
-    sel_gpm_yoy     = yoy_cols[1].selectbox("👤 GPM", ["All"] + all_gpms_yoy, key="yoy_gpm")
-    all_stages_yoy  = sorted(df_yoy["Stage"].dropna().unique().tolist()) if "Stage" in df_yoy.columns else []
-    sel_stage_yoy   = yoy_cols[2].selectbox("🏁 Stage", ["All"] + all_stages_yoy, key="yoy_stage")
-
-    yoy_cols2 = st.columns(3)
-    all_status_yoy    = sorted(df_yoy["Status"].dropna().unique().tolist()) if "Status" in df_yoy.columns else []
-    sel_status_yoy    = yoy_cols2[0].selectbox("🌐 Status",  ["All"] + all_status_yoy,    key="yoy_status")
-    all_states_yoy    = sorted(df_yoy["Region"].dropna().unique().tolist()) if "Region" in df_yoy.columns else []
-    sel_state_yoy     = yoy_cols2[1].selectbox("📍 State",   ["All"] + all_states_yoy,    key="yoy_state")
-    all_countries_yoy = sorted(df_yoy["Country"].dropna().unique().tolist()) if "Country" in df_yoy.columns else []
-    sel_country_yoy   = yoy_cols2[2].selectbox("🌍 Country", ["All"] + all_countries_yoy, key="yoy_country")
-
-    # Metric selector
-    yoy_metric = st.selectbox("📊 Metric", [
-        "# Active members","# New members","# Suspended members","# Cancelled members"
-    ], key="yoy_metric")
-
-    # Year toggles
-    available_years = sorted(df_yoy["Year"].dropna().unique().tolist(), reverse=True)
-    yoy_year_cols   = st.columns(len(available_years))
-    sel_years_yoy   = []
-    for i, yr in enumerate(available_years):
-        if yoy_year_cols[i].checkbox(str(yr), value=(i < 2), key=f"yoy_yr_{yr}"):
-            sel_years_yoy.append(yr)
-
-    # Comparative toggle
-    comparative = st.checkbox("📊 Comparative only (locations open in all selected years)", value=False, key="yoy_comparative")
-
-    # Holiday state selector
-    holiday_states     = ["NSW","VIC","QLD","WA","SA","NZ"]
-    sel_holiday_states = st.multiselect("🎓 Show school holidays for", holiday_states, default=[], key="yoy_holiday_states", placeholder="Select states...")
-
-    # Apply filters
-    df_yoy_f = df_yoy.copy()
-    if sel_locs_yoy:           df_yoy_f = df_yoy_f[df_yoy_f["Success Tutoring - Business name"].isin(sel_locs_yoy)]
-    if sel_gpm_yoy    != "All": df_yoy_f = df_yoy_f[df_yoy_f["GPM"]     == sel_gpm_yoy]
-    if sel_stage_yoy  != "All": df_yoy_f = df_yoy_f[df_yoy_f["Stage"]   == sel_stage_yoy]
-    if sel_status_yoy != "All": df_yoy_f = df_yoy_f[df_yoy_f["Status"]  == sel_status_yoy]
-    if sel_state_yoy  != "All": df_yoy_f = df_yoy_f[df_yoy_f["Region"]  == sel_state_yoy]
-    if sel_country_yoy!= "All": df_yoy_f = df_yoy_f[df_yoy_f["Country"] == sel_country_yoy]
-
-    # Comparative filter
-    if comparative and len(sel_years_yoy) > 1:
-        loc_col_yoy   = "Success Tutoring - Business name"
-        locs_per_year = [set(zip(df_yoy_f[df_yoy_f["Year"]==yr][loc_col_yoy], df_yoy_f[df_yoy_f["Year"]==yr]["Week"])) for yr in sel_years_yoy]
-        common_pairs  = locs_per_year[0].intersection(*locs_per_year[1:])
-        df_yoy_f      = df_yoy_f[df_yoy_f.apply(lambda r: (r[loc_col_yoy], r["Week"]) in common_pairs, axis=1)]
-
-    if yoy_metric in df_yoy_f.columns:
-        df_yoy_f[yoy_metric] = pd.to_numeric(df_yoy_f[yoy_metric], errors="coerce").fillna(0)
-
-    all_weeks  = list(range(1, 53))
-    YEAR_COLORS = {2024: "#4e9af1", 2025: "#f1a14e", 2026: "#4ef19a", 2027: "#f14e9a"}
-
-    if sel_years_yoy and yoy_metric in df_yoy_f.columns:
-        latest_year = df_yoy_f["Year"].max()
-        latest_week = df_yoy_f[df_yoy_f["Year"]==latest_year]["Week"].max()
-        prev_year   = latest_year - 1
-
-        # Build chart
-        fig_yoy = go.Figure()
-        for yr in sorted(sel_years_yoy):
-            df_yr = df_yoy_f[df_yoy_f["Year"]==yr].groupby("Week")[yoy_metric].sum().reindex(all_weeks)
-            fig_yoy.add_trace(go.Bar(
-                x=all_weeks, y=df_yr.values,
-                name=str(yr),
-                marker_color=YEAR_COLORS.get(yr, "#aaaaaa")
-            ))
-
-        # School holiday shading
-        if sel_holiday_states:
-            df_hols = load_school_holidays()
-            if not df_hols.empty:
-                latest_sel_year = max(sel_years_yoy)
-                prior_sel_years = [y for y in sel_years_yoy if y != latest_sel_year]
-                for _, hrow in df_hols[df_hols["State"].isin(sel_holiday_states)].iterrows():
-                    h_year  = int(hrow["Year"])
-                    h_start = int(hrow["Start_Week"])
-                    h_end   = int(hrow["End_Week"])
-                    h_label = hrow["Holiday"]
-                    base_color = HOLIDAY_COLORS.get(h_label, "rgba(200,200,200,")
-                    if h_year == latest_sel_year:
-                        fig_yoy.add_vrect(
-                            x0=h_start - 0.5, x1=h_end + 0.5,
-                            fillcolor=base_color + "0.15)",
-                            layer="below", line_width=0,
-                            annotation_text=h_label,
-                            annotation_position="top left",
-                            annotation=dict(font_size=9, font_color="grey")
-                        )
-                    elif h_year in prior_sel_years:
-                        fig_yoy.add_vrect(
-                            x0=h_start - 0.5, x1=h_end + 0.5,
-                            fillcolor=base_color + "0.07)",
-                            layer="below", line_width=0
-                        )
-
-        fig_yoy.update_layout(
-            barmode="group",
-            title=f"{yoy_metric} — Year over Year by Week",
-            xaxis=dict(title="Week", tickmode="linear", dtick=1),
-            yaxis=dict(title=yoy_metric),
-            height=450,
-            legend=dict(orientation="h", y=-0.2),
-            margin=dict(l=40, r=40, t=50, b=80),
-        )
-        st.plotly_chart(fig_yoy, use_container_width=True)
-
-        # ── VARIANCE TABLE ─────────────────────────────────────────────
-        def get_val(week, year):
-            v = df_yoy_f[(df_yoy_f["Week"]==week) & (df_yoy_f["Year"]==year)][yoy_metric].sum()
-            return v if v > 0 else None
-
-        def pct(a, b):
-            if a is None or b is None or b == 0: return None
-            return round((a - b) / b * 100, 1)
-
-        def fmt_pct(v):
-            if v is None: return "N/A"
-            color = "green" if v >= 0 else "red"
-            sign  = "+" if v >= 0 else ""
-            return f'<span style="color:{color};font-weight:bold">{sign}{v}%</span>'
-
-        cur        = get_val(latest_week, latest_year)
-        prev_wk    = get_val(latest_week - 1, latest_year)
-        prev_yr_wk = get_val(latest_week, prev_year)
-        ytd_cur    = df_yoy_f[(df_yoy_f["Year"]==latest_year)  & (df_yoy_f["Week"]<=latest_week)][yoy_metric].sum()
-        ytd_prev   = df_yoy_f[(df_yoy_f["Year"]==prev_year) & (df_yoy_f["Week"]<=latest_week)][yoy_metric].sum()
-        ytd_var    = pct(ytd_cur, ytd_prev) if ytd_prev > 0 else None
-
-        st.markdown(f"""
-        | Variance | Value |
-        |---|---|
-        | This week vs last week (Wk {latest_week} vs Wk {latest_week-1}) | {fmt_pct(pct(cur, prev_wk))} |
-        | This week vs same week last year (Wk {latest_week} {latest_year} vs {prev_year}) | {fmt_pct(pct(cur, prev_yr_wk))} |
-        | YTD {latest_year} vs YTD {prev_year} (Wk 1–{latest_week}) | {fmt_pct(ytd_var)} |
-        """, unsafe_allow_html=True)
-
-                # ── LOCATION TABLE ─────────────────────────────────────────────
-        st.markdown(f'<div class="section-header">Location Detail — {yoy_metric}</div>', unsafe_allow_html=True)
-
-        with st.spinner("Calculating location table..."):
-            loc_col_yoy = "Success Tutoring - Business name"
-            if sel_locs_yoy:
-                table_locs = sel_locs_yoy
-            else:
-                table_locs = sorted(df_yoy_f[loc_col_yoy].dropna().unique().tolist())
-
-            rows = []
-            for loc in table_locs:
-                df_loc = df_yoy_f[df_yoy_f[loc_col_yoy] == loc]
-                row = {"Location": loc.replace("Success Tutoring - ", "")}
-
-                # Last week value (latest year only) — first numeric column
-                prev_wk_val = df_loc[(df_loc["Year"]==latest_year) & (df_loc["Week"]==latest_week-1)][yoy_metric].sum()
-                row[f"Wk{latest_week-1} '{str(latest_year)[2:]}"] = prev_wk_val if prev_wk_val > 0 else None
-
-                # Current week value for each selected year
-                for yr in sorted(sel_years_yoy, reverse=True):
-                    v = df_loc[(df_loc["Year"]==yr) & (df_loc["Week"]==latest_week)][yoy_metric].sum()
-                    row[f"Wk{latest_week} '{str(yr)[2:]}"] = v if v > 0 else None
-
-                # vs Last Week (latest year)
-                cur_loc  = df_loc[(df_loc["Year"]==latest_year) & (df_loc["Week"]==latest_week)][yoy_metric].sum()
-                row[f"vs Wk{latest_week-1}"] = pct(cur_loc if cur_loc > 0 else None, prev_wk_val if prev_wk_val > 0 else None)
-
-                # vs Same Week Last Year
-                prev_yr_loc = df_loc[(df_loc["Year"]==prev_year) & (df_loc["Week"]==latest_week)][yoy_metric].sum()
-                row[f"vs Wk{latest_week} '{str(prev_year)[2:]}'"] = pct(cur_loc if cur_loc > 0 else None, prev_yr_loc if prev_yr_loc > 0 else None)
-
-                # YTD columns
-                ytd_cur_loc  = df_loc[(df_loc["Year"]==latest_year) & (df_loc["Week"]<=latest_week)][yoy_metric].sum()
-                ytd_prev_loc = df_loc[(df_loc["Year"]==prev_year)   & (df_loc["Week"]<=latest_week)][yoy_metric].sum()
-                row[f"YTD '{str(latest_year)[2:]}"] = ytd_cur_loc  if ytd_cur_loc  > 0 else None
-                row[f"YTD '{str(prev_year)[2:]}"]   = ytd_prev_loc if ytd_prev_loc > 0 else None
-                row["YTD Var%"] = pct(ytd_cur_loc if ytd_cur_loc > 0 else None, ytd_prev_loc if ytd_prev_loc > 0 else None)
-
-                rows.append(row)
-
-            df_table = pd.DataFrame(rows)
-
-            # Sort by current week latest year, highest first
-            wk_col = f"Wk{latest_week} '{str(latest_year)[2:]}'"
-            if wk_col in df_table.columns:
-                df_table = df_table.sort_values(wk_col, ascending=False, na_position="last")
-
-            # Grand total row
-            total_row = {"Location": "TOTAL"}
-            pct_cols  = [f"vs Wk{latest_week-1}", f"vs Wk{latest_week} '{str(prev_year)[2:]}'", "YTD Var%"]
-
-            for col in df_table.columns:
-                if col == "Location" or col in pct_cols:
-                    continue
-                total_row[col] = df_table[col].sum(min_count=1)
-
-            # Recalculate total variances
-            t_cur     = df_yoy_f[(df_yoy_f["Year"]==latest_year) & (df_yoy_f["Week"]==latest_week)][yoy_metric].sum()
-            t_prev_wk = df_yoy_f[(df_yoy_f["Year"]==latest_year) & (df_yoy_f["Week"]==latest_week-1)][yoy_metric].sum()
-            t_prev_yr = df_yoy_f[(df_yoy_f["Year"]==prev_year)   & (df_yoy_f["Week"]==latest_week)][yoy_metric].sum()
-            t_ytd_cur  = df_yoy_f[(df_yoy_f["Year"]==latest_year) & (df_yoy_f["Week"]<=latest_week)][yoy_metric].sum()
-            t_ytd_prev = df_yoy_f[(df_yoy_f["Year"]==prev_year)   & (df_yoy_f["Week"]<=latest_week)][yoy_metric].sum()
-            total_row[f"vs Wk{latest_week-1}"]                    = pct(t_cur or None, t_prev_wk or None)
-            total_row[f"vs Wk{latest_week} '{str(prev_year)[2:]}'"] = pct(t_cur or None, t_prev_yr or None)
-            total_row["YTD Var%"]                                  = pct(t_ytd_cur or None, t_ytd_prev or None)
-
-            df_table = pd.concat([df_table, pd.DataFrame([total_row])], ignore_index=True)
-
-            # Format pct columns as strings for display
-            def fmt_pct_cell(v):
-                if pd.isna(v) or v is None: return ""
-                sign = "+" if v >= 0 else ""
-                return f"{sign}{v:.1f}%"
-
-            df_display = df_table.copy()
-            for col in pct_cols:
-                if col in df_display.columns:
-                    df_display[col] = df_display[col].apply(fmt_pct_cell)
-
-            # Format numeric columns with commas
-            num_cols = [c for c in df_display.columns if c not in ["Location"] + pct_cols]
-            for col in num_cols:
-                df_display[col] = df_display[col].apply(
-                    lambda v: f"{int(v):,}" if pd.notna(v) and v is not None else ""
-                )
-
-            # Style the dataframe
-            def style_table(df):
-                styles = pd.DataFrame("", index=df.index, columns=df.columns)
-                for col in pct_cols:
-                    if col not in df.columns: continue
-                    for i, val in enumerate(df[col]):
-                        if val == "": continue
-                        if val.startswith("+"):
-                            styles.loc[i, col] = "color: #22c55e; font-weight: bold"
-                        elif val.startswith("-"):
-                            styles.loc[i, col] = "color: #ef4444; font-weight: bold"
-                # Bold total row
-                styles.iloc[-1] = styles.iloc[-1].apply(lambda x: x + "; font-weight: bold; border-top: 2px solid #666")
-                return styles
-
-            styled = df_display.style.apply(style_table, axis=None)
-
-            st.dataframe(
-                styled,
-                use_container_width=True,
-                height=500,
-                column_config={
-                    "Location": st.column_config.TextColumn("Location", pinned=True, width=200)
-                }
-            )
-    st.markdown('<div class="section-header">Member Trend — Last 13 Months</div>',unsafe_allow_html=True)
-    df_13m=get_13m_filtered(df_wm,df)
-    for c in num_cols:
-        if c in df_13m.columns: df_13m[c]=pd.to_numeric(df_13m[c],errors="coerce").fillna(0)
-    col1,col2,col3,col4=st.columns(4)
-    show_a=col1.checkbox("Active",   value=True, key="r2_active")
-    show_n=col2.checkbox("New",      value=False,key="r2_new")
-    show_s=col3.checkbox("Suspended",value=False,key="r2_susp")
-    show_c=col4.checkbox("Cancelled",value=True, key="r2_canc")
-    selected=[]
-    if show_a: selected.append(("# Active members",   BI_ACCENT,"Active Members"))
-    if show_n: selected.append(("# New members",      BI_BLUE,  "New Members"))
-    if show_s: selected.append(("# Suspended members",BI_ORANGE,"Suspended Members"))
-    if show_c: selected.append(("# Cancelled members",BI_RED,   "Cancelled Members"))
-    if selected:
-        cols_plot=[c for c,_,_ in selected if c in df_13m.columns]
-        weekly=df_13m.groupby("Date")[cols_plot].sum().reset_index().sort_values("Date")
-        fig = plotly_line(weekly,"Date",selected,"Total Member Count — Last 13 Months",height=500)
-        st.plotly_chart(fig,use_container_width=True)
+def pct_card(label, value, note, higher_is_better=True):
+    """KPI card whose headline is a % change, coloured by whether the change is good."""
+    if value is None:
+        text, color = "–", BI_SUBTEXT
     else:
-        st.info("Please select at least one metric.")
-    st.markdown('<div class="section-header">Avg Members per Location — Growth Stage Default</div>',unsafe_allow_html=True)
-    vl=load_vlookup(); loc_col="Success Tutoring - Business name"
-    all_stages_11=vl["Stage"].dropna().unique().tolist() if not vl.empty and "Stage" in vl.columns else []
-    stage_opts_11=["All"]+sorted(all_stages_11)
-    default_11="Growth" if "Growth" in stage_opts_11 else stage_opts_11[0]
-    sel_stage_11=st.selectbox("Filter by Stage:",stage_opts_11,
-                               index=stage_opts_11.index(default_11),key="r11_stage")
-    df_11=df_13m.copy()
-    if sel_stage_11!="All" and not vl.empty and "Stage" in vl.columns:
-        stage_locs=vl[vl["Stage"]==sel_stage_11][loc_col].tolist()
-        df_11=df_11[df_11[loc_col].isin(stage_locs)]
-    col1,col2,col3,col4=st.columns(4)
-    show_a2=col1.checkbox("Active",   value=True, key="r11_active")
-    show_n2=col2.checkbox("New",      value=False,key="r11_new")
-    show_s2=col3.checkbox("Suspended",value=False,key="r11_susp")
-    show_c2=col4.checkbox("Cancelled",value=True, key="r11_canc")
-    metrics_11=[]
-    if show_a2: metrics_11.append(("# Active members",   BI_ACCENT,"Active"))
-    if show_n2: metrics_11.append(("# New members",      BI_BLUE,  "New"))
-    if show_s2: metrics_11.append(("# Suspended members",BI_ORANGE,"Suspended"))
-    if show_c2: metrics_11.append(("# Cancelled members",BI_RED,   "Cancelled"))
-    if metrics_11 and loc_col in df_11.columns and not df_11.empty:
-        stage_lbl=f"— {sel_stage_11}" if sel_stage_11!="All" else "— All Stages"
-        fig2 = go.Figure()
-        for col_name,color,label in metrics_11:
-            if col_name not in df_11.columns: continue
-            avg_df=df_11.groupby("Date").apply(
-                lambda x,c=col_name: x.groupby(loc_col)[c].sum().mean()
-            ).reset_index(); avg_df.columns=["Date","Avg"]; avg_df=avg_df.sort_values("Date")
-            std_traces(fig2, avg_df, "Date", "Avg", color, f"Avg {label}")
-        fig2.update_layout(**std_layout(
-            f"Avg Members per Location {stage_lbl} — Last 13 Months","Avg Members/Location",500))
-        st.plotly_chart(fig2,use_container_width=True)
-        show_indiv=st.checkbox("Show individual locations",value=False,key="r11_indiv")
-        if show_indiv:
-            locs=sorted(df_11[loc_col].dropna().unique().tolist())
-            sel_locs=st.multiselect("Select locations:",locs,default=locs[:3],max_selections=8,key="r11_locs")
-            if sel_locs:
-                fig3=go.Figure()
-                colors_indiv=[BI_ACCENT,BI_BLUE,BI_ORANGE,BI_PURPLE,BI_RED,BI_YELLOW,"#00b4d8","#e91e8c"]
-                for i,loc in enumerate(sel_locs):
-                    for col_name,color,label in metrics_11:
-                        if col_name not in df_11.columns: continue
-                        loc_df=df_11[df_11[loc_col]==loc].groupby("Date")[col_name].sum().reset_index().sort_values("Date")
-                        loc_name=loc.replace("Success Tutoring - ","")
-                        std_traces(fig3, loc_df, "Date", col_name, colors_indiv[i%len(colors_indiv)], f"{loc_name} ({label})")
-                fig3.update_layout(**std_layout("Individual Location Trends","Members",500))
-                st.plotly_chart(fig3,use_container_width=True)
-    with st.expander("📋 Member Count by Location (Latest Week)",expanded=True):
-        if loc_col in df.columns and latest_date is not None:
-            latest_df=df[df["Date"]==latest_date].copy()
-            if sel_stage_11!="All" and not vl.empty and "Stage" in vl.columns:
-                stage_locs=vl[vl["Stage"]==sel_stage_11][loc_col].tolist()
-                latest_df=latest_df[latest_df[loc_col].isin(stage_locs)]
-            loc_tbl=latest_df.groupby(loc_col).agg(
-                Active=("# Active members","sum"),New=("# New members","sum"),
-                Suspended=("# Suspended members","sum"),Cancelled=("# Cancelled members","sum"),
-            ).reset_index().rename(columns={loc_col:"Location"})
-            loc_tbl["Churn Rate %"]=loc_tbl.apply(lambda r: churn_rate(r["Cancelled"],r["Active"]),axis=1)
-            loc_tbl=loc_tbl.sort_values("Active",ascending=False).reset_index(drop=True)
-            st.dataframe(loc_tbl,use_container_width=True,hide_index=True)
+        good = value >= 0 if higher_is_better else value <= 0
+        text = f"{'+' if value >= 0 else ''}{value:.1f}%"
+        color = BI_SUBTEXT if value == 0 else (BI_GREEN if good else BI_RED)
+    st.markdown(f"""<div class="metric-card">
+        <div class="metric-label">{label}</div>
+        <div class="metric-value" style="color:{color}">{text}</div>
+        <div class="metric-delta"><span>{note}</span></div>
+    </div>""", unsafe_allow_html=True)
+
+# ── Shared 52-week year-over-year bar chart (Membership, Net Growth, Revenue) ─
+MUTED_YEAR_COLORS = ["#f0a88c", "#9fb0b5", "#c9d3d6", "#dfe6e8"]
+
+def add_week_year(df):
+    """Add ISO Week and Year columns (from 'Date - Week/Year' when present, otherwise from Date)."""
+    d = df.copy()
+    if "Date - Week/Year" in d.columns:
+        wy = d["Date - Week/Year"].astype(str).str.split("/")
+        d["Week"] = pd.to_numeric(wy.str[0], errors="coerce")
+        d["Year"] = pd.to_numeric(wy.str[1], errors="coerce")
+    else:
+        iso = pd.to_datetime(d["Date"]).dt.isocalendar()
+        d["Week"] = iso["week"].astype("float"); d["Year"] = iso["year"].astype("float")
+    d = d.dropna(subset=["Week", "Year"])
+    d["Week"] = d["Week"].astype(int); d["Year"] = d["Year"].astype(int)
+    return d
+
+def yoy_options(key, years, metrics=None, avg_label="Average per location", avg_help=None,
+                show_avg=True, show_churn=False, avg_metrics=None):
+    """avg_metrics: if given, the Average toggle only appears for these metrics (rates are already per-unit)."""
+    """Options row above a year-over-year chart. Returns a dict of the choices."""
+    cols = st.columns([2, 2, 2, 2]) if metrics else st.columns([2, 2, 2])
+    i, out = 0, {}
+    if metrics:
+        out["metric"] = cols[0].selectbox("Metric", list(metrics), format_func=metrics.get, key=f"{key}_metric")
+        i = 1
+    out["years"] = cols[i].multiselect("Years", years, default=years[:2], key=f"{key}_years")
+    out["holidays"] = cols[i + 1].multiselect("School holidays", ["NSW", "VIC", "QLD", "WA", "SA", "NZ"],
+                                              default=[], key=f"{key}_holidays", placeholder="None")
+    with cols[i + 2]:
+        out["comparative"] = st.checkbox("Comparative only", value=False, key=f"{key}_comparative",
+                                         help="Only include locations open in every selected year")
+        if avg_metrics is not None and out.get("metric") not in avg_metrics:
+            show_avg = False
+        out["average"] = st.checkbox(avg_label, value=False, key=f"{key}_average",
+                                     help=avg_help or "Totals ÷ number of locations trading that week") if show_avg else False
+        out["churn"] = st.checkbox("Churn %", value=False, key=f"{key}_churn",
+                                   help="Plot churn % (cancelled ÷ active) as lines on the right axis") if show_churn else False
+    return out
+
+def comparative_only(d, years, loc_col):
+    """Keep only (location, week) pairs present in every selected year."""
+    if len(years) < 2: return d
+    pairs = [set(zip(d[d["Year"] == yr][loc_col], d[d["Year"] == yr]["Week"])) for yr in years]
+    common = pairs[0].intersection(*pairs[1:])
+    return d[[(l, w) in common for l, w in zip(d[loc_col], d["Week"])]]
+
+def trading_locations(d, loc_col, active_col, year):
+    """Number of locations with a positive value in active_col, per week of a year."""
+    x = d[(d["Year"] == year) & (d[active_col] > 0)]
+    return x.groupby("Week")[loc_col].nunique()
+
+def yoy_bar_figure(weekly, latest_year, latest_week, title, y_title, fmt=",.0f", prefix="", suffix="",
+                   change="pct", holidays=None, lines=None, line_axis_title="Churn %"):
+    """Weekly bars per year: this year in teal, earlier years muted, current-week marker,
+    month names under week numbers. `weekly` and `lines` map year -> Series indexed by week 1..52."""
+    import datetime as _dt
+    all_weeks = list(range(1, 53))
+    years = sorted(weekly)
+    prev = weekly.get(latest_year - 1)
+    fig = go.Figure()
+    for yr in years:
+        vals = weekly[yr].reindex(all_weeks)
+        if yr == latest_year:
+            color = BI_ACCENT
+            if prev is not None:
+                pv = prev.reindex(all_weeks)
+                if change == "pts":
+                    note = [f"{'+' if v-p >= 0 else ''}{v-p:.2f} pts vs {latest_year-1}" if pd.notna(v) and pd.notna(p) else ""
+                            for v, p in zip(vals, pv)]
+                else:
+                    note = [f"{'+' if v-p >= 0 else ''}{(v-p)/p*100:.0f}% vs {latest_year-1}" if pd.notna(v) and pd.notna(p) and p != 0 else ""
+                            for v, p in zip(vals, pv)]
+            else:
+                note = [""] * 52
+            hover = f"<b>{yr}</b>: {prefix}%{{y:{fmt}}}{suffix}  %{{customdata}}<extra></extra>"
+        else:
+            color = MUTED_YEAR_COLORS[(latest_year - yr - 1) % len(MUTED_YEAR_COLORS)]
+            note = [""] * 52
+            hover = f"{yr}: {prefix}%{{y:{fmt}}}{suffix}<extra></extra>"
+        fig.add_trace(go.Bar(x=all_weeks, y=vals.values, name=str(yr), marker_color=color,
+                             customdata=note, hovertemplate=hover))
+    if lines:
+        for yr in sorted(lines):
+            ln = lines[yr].reindex(all_weeks)
+            latest = yr == latest_year
+            fig.add_trace(go.Scatter(x=all_weeks, y=ln.values, name=f"{yr} churn %", yaxis="y2", mode="lines",
+                                     line=dict(color=BI_RED if latest else "#e8a09e", width=2.25 if latest else 1.75,
+                                               dash="solid" if latest else "dot"),
+                                     connectgaps=False, hovertemplate=f"{yr} churn: %{{y:.1f}}%<extra></extra>"))
+    if holidays:
+        df_hols = load_school_holidays()
+        if not df_hols.empty:
+            for _, h in df_hols[df_hols["State"].isin(holidays)].iterrows():
+                h_year, h_start, h_end = int(h["Year"]), int(h["Start_Week"]), int(h["End_Week"])
+                base = HOLIDAY_COLORS.get(h["Holiday"], "rgba(200,200,200,")
+                if h_year == latest_year:
+                    fig.add_vrect(x0=h_start-0.5, x1=h_end+0.5, fillcolor=base+"0.15)", layer="below", line_width=0,
+                                  annotation_text=h["Holiday"], annotation_position="top left",
+                                  annotation=dict(font_size=9, font_color=BI_SUBTEXT))
+                elif h_year in years:
+                    fig.add_vrect(x0=h_start-0.5, x1=h_end+0.5, fillcolor=base+"0.07)", layer="below", line_width=0)
+    fig.add_vline(x=latest_week + 0.5, line_dash="dash", line_color=BI_SUBTEXT, line_width=1,
+                  annotation_text=f"Wk {latest_week}", annotation_position="top left",
+                  annotation_font=dict(size=10, color=BI_SUBTEXT))
+    ticktext, last_month = [], None
+    for w in all_weeks:
+        try: m = _dt.date.fromisocalendar(int(latest_year), w, 4).strftime("%b")
+        except ValueError: m = None
+        ticktext.append(f"{w}<br><b>{m}</b>" if m and m != last_month else str(w))
+        last_month = m or last_month
+    layout = std_layout(title, y_title, 460)
+    layout.update(barmode="group", bargap=0.18, bargroupgap=0.04, hovermode="x unified",
+                  margin=dict(l=60, r=60 if lines else 30, t=70, b=60),
+                  legend=dict(PLOTLY_LAYOUT["legend"], orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+    layout["xaxis"] = dict(PLOTLY_LAYOUT["xaxis"], tickmode="array", tickvals=all_weeks, ticktext=ticktext,
+                           tickangle=0, range=[0.4, 52.6], title=dict(text="Week", font=dict(color=BI_SUBTEXT, size=11)))
+    layout["yaxis"] = dict(layout["yaxis"], tickformat=",.2~f", tickprefix=prefix, ticksuffix=suffix,
+                           rangemode="normal" if change == "pts" else "tozero")
+    if lines:
+        layout["yaxis2"] = dict(overlaying="y", side="right", showgrid=False, zeroline=False, rangemode="tozero",
+                                ticksuffix="%", tickformat=".1f", tickfont=dict(color=BI_RED, size=11),
+                                title=dict(text=line_axis_title, font=dict(color=BI_RED, size=11)))
+    fig.update_layout(**layout)
+    return fig
+
+def location_comparison(d13, loc_col, measures, key, rank_col, start_col):
+    """Clean lines per location for one measure, labelled at the line ends, with an optional
+    network-average line. measures: label -> dict(kind="sum", col=...) or
+    dict(kind="ratio", num=..., den=..., scale=1), plus optional prefix/suffix/fmt."""
+    max_date = d13["Date"].max()
+    ranked = (d13[d13["Date"] == max_date].groupby(loc_col)[rank_col].sum().sort_values(ascending=False).index.tolist())
+    all_locs = ranked + sorted(set(d13[loc_col].dropna()) - set(ranked))
+    c1, c2, c3 = st.columns([2, 5, 1.6])
+    label = c1.selectbox("Measure", list(measures), key=f"{key}_measure")
+    sel_locs = c2.multiselect("Locations (up to 8)", all_locs, default=all_locs[:3], max_selections=8,
+                              key=f"{key}_locs", format_func=lambda x: x.replace("Success Tutoring - ", ""))
+    with c3:
+        st.markdown("<div style='height:1.9rem'></div>", unsafe_allow_html=True)
+        show_avg = st.checkbox("Network average", value=True, key=f"{key}_avg")
+    m = measures[label]
+    need = [c for c in {m.get("col"), m.get("num"), m.get("den"), start_col} if c]
+    fmt, pre, suf = m.get("fmt", ",.0f"), m.get("prefix", ""), m.get("suffix", "")
+
+    def series(dd):
+        g = dd.groupby("Date")[need].sum().sort_index()
+        g = g[g[start_col].cumsum() > 0]
+        if m["kind"] == "sum":
+            return g[m["col"]]
+        return (g[m["num"]] / g[m["den"]] * m.get("scale", 1)).where(g[m["den"]] > 0)
+
+    if not sel_locs:
+        st.info("Select one or more locations to compare."); return
+    fig = go.Figure(); ends = []
+    if show_avg:
+        trading = d13[d13[start_col] > 0]
+        if m["kind"] == "sum":
+            avg = trading.groupby(["Date", loc_col])[m["col"]].sum().groupby(level="Date").mean()
+        else:
+            avg = series(trading)
+        fig.add_trace(go.Scatter(x=avg.index, y=avg.values, name="Network avg", mode="lines",
+                                 line=dict(color="#9fb0b5", width=2, dash="dash"),
+                                 hovertemplate=f"Network avg: {pre}%{{y:{fmt}}}{suf}<extra></extra>"))
+    for i, loc in enumerate(sel_locs):
+        sr = series(d13[d13[loc_col] == loc]).dropna()
+        if sr.empty: continue
+        name = loc.replace("Success Tutoring - ", "")
+        color = SERIES_COLORS[i % len(SERIES_COLORS)]
+        fig.add_trace(go.Scatter(x=sr.index, y=sr.values, name=name, mode="lines", line=dict(color=color, width=2.5),
+                                 hovertemplate=f"{name}: {pre}%{{y:{fmt}}}{suf}<extra></extra>"))
+        fig.add_trace(go.Scatter(x=[sr.index[-1]], y=[sr.values[-1]], mode="markers", marker=dict(color=color, size=8),
+                                 showlegend=False, hoverinfo="skip"))
+        ends.append([sr.index[-1], float(sr.values[-1]), f"{name} {pre}{sr.values[-1]:{fmt}}{suf}", color])
+    annotations = []
+    if ends:
+        gap = (max(abs(e[1]) for e in ends) or 1) * 0.05
+        ends.sort(key=lambda e: e[1]); placed = []
+        for e in ends:
+            placed.append(e[1] if not placed or e[1] - placed[-1] >= gap else placed[-1] + gap)
+        annotations = [dict(x=e[0], y=y, xref="x", yref="y", text=f"<b>{e[2]}</b>", showarrow=False,
+                            xanchor="left", xshift=10, font=dict(color=e[3], size=11)) for e, y in zip(ends, placed)]
+    layout = std_layout("", label, 460)
+    layout.update(showlegend=False, hovermode="x unified", margin=dict(l=70, r=190, t=20, b=50), annotations=annotations)
+    layout["xaxis"] = dict(PLOTLY_LAYOUT["xaxis"], tickangle=0, tickformat="%b %y", dtick="M1",
+                           range=[d13["Date"].min() - pd.Timedelta(days=3), max_date + pd.Timedelta(days=3)])
+    layout["yaxis"] = dict(layout["yaxis"], tickformat=",.2~f", tickprefix=pre, ticksuffix=suf)
+    fig.update_layout(**layout)
+    show_chart(fig, use_container_width=True)
+
+def report_membership(df_wm, df_rv):
+    st.markdown('<div class="report-title">Membership</div>', unsafe_allow_html=True)
+    st.markdown('<div class="report-subtitle">Source: Weekly Membership — active, new, suspended & cancelled member trends</div>', unsafe_allow_html=True)
+    loc_col = "Success Tutoring - Business name"
+    num_cols = list(MEMBER_METRICS)
+    df_wm = apply_gpm_filter(df_wm)
+
+    # ── One filter panel drives the whole report ──────────────────────────
+    panel = st.container(border=True)
+    df_f = report_filters(df_wm.copy(), key_prefix="r2", show_date=False,
+                          show_country=True, show_state=True, show_stage=True, show_gpm=True,
+                          show_location=True, show_status=True, panel=panel)
+    for c in num_cols:
+        if c in df_f.columns: df_f[c] = pd.to_numeric(df_f[c], errors="coerce").fillna(0)
+    with panel:
+        df = checkbox_date_filter(df_f, key_prefix="r2")
+    if df_f.empty:
+        st.warning("No data for the selected filters."); return
+
+    # ── KPI cards ─────────────────────────────────────────────────────────
+    all_dates = sorted(df["Date"].dropna().unique())
+    latest_date = all_dates[-1] if all_dates else None
+    prev_date = all_dates[-2] if len(all_dates) >= 2 else None
+    def ws(d, col):
+        if d is None or col not in df.columns: return 0
+        return df[df["Date"] == d][col].sum()
+    la = ws(latest_date, "# Active members");    pa = ws(prev_date, "# Active members")
+    ln = ws(latest_date, "# New members");       pn = ws(prev_date, "# New members")
+    ls = ws(latest_date, "# Suspended members"); ps = ws(prev_date, "# Suspended members")
+    lc = ws(latest_date, "# Cancelled members"); pc = ws(prev_date, "# Cancelled members")
+    cr_latest = churn_rate(lc, la); cr_prev = churn_rate(pc, pa)
+    k1, k2, k3, k4, k5 = st.columns(5)
+    with k1: metric_card("Active Members",    f"{la:,.0f}", la - pa, "green")
+    with k2: metric_card("New Members",       f"{ln:,.0f}", ln - pn, "blue")
+    with k3: metric_card("Suspended Members", f"{ls:,.0f}", ls - ps, "orange", higher_is_better=False)
+    with k4: metric_card("Cancelled Members", f"{lc:,.0f}", lc - pc, "red", higher_is_better=False)
+    with k5: metric_card("Network Churn Rate", f"{cr_latest:.1f}%", round(cr_latest - cr_prev, 2), "red", higher_is_better=False)
+
+    # ── Year-over-year weekly comparison ──────────────────────────────────
+    st.markdown('<div class="section-header">Year-over-Year Weekly Comparison</div>', unsafe_allow_html=True)
+    df_yoy = add_week_year(df_f)
+    available_years = sorted(df_yoy["Year"].unique().tolist(), reverse=True)
+    if not available_years:
+        st.info("No week/year data available for year-over-year comparison.")
+    else:
+        opts = yoy_options("yoy", available_years, metrics=MEMBER_METRICS, show_churn=True)
+        yoy_metric, sel_years_yoy = opts["metric"], opts["years"]
+        metric_name = MEMBER_METRICS[yoy_metric]
+        higher_better = yoy_metric not in LOWER_IS_BETTER
+
+        df_yoy_f = df_yoy[df_yoy["Year"].isin(sel_years_yoy)].copy()
+        if opts["comparative"]:
+            df_yoy_f = comparative_only(df_yoy_f, sel_years_yoy, loc_col)
+
+        if not sel_years_yoy or df_yoy_f.empty:
+            st.info("Select at least one year with data.")
+        else:
+            latest_year = max(sel_years_yoy)
+            latest_week = int(df_yoy_f[df_yoy_f["Year"]==latest_year]["Week"].max())
+            prev_year   = latest_year - 1
+            weekly, churn_lines = {}, {}
+            for yr in sel_years_yoy:
+                d = df_yoy_f[df_yoy_f["Year"] == yr]
+                g = d.groupby("Week")[num_cols].sum()
+                vals = g[yoy_metric]
+                if opts["average"]:
+                    vals = vals / trading_locations(df_yoy_f, loc_col, "# Active members", yr)
+                weekly[yr] = vals
+                if opts["churn"]:
+                    churn_lines[yr] = (g["# Cancelled members"] / g["# Active members"] * 100).where(g["# Active members"] > 0)
+            label = f"Avg {metric_name.lower()} per location" if opts["average"] else metric_name
+            fig_yoy = yoy_bar_figure(weekly, latest_year, latest_week, f"{label} by week", label,
+                                     fmt=",.1f" if opts["average"] else ",.0f",
+                                     holidays=opts["holidays"], lines=churn_lines or None)
+            show_chart(fig_yoy, use_container_width=True)
+
+            # ── Variance cards ────────────────────────────────────────────
+            def pct(a, b):
+                if a is None or b is None or pd.isna(a) or pd.isna(b) or b == 0: return None
+                return round((a - b) / b * 100, 1)
+            def total(year, week=None, upto=None):
+                d = df_yoy_f[df_yoy_f["Year"] == year]
+                if week is not None: d = d[d["Week"] == week]
+                if upto is not None: d = d[d["Week"] <= upto]
+                v = d[yoy_metric].sum()
+                return v if v > 0 else None
+            cur = total(latest_year, latest_week)
+            v1, v2, v3 = st.columns(3)
+            with v1: pct_card("vs last week", pct(cur, total(latest_year, latest_week - 1)),
+                              f"Wk {latest_week} vs Wk {latest_week - 1}, {latest_year}", higher_better)
+            with v2: pct_card("vs same week last year", pct(cur, total(prev_year, latest_week)),
+                              f"Wk {latest_week}, {latest_year} vs {prev_year}", higher_better)
+            with v3: pct_card("Year to date vs last year",
+                              pct(total(latest_year, upto=latest_week), total(prev_year, upto=latest_week)),
+                              f"Wk 1–{latest_week}, {latest_year} vs {prev_year}", higher_better)
+
+            # ── Location table ────────────────────────────────────────────
+            st.markdown(f'<div class="section-header">Location Detail — {metric_name}, Wk {latest_week} {latest_year}</div>', unsafe_allow_html=True)
+            c_cur, c_prev_wk, c_vs_wk = "This Week", "Last Week", "vs LW %"
+            c_prev_yr, c_vs_yr        = "Same Week LY", "vs Same Week LY %"
+            c_ytd, c_ytd_prev, c_ytd_var = "YTD TY", "YTD LY", "YTD vs LY %"
+            pct_cols = [c_vs_wk, c_vs_yr, c_ytd_var]
+
+            def row_for(d, name):
+                def s(year, week=None, upto=None):
+                    x = d[d["Year"] == year]
+                    if week is not None: x = x[x["Week"] == week]
+                    if upto is not None: x = x[x["Week"] <= upto]
+                    v = x[yoy_metric].sum()
+                    return v if v > 0 else None
+                cur_v, pw, py = s(latest_year, latest_week), s(latest_year, latest_week - 1), s(prev_year, latest_week)
+                ytd, ytdp = s(latest_year, upto=latest_week), s(prev_year, upto=latest_week)
+                return {"Location": name, c_cur: cur_v, c_prev_wk: pw, c_vs_wk: pct(cur_v, pw),
+                        c_prev_yr: py, c_vs_yr: pct(cur_v, py),
+                        c_ytd: ytd, c_ytd_prev: ytdp, c_ytd_var: pct(ytd, ytdp)}
+
+            rows = [row_for(g, loc.replace("Success Tutoring - ", ""))
+                    for loc, g in df_yoy_f.groupby(loc_col)]
+            df_table = pd.DataFrame(rows).sort_values(c_cur, ascending=False, na_position="last")
+            df_table = pd.concat([df_table, pd.DataFrame([row_for(df_yoy_f, "TOTAL")])], ignore_index=True)
+            if prev_year not in sel_years_yoy:
+                df_table = df_table.drop(columns=[c_prev_yr, c_vs_yr, c_ytd_prev, c_ytd_var])
+                pct_cols = [c_vs_wk]
+
+            def fmt_pct_cell(v):
+                return "–" if v is None or pd.isna(v) else f"{'+' if v >= 0 else ''}{v:.1f}%"
+            for col in pct_cols:
+                df_table[col] = df_table[col].apply(fmt_pct_cell)
+
+            good_col, bad_col = BI_GREEN, BI_RED
+            if not higher_better: good_col, bad_col = bad_col, good_col
+            def style_table(d):
+                styles = pd.DataFrame("", index=d.index, columns=d.columns)
+                for col in pct_cols:
+                    for i, val in enumerate(d[col]):
+                        if val.startswith("+") and val != "+0.0%": styles.iloc[i, d.columns.get_loc(col)] = f"color: {good_col}; font-weight: 600"
+                        elif val.startswith("-"):                  styles.iloc[i, d.columns.get_loc(col)] = f"color: {bad_col}; font-weight: 600"
+                styles.iloc[-1] = styles.iloc[-1] + "; font-weight: 700; background-color: #eef3f4"
+                return styles
+            count_cols = [c for c in df_table.columns if c not in ["Location"] + pct_cols]
+            styled = (df_table.style.apply(style_table, axis=None)
+                      .format("{:,.0f}", subset=[c for c in count_cols if c != c_cur], na_rep="–"))
+            bar_max = float(df_table[c_cur].iloc[:-1].max() or 1) if len(df_table) > 1 else 1.0
+            st.dataframe(styled, use_container_width=True, hide_index=True, height=min(500, 35 * (len(df_table) + 1) + 3),
+                         column_config={
+                             "Location": st.column_config.TextColumn("Location", pinned=True, width=180),
+                             c_cur: st.column_config.ProgressColumn(c_cur, format="localized", min_value=0, max_value=bar_max),
+                         })
+
+    # ── Location comparison ───────────────────────────────────────────────
+    st.markdown('<div class="section-header">Location Comparison — Last 13 Months</div>', unsafe_allow_html=True)
+    max_date = df_f["Date"].max()
+    df_13 = df_f[df_f["Date"] >= max_date - pd.DateOffset(months=13)].copy()
+    locs_by_active = (df_13[df_13["Date"] == max_date].groupby(loc_col)["# Active members"].sum()
+                      .sort_values(ascending=False).index.tolist())
+    all_locs = locs_by_active + sorted(set(df_13[loc_col].dropna()) - set(locs_by_active))
+    lc1, lc2, lc3 = st.columns([2, 5, 1.6])
+    measure = lc1.selectbox("Measure", ["Active", "New", "Suspended", "Cancelled", "Churn %"], key="r2_cmp_measure")
+    sel_locs = lc2.multiselect("Locations (up to 8)", all_locs, default=all_locs[:3], max_selections=8,
+                               key="r2_cmp_locs", format_func=lambda x: x.replace("Success Tutoring - ", ""))
+    with lc3:
+        st.markdown("<div style='height:1.9rem'></div>", unsafe_allow_html=True)
+        show_avg = st.checkbox("Network average", value=True, key="r2_cmp_avg")
+
+    def series(d):
+        """Weekly values for one location (or the whole network), starting from its first active week."""
+        g = d.groupby("Date")[num_cols].sum().sort_index()
+        g = g[g["# Active members"].cumsum() > 0]
+        if measure == "Churn %":
+            return g.apply(lambda r: churn_rate(r["# Cancelled members"], r["# Active members"]), axis=1)
+        return g[f"# {measure} members"]
+
+    if sel_locs:
+        fig_c = go.Figure()
+        end_labels = []
+        fmt = ".1f" if measure == "Churn %" else ",.0f"
+        suffix = "%" if measure == "Churn %" else ""
+        if show_avg:
+            open_locs = df_13[df_13["# Active members"] > 0]
+            if measure == "Churn %":
+                avg = series(open_locs)
+            else:
+                avg = open_locs.groupby("Date").apply(lambda x: x.groupby(loc_col)[f"# {measure} members"].sum().mean())
+            fig_c.add_trace(go.Scatter(x=avg.index, y=avg.values, name="Network avg", mode="lines",
+                                       line=dict(color="#9fb0b5", width=2, dash="dash"),
+                                       hovertemplate=f"Network avg: %{{y:{fmt}}}{suffix}<extra></extra>"))
+        for i, loc in enumerate(sel_locs):
+            sr = series(df_13[df_13[loc_col] == loc])
+            if sr.empty: continue
+            name = loc.replace("Success Tutoring - ", "")
+            color = SERIES_COLORS[i % len(SERIES_COLORS)]
+            fig_c.add_trace(go.Scatter(x=sr.index, y=sr.values, name=name, mode="lines",
+                                       line=dict(color=color, width=2.5),
+                                       hovertemplate=f"{name}: %{{y:{fmt}}}{suffix}<extra></extra>"))
+            fig_c.add_trace(go.Scatter(x=[sr.index[-1]], y=[sr.values[-1]], mode="markers",
+                                       marker=dict(color=color, size=8), showlegend=False, hoverinfo="skip"))
+            end_labels.append([sr.index[-1], float(sr.values[-1]), f"{name} {sr.values[-1]:{fmt}}{suffix}", color])
+        # Spread labels at least ~5% of the axis apart, keeping their order
+        if end_labels:
+            y_max = max([l[1] for l in end_labels] + [0]) or 1
+            gap = y_max * 0.05
+            end_labels.sort(key=lambda l: l[1])
+            placed = []
+            for l in end_labels:
+                y = l[1] if not placed or l[1] - placed[-1] >= gap else placed[-1] + gap
+                placed.append(y)
+            annotations = [dict(x=l[0], y=y, xref="x", yref="y", text=f"<b>{l[2]}</b>", showarrow=False,
+                                xanchor="left", xshift=10, font=dict(color=l[3], size=11))
+                           for l, y in zip(end_labels, placed)]
+        else:
+            annotations = []
+        layout = std_layout("", f"{measure}" + (" (per location)" if measure != "Churn %" else ""), 460)
+        layout.update(showlegend=False, hovermode="x unified", margin=dict(l=60, r=170, t=20, b=50),
+                      annotations=annotations)
+        layout["xaxis"] = dict(PLOTLY_LAYOUT["xaxis"], tickangle=0, tickformat="%b %y")
+        layout["yaxis"] = dict(layout["yaxis"], tickformat=",", ticksuffix=suffix, rangemode="tozero")
+        fig_c.update_layout(**layout)
+        fig_c.update_xaxes(dtick="M1")
+        show_chart(fig_c, use_container_width=True)
+    else:
+        st.info("Select one or more locations to compare.")
+
+    # ── Member count by location (latest selected week) ───────────────────
+    if loc_col in df.columns and latest_date is not None:
+        st.markdown(f'<div class="section-header">Member Count by Location — {pd.Timestamp(latest_date).strftime("%d %b %Y")}</div>',
+                    unsafe_allow_html=True)
+        loc_tbl = df[df["Date"] == latest_date].groupby(loc_col).agg(
+            Active=("# Active members", "sum"), New=("# New members", "sum"),
+            Suspended=("# Suspended members", "sum"), Cancelled=("# Cancelled members", "sum"),
+        ).reset_index()
+        loc_tbl["Location"] = loc_tbl[loc_col].str.replace("Success Tutoring - ", "", regex=False)
+        loc_tbl["Churn %"] = loc_tbl.apply(lambda r: churn_rate(r["Cancelled"], r["Active"]), axis=1)
+        loc_tbl = loc_tbl[["Location", "Active", "New", "Suspended", "Cancelled", "Churn %"]]
+        loc_tbl = loc_tbl.sort_values("Active", ascending=False).reset_index(drop=True)
+        st.dataframe(loc_tbl, use_container_width=True, hide_index=True,
+                     column_config={
+                         "Active": st.column_config.ProgressColumn("Active", format="localized", min_value=0,
+                                                                   max_value=float(loc_tbl["Active"].max() or 1)),
+                         "Churn %": st.column_config.NumberColumn("Churn %", format="%.1f%%"),
+                     })
+
+    weekly_location_metrics(df_f, df_rv)
+    centre_performance_index(df_f)
+
+def weekly_location_metrics(df_f, df_rv):
+    """One row per week for a single location: members and revenue side by side."""
+    loc_col = "Success Tutoring - Business name"
+    short = lambda x: str(x).replace("Success Tutoring - ", "")
+    st.markdown('<div class="section-header">Weekly Metrics by Location</div>', unsafe_allow_html=True)
+    locs = sorted(df_f[loc_col].dropna().unique().tolist())
+    if not locs:
+        st.info("No locations match the selected filters."); return
+    c1, c2 = st.columns([3, 1])
+    loc = c1.selectbox("Location (type to search)", locs, format_func=short, key="r2_wm_loc")
+    period = c2.selectbox("Period", ["Last month", "Last quarter", "Last year", "All weeks"], index=1, key="r2_wm_period")
+
+    vl = load_vlookup()
+    meta = vl[vl[loc_col] == loc].iloc[0] if not vl.empty and loc_col in vl.columns and (vl[loc_col] == loc).any() else None
+    if meta is not None:
+        bits = [f"{k}: <b>{meta.get(k)}</b>" for k in ["Stage", "GPM", "Region", "Country"]
+                if str(meta.get(k, "")).strip() not in ("", "nan", "None")]
+        try: bits.append(f"Open <b>{int(float(meta.get('Age (Months)', 0)))}</b> months")
+        except (TypeError, ValueError): pass
+        st.markdown(f'<div class="report-subtitle">{" · ".join(bits)}</div>', unsafe_allow_html=True)
+
+    m = df_f[df_f[loc_col] == loc].groupby("Date")[["# Active members", "# New members",
+                                                    "# Suspended members", "# Cancelled members"]].sum().sort_index()
+    if m.empty:
+        st.info("No weekly data for this location."); return
+    cutoff = {"Last month": pd.DateOffset(months=1), "Last quarter": pd.DateOffset(months=3),
+              "Last year": pd.DateOffset(years=1)}.get(period)
+    if cutoff is not None:
+        m = m[m.index >= m.index.max() - cutoff]
+    m = m.reset_index()
+
+    # Revenue for the same location, matched to the nearest membership week (within 7 days)
+    rv_cols = ["Net Revenue", "# Active Students", "Total Sessions"]
+    rv = apply_gpm_filter(df_rv) if not df_rv.empty else df_rv
+    if not rv.empty and loc_col in rv.columns and all(c in rv.columns for c in rv_cols):
+        r = rv[rv[loc_col] == loc].groupby("Date")[rv_cols].sum().reset_index().sort_values("Date")
+        m = pd.merge_asof(m.sort_values("Date"), r, on="Date", direction="nearest", tolerance=pd.Timedelta(days=7))
+    for c in rv_cols:
+        if c not in m.columns: m[c] = float("nan")
+
+    a, n, s_, c = m["# Active members"], m["# New members"], m["# Suspended members"], m["# Cancelled members"]
+    rev, stud, sess = m["Net Revenue"], m["# Active Students"], m["Total Sessions"]
+    out = pd.DataFrame({
+        "Week": m["Date"].dt.strftime("%d %b %Y"),
+        "Active": a, "New": n, "Suspended": s_, "Cancelled": c,
+        "Churn %": (c / a * 100).where(a > 0),
+        "Net Growth %": ((n - c) / a * 100).where(a > 0),
+        "Net Revenue": rev, "Active Students": stud, "Sessions": sess,
+        "Rev / Session": (rev / sess).where(sess > 0),
+        "Rev / Student": (rev / stud).where(stud > 0),
+        "Sessions / Student": (sess / stud).where(stud > 0),
+    }).iloc[::-1].reset_index(drop=True)
+    avg = out.drop(columns="Week").mean(numeric_only=True)
+    avg["Week"] = f"Average ({period.lower()})"
+    out = pd.concat([out, pd.DataFrame([avg])], ignore_index=True)
+
+    fmt = {"Active": "{:,.0f}", "New": "{:,.1f}", "Suspended": "{:,.1f}", "Cancelled": "{:,.1f}",
+           "Churn %": "{:.1f}%", "Net Growth %": "{:+.2f}%", "Net Revenue": "${:,.0f}",
+           "Active Students": "{:,.0f}", "Sessions": "{:,.0f}", "Rev / Session": "${:,.2f}",
+           "Rev / Student": "${:,.2f}", "Sessions / Student": "{:.2f}"}
+    whole = {"New": "{:,.0f}", "Suspended": "{:,.0f}", "Cancelled": "{:,.0f}"}
+    last = len(out) - 1
+    def bold_avg(row):
+        return ["font-weight: 700; background-color: #eef3f4" if row.name == last else "" for _ in row]
+    styled = out.style.apply(bold_avg, axis=1).format(fmt, na_rep="–")
+    styled = styled.format(whole, subset=pd.IndexSlice[out.index[:-1], list(whole)], na_rep="–")
+    st.dataframe(styled, use_container_width=True, hide_index=True, height=min(560, 35 * (len(out) + 1) + 3),
+                 column_config={"Week": st.column_config.TextColumn("Week", pinned=True, width=150)})
+
+def centre_performance_index(df_f):
+    """Each centre's active members divided by the average of all trading centres
+    (or of trading centres in the same state), for every week of the chosen year.
+    Rows follow the report filters; averages always use the whole network."""
+    loc_col = "Success Tutoring - Business name"
+    st.markdown('<div class="section-header">Centre Performance Index</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="report-subtitle">Active members ÷ average active members per trading centre. '
+                f'1.00 = average · 1.28 = 28% above average · 0.80 = 20% below.</div>', unsafe_allow_html=True)
+
+    full = load_weekly_membership().copy()
+    if "Date - Week/Year" not in full.columns or loc_col not in full.columns:
+        st.info("Week/Year column not found — index unavailable."); return
+    wy = full["Date - Week/Year"].astype(str).str.split("/")
+    full["Week"] = pd.to_numeric(wy.str[0], errors="coerce")
+    full["Year"] = pd.to_numeric(wy.str[1], errors="coerce")
+    full = full.dropna(subset=["Week", "Year"])
+    full["Week"] = full["Week"].astype(int); full["Year"] = full["Year"].astype(int)
+    full["# Active members"] = pd.to_numeric(full["# Active members"], errors="coerce").fillna(0)
+    country = full["Country"] if "Country" in full.columns else pd.Series("", index=full.index)
+    region = full["Region"] if "Region" in full.columns else pd.Series("", index=full.index)
+    full["State"] = [("NZ" if c == "New Zealand" else REGION_TO_STATE.get(r, r)) for c, r in zip(country, region)]
+
+    years = sorted(full["Year"].unique().tolist(), reverse=True)
+    i1, i2, _ = st.columns([1, 2, 3])
+    year = i1.selectbox("Year", years, key="r2_cpi_year")
+    basis = i2.radio("Compare against", ["All centres", "State"], horizontal=True, key="r2_cpi_basis")
+
+    wk = (full[full["Year"] == year].groupby([loc_col, "State", "Week"])["# Active members"].sum().reset_index())
+    wk = wk[wk["# Active members"] > 0]          # only centres trading that week
+    if wk.empty:
+        st.info("No active members recorded for that year."); return
+    group = ["Week"] if basis == "All centres" else ["State", "Week"]
+    wk["Average"] = wk.groupby(group)["# Active members"].transform("mean")
+    wk["Index"] = wk["# Active members"] / wk["Average"]
+
+    # State totals: the state's average per trading centre against the same basis (whole network)
+    state_wk = wk.groupby(["State", "Week"]).agg(StateMean=("# Active members", "mean"),
+                                                 Basis=("Average", "first")).reset_index()
+    state_wk["Index"] = state_wk["StateMean"] / state_wk["Basis"]
+    state_totals = state_wk.pivot_table(index="State", columns="Week", values="Index")
+
+    shown = set(df_f[loc_col].dropna().unique())
+    wk = wk[wk[loc_col].isin(shown)]
+    if wk.empty:
+        st.info("No trading centres match the selected filters for that year."); return
+    centres = wk.pivot_table(index=[loc_col, "State"], columns="Week", values="Index")
+    weeks = sorted(set(centres.columns) | set(state_totals.columns))
+    centres = centres.reindex(columns=weeks); state_totals = state_totals.reindex(columns=weeks)
+    latest = max(weeks)
+
+    # States A–Z; centres within a state highest index first; state total after its centres
+    rows, total_rows = [], []
+    for state in sorted(centres.index.get_level_values("State").unique()):
+        grp = centres.xs(state, level="State").sort_values(latest, ascending=False, na_position="last")
+        for loc, vals in grp.iterrows():
+            rows.append({"State": state, "Location": loc.replace("Success Tutoring - ", ""), **vals.to_dict()})
+        total_rows.append(len(rows))
+        rows.append({"State": state, "Location": f"{state} total", **state_totals.loc[state].to_dict()})
+    table = pd.DataFrame(rows)
+    table = table.rename(columns={w: f"Wk {w}" for w in weeks})
+
+    def shade(v):
+        if pd.isna(v): return ""
+        strength = min(abs(v - 1) / 0.5, 1) * 0.55
+        rgb = "46,133,64" if v >= 1 else "200,50,47"
+        return f"background-color: rgba({rgb},{strength:.2f})"
+    def bold_totals(row):
+        style = "font-weight: 700; border-top: 1px solid #b9c7cb"
+        return [style if row.name in total_rows else "" for _ in row]
+    week_cols = [c for c in table.columns if c not in ("State", "Location")]
+    styled = (table.style.map(shade, subset=week_cols).apply(bold_totals, axis=1)
+              .format("{:.2f}", subset=week_cols, na_rep="–"))
+    st.dataframe(styled, use_container_width=True, hide_index=True,
+                 height=min(700, 35 * (len(table) + 1) + 3),
+                 column_config={"State": st.column_config.TextColumn("State", pinned=True, width=70),
+                                "Location": st.column_config.TextColumn("Location", pinned=True, width=170)})
+    avg_note = "all trading centres" if basis == "All centres" else "trading centres in the same state (all of NZ counts as one)"
+    st.caption(f"Averages use {avg_note} across the whole network, whatever filters are applied. "
+               f"State totals compare the state's average per trading centre with that average"
+               f"{' (so they are always 1.00 in State mode)' if basis == 'State' else ''}. "
+               f"Weeks where a centre had no active members show –.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # REPORT 3 — Membership by Age
 # ══════════════════════════════════════════════════════════════════════════════
 def report_age_combined(df_wm):
-    st.markdown('<div class="report-title">3 · Membership by Age</div>', unsafe_allow_html=True)
+    st.markdown('<div class="report-title">Membership by Age</div>', unsafe_allow_html=True)
     st.markdown('<div class="report-subtitle">Age groups from Vlookup | Member counts from Weekly Membership</div>', unsafe_allow_html=True)
     df_wm = apply_gpm_filter(df_wm)
     loc_col="Success Tutoring - Business name"
@@ -1200,7 +1331,7 @@ def report_age_combined(df_wm):
     for grp in AGE_ORDER:
         if grp not in all_loc_data: continue
         grp_df=all_loc_data[grp]
-        with st.expander(f"📂 {grp} — {len(grp_df)} locations",expanded=False):
+        with st.expander(f"{grp} — {len(grp_df)} locations",expanded=False):
             show_cols=[c for c in [loc_col,"# Active members","# New members","# Suspended members","# Cancelled members","Age (Months)","Stage"] if c in grp_df.columns]
             st.dataframe(grp_df[show_cols].rename(columns={loc_col:"Location"}).sort_values("# Active members",ascending=False).reset_index(drop=True),
                          use_container_width=True,hide_index=True)
@@ -1233,14 +1364,14 @@ def report_age_combined(df_wm):
             if grp_df.empty: continue
             std_traces(fig_age, grp_df, "Date", metric_col, age_colors[i%len(age_colors)], grp)
         fig_age.update_layout(**std_layout(
-            f"Avg {metric_name} by Location Age — Last 13 Months", f"Avg {metric_name}", 500))
-        st.plotly_chart(fig_age,use_container_width=True)
+            "", f"Avg {metric_name}", 500))
+        show_chart(fig_age,use_container_width=True)
  # ── Avg membership by Region ──
     st.markdown('<div class="section-header">Avg Active Members by Region — Last 13 Months</div>', unsafe_allow_html=True)
     if "Region" in df_chart.columns and "# Active members" in df_chart.columns:
         regions = sorted(df_chart["Region"].dropna().unique().tolist())
         sel_regions = st.multiselect("Select regions:", regions, default=regions, key="r3_regions")
-        region_colors = [BI_ACCENT,BI_BLUE,BI_ORANGE,BI_RED,BI_PURPLE,BI_YELLOW,"#00b4d8","#e91e8c","#33cc99","#ff6b6b"]
+        region_colors = SERIES_COLORS
         fig_region = go.Figure()
         for i, region in enumerate(sel_regions):
             reg_df = df_chart[df_chart["Region"]==region].groupby("Date")["# Active members"].mean().reset_index().sort_values("Date")
@@ -1248,335 +1379,254 @@ def report_age_combined(df_wm):
             std_traces(fig_region, reg_df, "Date", "# Active members",
                       region_colors[i%len(region_colors)], region)
         fig_region.update_layout(**std_layout(
-            "Avg Active Members by Region — Last 13 Months", "Avg Active Members", 500))
-        st.plotly_chart(fig_region, use_container_width=True)
-# ══════════════════════════════════════════════════════════════════════════════
-# Generic trend report helper
-# ══════════════════════════════════════════════════════════════════════════════
-def generic_member_report(df_wm, report_num, title, metric_col, metric_label, color, key):
-    st.markdown(f'<div class="report-title">{report_num} · {title}</div>',unsafe_allow_html=True)
-    st.markdown(f'<div class="report-subtitle">Source: Weekly Membership — {metric_label} trends and location ranking</div>',unsafe_allow_html=True)
-    df_wm = apply_gpm_filter(df_wm)
-    if metric_col not in df_wm.columns: st.warning("Column not found."); return
-    df=report_filters(df_wm.copy(),key_prefix=key,show_date=False,
-                      show_country=True,show_state=True,show_stage=True,show_gpm=True,show_status=True)
-    df_13m=get_13m_filtered(df_wm,df)
-    df_13m[metric_col]=pd.to_numeric(df_13m[metric_col],errors="coerce").fillna(0)
-    st.markdown(f'<div class="section-header">{metric_label} Trend — Last 13 Months</div>',unsafe_allow_html=True)
-    weekly=df_13m.groupby("Date")[metric_col].sum().reset_index().sort_values("Date")
-    fig = plotly_line(weekly,"Date",[(metric_col,color,metric_label)],
-                      f"{metric_label} per Week — Last 13 Months",
-                      yaxis_title=metric_label,height=500)
-    st.plotly_chart(fig,use_container_width=True)
-    st.markdown(f'<div class="section-header">Avg {metric_label} per Location — Growth Stage Default</div>',unsafe_allow_html=True)
-    draw_per_location_trend(df_13m,metric_col,metric_label,color,f"{key}plt")
-    latest_week_table(df_wm,df,metric_col,metric_label,f"{metric_label} by Location")
-
-# ══════════════════════════════════════════════════════════════════════════════
-# REPORT 7 — Membership Churn
-# ══════════════════════════════════════════════════════════════════════════════
-def report_churn_combined(df_wm):
-    st.markdown('<div class="report-title">7 · Membership Churn</div>',unsafe_allow_html=True)
-    st.markdown('<div class="report-subtitle">Source: Weekly Membership — Churn = Cancelled / Active × 100</div>',unsafe_allow_html=True)
-    df_wm = apply_gpm_filter(df_wm)
-    df=report_filters(df_wm.copy(),key_prefix="r6",show_date=False,
-                      show_country=True,show_state=True,show_stage=False,show_gpm=True,show_location=True,show_status=True)
-    loc_col="Success Tutoring - Business name"
-    for c in ["# Active members","# Cancelled members","# Suspended members","# New members"]:
-        if c in df.columns: df[c]=pd.to_numeric(df[c],errors="coerce").fillna(0)
-    latest_wk_ch = df_wm["Date"].max()
-    df_ch_tbl = df_wm[df_wm["Date"]==latest_wk_ch].copy()
-    for col in ["Country","Region","Stage","GPM","Status"]:
-        if col in df.columns and col in df_ch_tbl.columns:
-            df_ch_tbl = df_ch_tbl[df_ch_tbl[col].isin(df[col].unique())]
-    for c in ["# Active members","# Cancelled members","# Suspended members"]:
-        if c in df_ch_tbl.columns:
-            df_ch_tbl[c] = pd.to_numeric(df_ch_tbl[c],errors="coerce").fillna(0)
-    churn_tbl = df_ch_tbl.groupby(loc_col).agg(
-        Active=("# Active members","sum"),
-        Suspended=("# Suspended members","sum"),
-        Cancelled=("# Cancelled members","sum")
-    ).reset_index().rename(columns={loc_col:"Location"})
-    churn_tbl["Churn Rate %"] = churn_tbl.apply(
-        lambda r: churn_rate(r["Cancelled"],r["Active"]), axis=1)
-    churn_tbl = churn_tbl.sort_values("Churn Rate %",ascending=False).reset_index(drop=True)
-    st.markdown(f'<div class="section-header">Churn Rate by Location — Latest Week ({latest_wk_ch.strftime("%d %b %Y")})</div>',
-                unsafe_allow_html=True)
-    st.dataframe(churn_tbl, use_container_width=True, hide_index=True)
-    df_13m=get_13m_filtered(df_wm,df)
-    for c in ["# Active members","# New members","# Suspended members","# Cancelled members"]:
-        if c in df_13m.columns: df_13m[c]=pd.to_numeric(df_13m[c],errors="coerce").fillna(0)
-    st.markdown('<div class="section-header">Membership & Churn Trend</div>',unsafe_allow_html=True)
-    c1,c2,c3,c4,c5=st.columns(5)
-    show_a=c1.checkbox("Active",      value=True, key="r6_active")
-    show_n=c2.checkbox("New",         value=False,key="r6_new")
-    show_s=c3.checkbox("Suspended",   value=False,key="r6_susp")
-    show_c=c4.checkbox("Cancelled",   value=False,key="r6_canc")
-    show_ch=c5.checkbox("Churn Rate%",value=True, key="r6_churn")
-    weekly=df_13m.groupby("Date").agg(
-        Active=("# Active members","sum"),New=("# New members","sum"),
-        Suspended=("# Suspended members","sum"),Cancelled=("# Cancelled members","sum")
-    ).reset_index().sort_values("Date")
-    weekly["Churn Rate %"]=weekly.apply(lambda r: churn_rate(r["Cancelled"],r["Active"]),axis=1)
-    has_members=any([show_a,show_n,show_s,show_c])
-    if has_members and show_ch:
-        member_series=[]
-        if show_a: member_series.append(("Active",  BI_ACCENT,"Active"))
-        if show_n: member_series.append(("New",     BI_BLUE,  "New"))
-        if show_s: member_series.append(("Suspended",BI_ORANGE,"Suspended"))
-        if show_c: member_series.append(("Cancelled",BI_RED,  "Cancelled"))
-        fig = plotly_dual_axis(weekly,"Date",member_series,"Membership Trends & Churn Rate",height=500)
-        st.plotly_chart(fig,use_container_width=True)
-    st.markdown('<div class="section-header">Avg Churn Rate per Location — Growth Stage Default</div>',unsafe_allow_html=True)
-    df_c=df_13m.copy()
-    df_c["churn_pct"]=df_c.apply(lambda r: churn_rate(r.get("# Cancelled members",0),r.get("# Active members",0)),axis=1)
-    vl=load_vlookup()
-    all_stages_51=vl["Stage"].dropna().unique().tolist() if not vl.empty and "Stage" in vl.columns else []
-    stage_opts_51=["All"]+sorted(all_stages_51)
-    default_51="Growth" if "Growth" in stage_opts_51 else stage_opts_51[0]
-    sel_stage_51=st.selectbox("Filter by Stage:",stage_opts_51,
-                               index=stage_opts_51.index(default_51),key="r51_stage")
-    if sel_stage_51!="All" and not vl.empty and "Stage" in vl.columns:
-        stage_locs=vl[vl["Stage"]==sel_stage_51][loc_col].tolist()
-        df_c=df_c[df_c[loc_col].isin(stage_locs)]
-    if not df_c.empty and loc_col in df_c.columns:
-        avg_churn=df_c.groupby("Date").apply(
-            lambda x: x.groupby(loc_col)["churn_pct"].mean().mean()
-        ).reset_index(); avg_churn.columns=["Date","Avg Churn %"]; avg_churn=avg_churn.sort_values("Date")
-        stage_lbl=f"— {sel_stage_51}" if sel_stage_51!="All" else "— All Stages"
-        show_indiv_ch = st.checkbox("Show individual locations", value=False, key="r6_churn_indiv")
-        if show_indiv_ch:
-            locs = sorted(df_c[loc_col].dropna().unique().tolist())
-            sel_locs_ch = st.multiselect("Select locations:", locs, default=locs[:3],
-                                          max_selections=8, key="r6_churn_locs")
-            if sel_locs_ch:
-                fig_ci = go.Figure()
-                colors_indiv = [BI_ACCENT,BI_BLUE,BI_ORANGE,BI_PURPLE,BI_RED,BI_YELLOW,"#00b4d8","#e91e8c"]
-                for i, loc in enumerate(sel_locs_ch):
-                    loc_df = df_c[df_c[loc_col]==loc].groupby("Date")["churn_pct"].mean().reset_index().sort_values("Date")
-                    loc_name = loc.replace("Success Tutoring - ","")
-                    std_traces(fig_ci, loc_df, "Date", "churn_pct", colors_indiv[i%len(colors_indiv)], loc_name)
-                fig_ci.update_layout(**std_layout(
-                    "Churn Rate % by Individual Location — Last 13 Months","Churn Rate %",500))
-                st.plotly_chart(fig_ci, use_container_width=True)
-        fig_c=go.Figure()
-        std_traces(fig_c, avg_churn, "Date", "Avg Churn %", BI_RED, "Avg Churn %")
-        fig_c.update_layout(**std_layout(
-            f"Avg Churn Rate per Location {stage_lbl} — Last 13 Months","Avg Churn Rate %",500))
-        st.plotly_chart(fig_c,use_container_width=True)
+            "", "Avg Active Members", 500))
+        show_chart(fig_region, use_container_width=True)
 # ══════════════════════════════════════════════════════════════════════════════
 # REPORT 8 — Net Growth Rate %
 # ══════════════════════════════════════════════════════════════════════════════
 def report_net_growth(df_wm):
-    st.markdown('<div class="report-title">8 · Net Growth Rate %</div>', unsafe_allow_html=True)
-    st.markdown('<div class="report-subtitle">Source: Weekly Membership — Net Growth Rate % = (New − Cancelled) / Active × 100</div>', unsafe_allow_html=True)
+    st.markdown('<div class="report-title">Net Growth Rate %</div>', unsafe_allow_html=True)
+    st.markdown('<div class="report-subtitle">Source: Weekly Membership — Net Growth Rate % = (New − Cancelled) ÷ Active × 100</div>', unsafe_allow_html=True)
     df_wm = apply_gpm_filter(df_wm)
-
+    loc_col = "Success Tutoring - Business name"
+    cols = ["# Active members", "# New members", "# Cancelled members"]
     df = report_filters(df_wm.copy(), key_prefix="r8ng_f", show_date=False,
                         show_country=True, show_state=True, show_stage=True,
-                        show_gpm=True, show_status=True)
-    loc_col = "Success Tutoring - Business name"
-
-    for c in ["# Active members","# New members","# Cancelled members"]:
+                        show_gpm=True, show_location=True, show_status=True)
+    for c in cols:
         if c in df.columns: df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+    if df.empty:
+        st.warning("No data for the selected filters."); return
 
-    df_13m = get_13m_filtered(df_wm, df)
-    for c in ["# Active members","# New members","# Cancelled members"]:
-        if c in df_13m.columns: df_13m[c] = pd.to_numeric(df_13m[c], errors="coerce").fillna(0)
+    # ── Year-over-year weekly NGR % ───────────────────────────────────────
+    st.markdown('<div class="section-header">Net Growth Rate % — Year-over-Year by Week</div>', unsafe_allow_html=True)
+    d = add_week_year(df)
+    years = sorted(d["Year"].unique().tolist(), reverse=True)
+    if not years:
+        st.info("No week/year data available."); return
+    opts = yoy_options("ngr", years, avg_label="Equal weight per location",
+                       avg_help="Off: (all new − all cancelled) ÷ all active, so bigger centres count more. "
+                                "On: the average of each centre's own NGR %, so every centre counts equally.")
+    sel = opts["years"]
+    d = d[d["Year"].isin(sel)]
+    if opts["comparative"]:
+        d = comparative_only(d, sel, loc_col)
+    if not sel or d.empty:
+        st.info("Select at least one year with data.")
+    else:
+        latest_year = max(sel)
+        latest_week = int(d[d["Year"] == latest_year]["Week"].max())
+        weekly = {}
+        for yr in sel:
+            x = d[d["Year"] == yr]
+            if opts["average"]:
+                per_loc = x.groupby(["Week", loc_col])[cols].sum()
+                per_loc = per_loc[per_loc["# Active members"] > 0]
+                ngr = (per_loc["# New members"] - per_loc["# Cancelled members"]) / per_loc["# Active members"] * 100
+                weekly[yr] = ngr.groupby(level="Week").mean()
+            else:
+                g = x.groupby("Week")[cols].sum()
+                weekly[yr] = ((g["# New members"] - g["# Cancelled members"]) / g["# Active members"] * 100).where(g["# Active members"] > 0)
+        label = "Avg NGR % per location (equal weight)" if opts["average"] else "Network NGR %"
+        fig = yoy_bar_figure(weekly, latest_year, latest_week, f"{label} by week", label,
+                             fmt=".2f", suffix="%", change="pts", holidays=opts["holidays"])
+        fig.add_hline(y=0, line_color=BI_SUBTEXT, line_width=1)
+        show_chart(fig, use_container_width=True)
 
-    def calc_ngr(row):
-        try:
-            a = float(row.get("# Active members", 0))
-            return round((float(row.get("# New members", 0)) - float(row.get("# Cancelled members", 0))) / a * 100, 2) if a > 0 else 0.0
-        except: return 0.0
-
-    # ── Network Net Growth Rate % trend ──
-    st.markdown('<div class="section-header">Net Growth Rate % — Last 13 Months (Total New − Total Cancelled) / Total Active</div>', unsafe_allow_html=True)
-    weekly = df_13m.groupby("Date").agg(
-        New=("# New members","sum"),
-        Cancelled=("# Cancelled members","sum"),
-        Active=("# Active members","sum")
-    ).reset_index().sort_values("Date")
-    weekly["Net Growth Rate %"] = weekly.apply(
-        lambda r: round((r["New"] - r["Cancelled"]) / r["Active"] * 100, 2) if r["Active"] > 0 else 0.0, axis=1)
-
-    fig = go.Figure()
-    std_traces(fig, weekly, "Date", "Net Growth Rate %", BI_ACCENT, "Net Growth Rate %")
-    fig.add_hline(y=0, line_dash="dash", line_color=BI_RED, line_width=1.5,
-                  annotation_text="Break-even", annotation_position="bottom right")
-    fig.update_layout(**std_layout("Network Net Growth Rate % — Last 13 Months (Total New − Total Cancelled) / Total Active", "Net Growth Rate %", 500))
-    st.plotly_chart(fig, use_container_width=True)
-
-    # ── Avg Net Growth Rate % per location ──
-    st.markdown('<div class="section-header">Avg Net Growth Rate % per Location — Growth Stage Default (Equal weight per location)</div>', unsafe_allow_html=True)
-    vl = load_vlookup()
-    all_stages = vl["Stage"].dropna().unique().tolist() if not vl.empty and "Stage" in vl.columns else []
-    stage_opts = ["All"] + sorted(all_stages)
-    default_s = "Growth" if "Growth" in stage_opts else stage_opts[0]
-    sel_s = st.selectbox("Filter by Stage:", stage_opts,
-                          index=stage_opts.index(default_s), key="r8ng_stage")
-    df_plot = df_13m.copy()
-    if sel_s != "All" and not vl.empty and "Stage" in vl.columns:
-        stage_locs = vl[vl["Stage"] == sel_s][loc_col].tolist()
-        df_plot = df_plot[df_plot[loc_col].isin(stage_locs)]
-
-    if not df_plot.empty and loc_col in df_plot.columns:
-        df_plot["ngr"] = df_plot.apply(calc_ngr, axis=1)
-        avg_ngr = df_plot.groupby("Date").apply(
-            lambda x: x.groupby(loc_col)["ngr"].mean().mean()
-        ).reset_index(); avg_ngr.columns = ["Date","Avg NGR %"]; avg_ngr = avg_ngr.sort_values("Date")
-        stage_lbl = f"— {sel_s}" if sel_s != "All" else "— All Stages"
-
-        fig2 = go.Figure()
-        std_traces(fig2, avg_ngr, "Date", "Avg NGR %", BI_BLUE, f"Avg NGR % {stage_lbl}")
-        fig2.add_hline(y=0, line_dash="dash", line_color=BI_RED, line_width=1.5,
-                       annotation_text="Break-even", annotation_position="bottom right")
-        fig2.update_layout(**std_layout(
-            f"Avg Net Growth Rate % per Location {stage_lbl} — Last 13 Months", "Avg NGR %", 500))
-        st.plotly_chart(fig2, use_container_width=True)
-
-        show_indiv = st.checkbox("Show individual locations", value=False, key="r8ng_indiv")
-        if show_indiv:
-            locs = sorted(df_plot[loc_col].dropna().unique().tolist())
-            sel_locs = st.multiselect("Select locations:", locs, default=locs[:3],
-                                       max_selections=8, key="r8ng_locs")
-            if sel_locs:
-                fig3 = go.Figure()
-                colors_indiv = [BI_ACCENT,BI_BLUE,BI_ORANGE,BI_PURPLE,BI_RED,BI_YELLOW,"#00b4d8","#e91e8c"]
-                for i, loc in enumerate(sel_locs):
-                    loc_df = df_plot[df_plot[loc_col]==loc].groupby("Date")["ngr"].mean().reset_index().sort_values("Date")
-                    loc_name = loc.replace("Success Tutoring - ","")
-                    std_traces(fig3, loc_df, "Date", "ngr", colors_indiv[i%len(colors_indiv)], loc_name)
-                fig3.add_hline(y=0, line_dash="dash", line_color=BI_RED, line_width=1.5)
-                fig3.update_layout(**std_layout("NGR % by Individual Location — Last 13 Months","NGR %",500))
-                st.plotly_chart(fig3, use_container_width=True)
-
-    # ── Latest week table ──
+    # ── Latest week by location ───────────────────────────────────────────
     latest_wk = df["Date"].max()
-    df_tbl = df[df["Date"] == latest_wk].copy()
-    for c in ["# Active members","# New members","# Cancelled members"]:
-        if c in df_tbl.columns: df_tbl[c] = pd.to_numeric(df_tbl[c], errors="coerce").fillna(0)
-    df_tbl["Net Growth Rate %"] = df_tbl.apply(calc_ngr, axis=1)
-    loc_tbl = df_tbl.groupby(loc_col).agg(
-        Active=("# Active members","sum"),
-        New=("# New members","sum"),
-        Cancelled=("# Cancelled members","sum")
-    ).reset_index()
-    loc_tbl["Net Growth Rate %"] = loc_tbl.apply(
-        lambda r: round((r["New"] - r["Cancelled"]) / r["Active"] * 100, 2) if r["Active"] > 0 else 0.0, axis=1)
-    loc_tbl = loc_tbl.rename(columns={loc_col:"Location"}).sort_values("Net Growth Rate %", ascending=False).reset_index(drop=True)
-    st.markdown(f'<div class="section-header">Net Growth Rate % by Location — Latest Week ({latest_wk.strftime("%d %b %Y")})</div>', unsafe_allow_html=True)
-    st.dataframe(loc_tbl, use_container_width=True, hide_index=True)
+    loc_tbl = df[df["Date"] == latest_wk].groupby(loc_col)[cols].sum().reset_index()
+    loc_tbl["Net Growth Rate %"] = ((loc_tbl["# New members"] - loc_tbl["# Cancelled members"])
+                                    / loc_tbl["# Active members"] * 100).where(loc_tbl["# Active members"] > 0)
+    loc_tbl = pd.DataFrame({"Location": loc_tbl[loc_col].str.replace("Success Tutoring - ", "", regex=False),
+                            "Active": loc_tbl["# Active members"].astype(int), "New": loc_tbl["# New members"].astype(int),
+                            "Cancelled": loc_tbl["# Cancelled members"].astype(int),
+                            "Net Growth Rate %": loc_tbl["Net Growth Rate %"]}).sort_values("Net Growth Rate %", ascending=False)
+    st.markdown(f'<div class="section-header">Net Growth Rate % by Location — {latest_wk.strftime("%d %b %Y")}</div>', unsafe_allow_html=True)
+    color = lambda v: "" if pd.isna(v) or v == 0 else f"color: {BI_GREEN if v > 0 else BI_RED}; font-weight: 600"
+    st.dataframe(loc_tbl.style.map(color, subset=["Net Growth Rate %"]).format({"Net Growth Rate %": "{:+.2f}%"}, na_rep="–"),
+                 use_container_width=True, hide_index=True, height=min(560, 35 * (len(loc_tbl) + 1) + 3))
+
 # ══════════════════════════════════════════════════════════════════════════════
 # REPORT 9 — Onboarding Progress
 # ══════════════════════════════════════════════════════════════════════════════
+# Onboarding target: active members expected in each week since opening (week 1 = first week with members)
+ONBOARDING_TARGET = [2, 6, 10, 14, 18, 22, 30, 38, 41, 44, 47, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60]
+ONBOARDING_MILESTONES = [(7, "Assessments"), (9, "Sessions"), (19, "Grand Opening")]
+ONBOARDING_MAX_WEEKS = 22          # show locations under this many weeks old
+
 def report_onboarding(df_wm):
-    st.markdown('<div class="report-title">8 · Onboarding Progress</div>',unsafe_allow_html=True)
-    st.markdown('<div class="report-subtitle">Source: Vlookup (Weeks old) and Weekly Membership — onboarding week progress and pre-sale member counts</div>',unsafe_allow_html=True)
+    st.markdown('<div class="report-title">Onboarding Progress</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="report-subtitle">Locations under {ONBOARDING_MAX_WEEKS} weeks old (not Closed) — '
+                'active members by week since opening, against the onboarding target</div>', unsafe_allow_html=True)
+    loc_col = "Success Tutoring - Business name"
+    short = lambda x: str(x).replace("Success Tutoring - ", "")
     df_wm = apply_gpm_filter(df_wm)
-    vl=apply_gpm_filter(load_vlookup())
+    vl = apply_gpm_filter(load_vlookup())
     if vl.empty: st.warning("Vlookup tab not available."); return
-    vl_f=report_filters(vl.copy(),key_prefix="r7",show_date=False,
-                         show_country=True,show_state=True,show_stage=True,show_gpm=True,show_status=True)
-    loc_col="Success Tutoring - Business name"
-    if "Stage" not in vl_f.columns: st.warning("Stage column not found."); return
-    onb=vl_f[vl_f["Status"]=="Pre-Sale"].copy()
-    if onb.empty: st.info("No locations in Pre-Sale status for selected filters."); return
-    if "Weeks old" in onb.columns:
-        # Onboarding week = weeks since the first member; members = latest week's active members.
-        onb["Onboarding week"]=onb["Weeks old"]
-        latest=df_wm[df_wm["Date"]==df_wm["Date"].max()].set_index(loc_col)["# Active members"]
-        onb["Onboarding Members"]=onb[loc_col].map(latest).fillna(0)
-    st.markdown('<div class="section-header">Onboarding Status by Week</div>',unsafe_allow_html=True)
-    if "Onboarding week" in onb.columns:
-        onb_w=onb.sort_values("Onboarding week")
-        gpm_list=onb_w["GPM"].dropna().unique().tolist() if "GPM" in onb_w.columns else []
-        gpm_cmap = plt.colormaps["tab10"].resampled(max(len(gpm_list), 1))
-        gpm_color_map={g:gpm_cmap(i) for i,g in enumerate(gpm_list)}
-        bar_colors=[gpm_color_map.get(str(row.get("GPM","")),BI_ACCENT) for _,row in onb_w.iterrows()]
-        fig,ax=bi_fig(14,max(6,len(onb_w)*0.45))
-        bars=ax.barh(onb_w[loc_col],onb_w["Onboarding week"],color=bar_colors,height=0.6)
-        # Dual labels: week number INSIDE bar, pre-sale members OUTSIDE
-        has_members = "Onboarding Members" in onb_w.columns
-        for bar,(_,row) in zip(bars,onb_w.iterrows()):
-            bar_w = bar.get_width()
-            bar_y = bar.get_y() + bar.get_height()/2
-            week_val = int(row["Onboarding week"])
-            # Week number inside the bar (white, right-aligned)
-            if bar_w > 1.5:
-                ax.text(bar_w - 0.2, bar_y, str(week_val),
-                        va="center", ha="right", color="white",
-                        fontsize=8, fontweight="bold")
-            # Pre-sale member count outside bar
-            if has_members:
-                members_val = int(row.get("Onboarding Members", 0))
-                ax.text(bar_w + 0.2, bar_y,
-                        f"{members_val} members",
-                        va="center", ha="left", color=BI_SUBTEXT,
-                        fontsize=7.5)
+    vl_f = report_filters(vl.copy(), key_prefix="r7", show_date=False,
+                          show_country=True, show_state=True, show_stage=True, show_gpm=True, show_status=True)
+    if "Status" in vl_f.columns:
+        vl_f = vl_f[vl_f["Status"].astype(str).str.strip() != "Closed"]
 
-        # Updated milestones
-        milestones={"Pre-Sale":0,"Assessments":7,"Soft Open":9,"Grand Opening":16}
-        m_colors={"Pre-Sale":BI_BLUE,"Assessments":BI_ORANGE,"Soft Open":BI_PURPLE,"Grand Opening":BI_ACCENT}
-        for name,week in milestones.items():
-            ax.axvline(x=week,color=m_colors[name],linestyle="--",linewidth=1.2,alpha=0.9)
-            ax.text(week+0.1,len(onb_w)-0.5,name,color=m_colors[name],fontsize=7,rotation=90,va="top")
+    # Week 1 = first week with active members (same rule as Location Start / Weeks old in the Sheet)
+    wm = df_wm[[loc_col, "Date", "# Active members"]].copy()
+    wm["# Active members"] = pd.to_numeric(wm["# Active members"], errors="coerce").fillna(0)
+    wm = wm.groupby([loc_col, "Date"])["# Active members"].sum().reset_index()
+    starts = wm[wm["# Active members"] > 0].groupby(loc_col)["Date"].min()
+    # A date typed in Vlookup's 'Start Override' column wins over the calculated start
+    if "Start Override" in vl.columns:
+        ov_raw = vl.set_index(loc_col)["Start Override"]
+        ov = pd.Series(parse_sheet_dates(ov_raw).values, index=ov_raw.index).dropna()
+        ov = ov[~ov.index.duplicated()]
+        starts = ov.combine_first(starts)
+    latest_date = load_weekly_membership()["Date"].max()     # latest week in the whole Sheet
+    weeks_old = ((latest_date - starts).dt.days // 7 + 1).astype(int)
 
-        ax.set_xlabel("Onboarding Week",color=BI_TEXT,fontsize=9)
-        ax.set_title("Onboarding Status by Week",color=BI_TEXT,fontsize=11,fontweight="bold")
-        ax.invert_yaxis()
-        # Extra right padding so "X members" labels aren't clipped
-        x_max = onb_w["Onboarding week"].max()
-        ax.set_xlim(right=x_max + (5 if has_members else 2))
-        if gpm_list:
-            patches=[mpatches.Patch(color=gpm_color_map[g],label=g) for g in gpm_list]
-            ax.legend(handles=patches,loc="center right",bbox_to_anchor=(1.18,0.5),
-                      facecolor=BI_CARD,edgecolor=BI_BORDER,labelcolor=BI_TEXT,fontsize=10)
-        plt.tight_layout(); st.pyplot(fig); plt.close()
-    with st.expander("📋 Onboarding Location Detail",expanded=False):
-            show_cols=[c for c in [loc_col,"Onboarding week","Onboarding Members","GPM","Country","Region","Weeks old","Age (Months)"] if c in onb.columns]
-            st.dataframe(onb[show_cols].sort_values("Onboarding week").reset_index(drop=True),
-                         use_container_width=True,hide_index=True)
+    locs = [l for l in vl_f[loc_col].dropna().unique()
+            if l in weeks_old.index and 1 <= weeks_old[l] < ONBOARDING_MAX_WEEKS]
+    if not locs:
+        st.info(f"No locations under {ONBOARDING_MAX_WEEKS} weeks old match the selected filters."); return
+    locs = sorted(locs, key=lambda l: (weeks_old[l], short(l)))
+    palette = [c for c in SERIES_COLORS if c != BI_ORANGE]      # orange is reserved for the target
+    colors = {l: palette[i % len(palette)] for i, l in enumerate(locs)}
+
+    # ── Location checkboxes ───────────────────────────────────────────────
+    st.markdown('<div class="section-header">Active Members vs Target by Week</div>', unsafe_allow_html=True)
+    key = lambda l: f"onb_sel_{l}"
+    for l in locs:
+        st.session_state.setdefault(key(l), True)
+    def set_all(value):
+        for l in locs:
+            st.session_state[key(l)] = value
+    b1, b2, _ = st.columns([1, 1, 6])
+    b1.button("Select all", on_click=set_all, args=(True,), key="onb_all", use_container_width=True)
+    b2.button("Clear all", on_click=set_all, args=(False,), key="onb_none", use_container_width=True)
+    per_row = 4
+    for i in range(0, len(locs), per_row):
+        cols = st.columns(per_row)
+        for c, l in zip(cols, locs[i:i + per_row]):
+            with c:
+                dot, box = st.columns([1, 14], gap="small")
+                dot.markdown(f'<div style="width:12px;height:12px;border-radius:50%;background:{colors[l]};'
+                             f'margin-top:6px"></div>', unsafe_allow_html=True)
+                box.checkbox(f"{short(l)} (wk {weeks_old[l]})", key=key(l))
+    selected = [l for l in locs if st.session_state.get(key(l))]
+
+    # ── Chart ─────────────────────────────────────────────────────────────
+    weeks = list(range(1, len(ONBOARDING_TARGET) + 1))
+    fig = go.Figure()
+    # Target: soft shaded band underneath, a wide pale halo and a bold line, labelled at its end
+    fig.add_trace(go.Scatter(x=weeks, y=ONBOARDING_TARGET, mode="lines", fill="tozeroy",
+                             fillcolor="rgba(224,86,42,0.07)", line=dict(width=0),
+                             hoverinfo="skip", showlegend=False))
+    fig.add_trace(go.Scatter(x=weeks, y=ONBOARDING_TARGET, mode="lines", hoverinfo="skip", showlegend=False,
+                             line=dict(color="rgba(224,86,42,0.25)", width=10, shape="spline", smoothing=0.6)))
+    fig.add_trace(go.Scatter(x=weeks, y=ONBOARDING_TARGET, name="Target", mode="lines",
+                             line=dict(color=BI_ORANGE, width=3.5, shape="spline", smoothing=0.6),
+                             hovertemplate="<b>Target: %{y}</b><extra></extra>"))
+    ends = [[weeks[-1], ONBOARDING_TARGET[-1], f"Target {ONBOARDING_TARGET[-1]}", BI_ORANGE, True]]
+    for l in selected:
+        g = wm[(wm[loc_col] == l) & (wm["Date"] >= starts[l])].copy()
+        g["Week"] = (g["Date"] - starts[l]).dt.days // 7 + 1
+        g = g[g["Week"] <= len(ONBOARDING_TARGET)].sort_values("Week")
+        if g.empty: continue
+        fig.add_trace(go.Scatter(x=g["Week"], y=g["# Active members"], name=short(l), mode="lines",
+                                 line=dict(color=colors[l], width=2.25, shape="spline", smoothing=0.8),
+                                 opacity=0.9, hovertemplate=f"{short(l)}: %{{y:,.0f}}<extra></extra>"))
+        last = g.iloc[-1]
+        fig.add_trace(go.Scatter(x=[last["Week"]], y=[last["# Active members"]], mode="markers",
+                                 marker=dict(color=colors[l], size=8, line=dict(color="#ffffff", width=1.5)),
+                                 hoverinfo="skip", showlegend=False))
+        ends.append([last["Week"], float(last["# Active members"]), short(l), colors[l], False])
+    # End-of-line labels, nudged apart where lines finish close together
+    annotations = []
+    by_week = {}
+    for e in ends:
+        by_week.setdefault(e[0], []).append(e)
+    gap = max(ONBOARDING_TARGET) * 0.045
+    for wk, group in by_week.items():
+        group.sort(key=lambda e: e[1]); placed = []
+        for e in group:
+            placed.append(e[1] if not placed or e[1] - placed[-1] >= gap else placed[-1] + gap)
+        for e, y in zip(group, placed):
+            annotations.append(dict(x=wk, y=y, xref="x", yref="y", xanchor="left", xshift=8, showarrow=False,
+                                    text=f"<b>{e[2]}</b>", font=dict(color=e[3], size=12 if e[4] else 11),
+                                    bgcolor="rgba(255,255,255,0.9)", borderpad=2))
+    # Labels alternate left/right of their line so close milestones (weeks 7 and 9) don't overlap
+    for i, (wk, name) in enumerate(ONBOARDING_MILESTONES):
+        fig.add_vline(x=wk, line_dash="dot", line_color=BI_SUBTEXT, line_width=1.25,
+                      annotation_text=f"Wk {wk} {name}",
+                      annotation_position="top left" if i % 2 == 0 else "top right",
+                      annotation_font=dict(size=11, color=BI_TEXT))
+    layout = std_layout("", "Active members", 480)
+    layout.update(showlegend=False, hovermode="x unified", margin=dict(l=60, r=110, t=50, b=50))
+    layout["xaxis"] = dict(PLOTLY_LAYOUT["xaxis"], tickmode="linear", dtick=1, range=[0.5, len(weeks) + 0.5],
+                           title=dict(text="Weeks", font=dict(color=BI_SUBTEXT, size=11)),
+                           hoverformat="d", tickprefix="")
+    layout["yaxis"] = dict(layout["yaxis"], rangemode="tozero")
+    fig.update_layout(**layout)
+    for a in annotations:          # added after the layout so the milestone labels are kept
+        fig.add_annotation(**a)
+    show_chart(fig, use_container_width=True)
+    st.caption("Orange line and shading = target. Week 1 is each location's first week with active members, "
+               "or its Start Override date where one is set in the Sheet.")
+
+    # ── Table ─────────────────────────────────────────────────────────────
+    st.markdown('<div class="section-header">Onboarding Locations</div>', unsafe_allow_html=True)
+    meta = vl_f.set_index(loc_col)
+    latest_active = wm.sort_values("Date").groupby(loc_col)["# Active members"].last()
+    rows = []
+    for l in locs:
+        w = int(weeks_old[l]); active = float(latest_active.get(l, 0))
+        target = ONBOARDING_TARGET[w - 1] if w <= len(ONBOARDING_TARGET) else None
+        row = {"Location": short(l),
+               "Stage": meta.at[l, "Stage"] if "Stage" in meta.columns else "",
+               "GPM": meta.at[l, "GPM"] if "GPM" in meta.columns else "",
+               "Weeks old": w, "Active members": int(active), "Target": target,
+               "vs Target": (active - target) if target is not None else None,
+               "vs Target %": ((active - target) / target * 100) if target else None,
+               "Location Start": starts[l]}
+        for wk, name in ONBOARDING_MILESTONES:
+            row[name] = starts[l] + pd.Timedelta(weeks=wk - 1)
+        rows.append(row)
+    tbl = pd.DataFrame(rows).sort_values("vs Target %", na_position="last")
+    date_cols = ["Location Start"] + [name for _, name in ONBOARDING_MILESTONES]
+    def colour(v):
+        if pd.isna(v) or v == 0: return ""
+        return f"color: {BI_GREEN if v > 0 else BI_RED}; font-weight: 600"
+    def past(v):
+        return f"color: {BI_SUBTEXT}" if pd.notna(v) and v <= latest_date else ""
+    styled = (tbl.style.map(colour, subset=["vs Target", "vs Target %"]).map(past, subset=date_cols[1:])
+              .format({"vs Target": "{:+,.0f}", "vs Target %": "{:+.0f}%", "Target": "{:,.0f}",
+                       **{c: (lambda d: d.strftime("%d %b %Y")) for c in date_cols}}, na_rep="–"))
+    st.dataframe(styled, use_container_width=True, hide_index=True,
+                 height=min(600, 35 * (len(tbl) + 1) + 3),
+                 column_config={"Location": st.column_config.TextColumn("Location", pinned=True)})
+    st.caption(f"Milestone dates = Location Start + (milestone week − 1) weeks. Dates already passed are shown in grey. "
+               f"Sorted by vs Target %, furthest behind first.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # REPORT 10 — Revenue
 # ══════════════════════════════════════════════════════════════════════════════
 def report_revenue(df_rv):
-    st.markdown('<div class="report-title">10 · Revenue</div>', unsafe_allow_html=True)
+    st.markdown('<div class="report-title">Revenue</div>', unsafe_allow_html=True)
     st.markdown('<div class="report-subtitle">Source: Revenue sheet — all metrics pulled directly from source</div>', unsafe_allow_html=True)
 
     df_rv = apply_gpm_filter(df_rv)
     loc_col = "Success Tutoring - Business name"
 
-    # ── Filters ───────────────────────────────────────────────────────────
-    f1, f2, f3, f4, f5, f6 = st.columns(6)
-    all_countries = ["All"] + sorted(df_rv["Country"].dropna().unique().tolist()) if "Country" in df_rv.columns else ["All"]
-    all_states    = ["All"] + sorted(df_rv["Region"].dropna().unique().tolist()) if "Region" in df_rv.columns else ["All"]
-    all_stages    = ["All"] + sorted(df_rv["Stage"].dropna().unique().tolist()) if "Stage" in df_rv.columns else ["All"]
-    all_gpms      = ["All"] + sorted(df_rv["GPM"].dropna().unique().tolist()) if "GPM" in df_rv.columns else ["All"]
-    all_statuses  = ["All"] + sorted(df_rv["Status"].dropna().unique().tolist()) if "Status" in df_rv.columns else ["All"]
-    all_locs      = ["All Locations"] + sorted(df_rv[loc_col].dropna().unique().tolist()) if loc_col in df_rv.columns else ["All Locations"]
-
-    with f1: sel_country = st.selectbox("🌍 Country",  all_countries, key="rv_country")
-    with f2: sel_state   = st.selectbox("📍 State",    all_states,    key="rv_state")
-    with f3: sel_stage   = st.selectbox("🏫 Stage",    all_stages,    key="rv_stage")
-    with f4: sel_gpm     = st.selectbox("👤 GPM",      all_gpms,      key="rv_gpm")
-    with f5: sel_status  = st.selectbox("🔵 Status",   all_statuses,  key="rv_status")
-    with f6: sel_loc     = st.selectbox("📌 Location", all_locs,      key="rv_loc")
-
-    df = df_rv.copy()
-    if sel_country != "All"           and "Country" in df.columns: df = df[df["Country"] == sel_country]
-    if sel_state   != "All"           and "Region"  in df.columns: df = df[df["Region"]  == sel_state]
-    if sel_stage   != "All"           and "Stage"   in df.columns: df = df[df["Stage"]   == sel_stage]
-    if sel_gpm     != "All"           and "GPM"     in df.columns: df = df[df["GPM"]     == sel_gpm]
-    if sel_status  != "All"           and "Status"  in df.columns: df = df[df["Status"]  == sel_status]
-    if sel_loc     != "All Locations" and loc_col   in df.columns: df = df[df[loc_col]   == sel_loc]
-
+    # ── Filters (same panel as the other reports) ─────────────────────────
+    rv_filters = st.container(border=True)
+    df_base = report_filters(df_rv.copy(), key_prefix="rv", show_date=False, show_country=True, show_state=True,
+                             show_stage=True, show_gpm=True, show_location=True, show_status=True, panel=rv_filters)
+    df = df_base.copy()
     if df.empty:
         st.warning("No revenue data available for selected filters."); return
 
     # ── Date filter ───────────────────────────────────────────────────────
-    df = checkbox_date_filter(df.copy(), key_prefix="r10rv")
+    with rv_filters:
+        df = checkbox_date_filter(df.copy(), key_prefix="r10rv")
     all_dates = sorted(df["Date"].dropna().unique())
     if not all_dates:
         st.warning("No dates found."); return
@@ -1641,7 +1691,7 @@ def report_revenue(df_rv):
     prior_t  = week_agg(df, prev_date)
 
     # ── KPI Tiles ─────────────────────────────────────────────────────────
-    st.markdown('<div class="section-header">📊 Latest Week vs Prior Week</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header">Latest Week vs Prior Week</div>', unsafe_allow_html=True)
 
     kpi_list = [
         ("Net Revenue",                "$",  "green"),
@@ -1668,13 +1718,7 @@ def report_revenue(df_rv):
     st.markdown("<br>", unsafe_allow_html=True)
 
     # ── Build df_13m_base (respects all filters except date) ─────────────
-    df_13m_base = df_rv.copy()
-    if sel_country != "All"           and "Country" in df_13m_base.columns: df_13m_base = df_13m_base[df_13m_base["Country"] == sel_country]
-    if sel_state   != "All"           and "Region"  in df_13m_base.columns: df_13m_base = df_13m_base[df_13m_base["Region"]  == sel_state]
-    if sel_stage   != "All"           and "Stage"   in df_13m_base.columns: df_13m_base = df_13m_base[df_13m_base["Stage"]   == sel_stage]
-    if sel_gpm     != "All"           and "GPM"     in df_13m_base.columns: df_13m_base = df_13m_base[df_13m_base["GPM"]     == sel_gpm]
-    if sel_status  != "All"           and "Status"  in df_13m_base.columns: df_13m_base = df_13m_base[df_13m_base["Status"]  == sel_status]
-    if sel_loc     != "All Locations" and loc_col   in df_13m_base.columns: df_13m_base = df_13m_base[df_13m_base[loc_col]   == sel_loc]
+    df_13m_base = df_base.copy()
 
     max_date   = df_13m_base["Date"].max()
     cutoff_13m = max_date - pd.DateOffset(months=13)
@@ -1711,7 +1755,7 @@ def report_revenue(df_rv):
             df_latest_all[m] = pd.to_numeric(df_latest_all[m], errors="coerce").fillna(0)
 
     # ── Country table ─────────────────────────────────────────────────────
-    st.markdown('<div class="section-header">🌏 All Metrics by Country — Latest Week</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header">All Metrics by Country — Latest Week</div>', unsafe_allow_html=True)
     df_country = build_summary_table(df_latest_all, "Country", "Country")
     if not df_country.empty:
         st.dataframe(df_country.style.format({k: v for k, v in fmt.items() if k in df_country.columns}),
@@ -1720,7 +1764,7 @@ def report_revenue(df_rv):
         st.info("No country data available.")
 
     # ── Region table ──────────────────────────────────────────────────────
-    st.markdown('<div class="section-header">📍 All Metrics by Region — Latest Week</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header">All Metrics by Region — Latest Week</div>', unsafe_allow_html=True)
     df_region = build_summary_table(df_latest_all, "Region", "Region")
     if not df_region.empty:
         st.dataframe(df_region.style.format({k: v for k, v in fmt.items() if k in df_region.columns}),
@@ -1728,72 +1772,64 @@ def report_revenue(df_rv):
     else:
         st.info("No region data available.")
 
-    # ── 13 Month Trend ────────────────────────────────────────────────────
-    st.markdown('<div class="section-header">📈 Revenue Trend — Last 13 Months</div>', unsafe_allow_html=True)
-
-    mc1, mc2, mc3, mc4, mc5, mc6 = st.columns(6)
-    show_nr  = mc1.checkbox("Net Revenue",               value=True,  key="rv_nr")
-    show_gr  = mc2.checkbox("Gross Revenue",             value=False, key="rv_gr")
-    show_as  = mc3.checkbox("# Active Students",         value=False, key="rv_as")
-    show_sv  = mc4.checkbox("Student Visits",            value=False, key="rv_sv")
-    show_ts  = mc5.checkbox("Total Sessions",            value=False, key="rv_ts")
-    show_rps = mc6.checkbox("Revenue per Session",       value=False, key="rv_rps")
-    mc7, mc8, mc9, mc10, mc11 = st.columns(5)
-    show_rpu  = mc7.checkbox("Revenue per Student",      value=False, key="rv_rpu")
-    show_sps  = mc8.checkbox("Sessions per Student",     value=False, key="rv_sps")
-    show_stu  = mc9.checkbox("Student per Session",      value=False, key="rv_stu")
-    show_spsv = mc10.checkbox("Sessions per Stud Visit", value=False, key="rv_spsv")
-    show_svps = mc11.checkbox("Stud Visits per Session", value=False, key="rv_svps")
-
-    selected_metrics = []
-    if show_nr   and "Net Revenue"                in df_13m.columns: selected_metrics.append(("Net Revenue",                BI_ACCENT,  "Net Revenue"))
-    if show_gr   and "Gross Revenue"              in df_13m.columns: selected_metrics.append(("Gross Revenue",              BI_GREEN,   "Gross Revenue"))
-    if show_as   and "# Active Students"          in df_13m.columns: selected_metrics.append(("# Active Students",          BI_BLUE,    "Active Students"))
-    if show_sv   and "Student Visits"             in df_13m.columns: selected_metrics.append(("Student Visits",             BI_YELLOW,  "Student Visits"))
-    if show_ts   and "Total Sessions"             in df_13m.columns: selected_metrics.append(("Total Sessions",             BI_ORANGE,  "Total Sessions"))
-    if show_rps  and "Revenue per Session"        in df_13m.columns: selected_metrics.append(("Revenue per Session",        BI_RED,     "Rev per Session"))
-    if show_rpu  and "Revenue per Student"        in df_13m.columns: selected_metrics.append(("Revenue per Student",        BI_PURPLE,  "Rev per Student"))
-    if show_sps  and "Sessions per Student"       in df_13m.columns: selected_metrics.append(("Sessions per Student",       "#f472b6",  "Sessions per Student"))
-    if show_stu  and "Student per Session"        in df_13m.columns: selected_metrics.append(("Student per Session",        "#34d399",  "Student per Session"))
-    if show_spsv and "Sessions per Student Visit" in df_13m.columns: selected_metrics.append(("Sessions per Student Visit", "#00b4d8",  "Sessions per Stud Visit"))
-    if show_svps and "Student Visits per Session" in df_13m.columns: selected_metrics.append(("Student Visits per Session", "#e91e8c",  "Stud Visits per Session"))
-
-    if selected_metrics:
-        agg_dict = {m: "sum" if m in SUM_METRICS else "mean" for m, _, _ in selected_metrics if m in df_13m.columns}
-        weekly_13m = df_13m.groupby("Date").agg(agg_dict).reset_index().sort_values("Date")
-        cols_plot  = [(m, color, label) for m, color, label in selected_metrics if m in weekly_13m.columns]
-        fig_trend  = plotly_line(weekly_13m, "Date", cols_plot, "Revenue Trend — Last 13 Months", height=500)
-        st.plotly_chart(fig_trend, use_container_width=True)
+    # ── Year-over-year weekly revenue ─────────────────────────────────────
+    st.markdown('<div class="section-header">Year-over-Year Weekly Comparison</div>', unsafe_allow_html=True)
+    RV_RATIOS = {"Revenue per Session": ("Net Revenue", "Total Sessions"), "Revenue per Student": ("Net Revenue", "# Active Students"),
+                 "Sessions per Student": ("Total Sessions", "# Active Students"), "Student per Session": ("# Active Students", "Total Sessions"),
+                 "Sessions per Student Visit": ("Total Sessions", "Student Visits"), "Student Visits per Session": ("Student Visits", "Total Sessions")}
+    MONEY = {"Gross Revenue", "Net Revenue", "Revenue per Session", "Revenue per Student"}
+    avail = [m for m in ALL_METRICS if m in df_base.columns and (m in SUM_METRICS or all(c in df_base.columns for c in RV_RATIOS.get(m, ())))]
+    avail = sorted(avail, key=lambda m: m != "Net Revenue")   # Net Revenue first (default)
+    dy = add_week_year(df_base)
+    for m in SUM_METRICS:
+        if m in dy.columns: dy[m] = pd.to_numeric(dy[m], errors="coerce").fillna(0)
+    start_col = "# Active Students" if "# Active Students" in dy.columns else "Net Revenue"
+    years = sorted(dy["Year"].unique().tolist(), reverse=True)
+    if years and avail:
+        opts = yoy_options("rvy", years, metrics={m: m.replace("# ", "") for m in avail},
+                           avg_metrics=set(SUM_METRICS))
+        metric, sel = opts["metric"], opts["years"]
+        dy = dy[dy["Year"].isin(sel)]
+        if opts["comparative"]:
+            dy = comparative_only(dy, sel, loc_col)
+        if not sel or dy.empty:
+            st.info("Select at least one year with data.")
+        else:
+            latest_year = max(sel)
+            latest_week = int(dy[dy["Year"] == latest_year]["Week"].max())
+            weekly = {}
+            for yr in sel:
+                g = dy[dy["Year"] == yr].groupby("Week").sum(numeric_only=True)
+                if metric in RV_RATIOS:
+                    num, den = RV_RATIOS[metric]
+                    weekly[yr] = (g[num] / g[den]).where(g[den] > 0)
+                else:
+                    weekly[yr] = g[metric]
+                    if opts["average"]:
+                        weekly[yr] = weekly[yr] / trading_locations(dy, loc_col, start_col, yr)
+            name = metric.replace("# ", "")
+            label = f"Avg {name.lower()} per location" if opts["average"] else name
+            money = metric in MONEY
+            fmt_ = ",.2f" if metric in RV_RATIOS or opts["average"] else ",.0f"
+            fig = yoy_bar_figure(weekly, latest_year, latest_week, f"{label} by week", label, fmt=fmt_,
+                                 prefix="$" if money else "", holidays=opts["holidays"])
+            show_chart(fig, use_container_width=True)
     else:
-        st.info("Please select at least one metric.")
+        st.info("No revenue data by week available.")
 
-    # ── Trend by Location ─────────────────────────────────────────────────
-    st.markdown('<div class="section-header">📍 Trend by Location</div>', unsafe_allow_html=True)
-    avail_metrics = [m for m in ALL_METRICS if m in df_13m.columns]
-    loc_metric    = st.selectbox("Metric:", avail_metrics, key="rv_loc_metric")
-    all_loc_opts  = sorted(df_13m[loc_col].dropna().unique().tolist()) if loc_col in df_13m.columns else []
-    sel_locs      = st.multiselect("Select locations to compare:", all_loc_opts,
-                                    default=all_loc_opts[:3] if len(all_loc_opts) >= 3 else all_loc_opts,
-                                    key="rv_sel_locs")
-    if sel_locs:
-        loc_agg    = "sum" if loc_metric in SUM_METRICS else "mean"
-        colors     = [BI_ACCENT, BI_BLUE, BI_ORANGE, BI_RED, BI_PURPLE, BI_YELLOW, "#00b4d8", "#f472b6"]
-        loc_df     = pd.DataFrame()
-        loc_series = []
-        for i, loc in enumerate(sel_locs):
-            loc_data = df_13m[df_13m[loc_col] == loc].groupby("Date")[loc_metric].agg(loc_agg).reset_index()
-            col_name = loc.replace("Success Tutoring - ", "")
-            loc_data = loc_data.rename(columns={loc_metric: col_name})
-            loc_df   = loc_data if loc_df.empty else loc_df.merge(loc_data, on="Date", how="outer")
-            loc_series.append((col_name, colors[i % len(colors)], col_name))
-        loc_df  = loc_df.sort_values("Date")
-        fig_loc = plotly_line(loc_df, "Date", loc_series, f"{loc_metric} by Location — Last 13 Months", height=450)
-        st.plotly_chart(fig_loc, use_container_width=True)
-    else:
-        st.info("Please select at least one location.")
+    # ── Location comparison ───────────────────────────────────────────────
+    st.markdown('<div class="section-header">Location Comparison — Last 13 Months</div>', unsafe_allow_html=True)
+    measures = {}
+    for m in avail:
+        entry = {"kind": "ratio", "num": RV_RATIOS[m][0], "den": RV_RATIOS[m][1], "fmt": ",.2f"} if m in RV_RATIOS \
+                else {"kind": "sum", "col": m, "fmt": ",.0f"}
+        if m in MONEY: entry["prefix"] = "$"
+        measures[m.replace("# ", "")] = entry
+    if measures and not df_13m.empty:
+        location_comparison(df_13m, loc_col, measures, "rv_cmp", "Net Revenue" if "Net Revenue" in df_13m.columns else start_col, start_col)
 
     # ── Performance Bar Chart ─────────────────────────────────────────────
-    st.markdown('<div class="section-header">📊 Performance by Location</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header">Performance by Location</div>', unsafe_allow_html=True)
     bc1, bc2 = st.columns([3, 1])
     with bc1: bar_metric = st.selectbox("Metric:", [m for m in ALL_METRICS if m in df.columns], key="rv_bar_metric")
     with bc2: bar_scope  = st.selectbox("Show:", ["Latest week only", "All selected weeks combined"], key="rv_bar_scope")
@@ -1813,19 +1849,19 @@ def report_revenue(df_rv):
         textposition="outside",
     ))
     fig_bar.update_layout(
-        plot_bgcolor=BI_CARD, paper_bgcolor=BI_CARD,
+        plot_bgcolor=BI_CHART_BG, paper_bgcolor=BI_CHART_BG,
         font=dict(color=BI_TEXT),
         xaxis=dict(showgrid=False, color=BI_SUBTEXT, tickangle=-45,
                    title=dict(text="Location", font=dict(color=BI_SUBTEXT, size=11))),
-        yaxis=dict(showgrid=True, gridcolor=BI_BORDER, color=BI_SUBTEXT, tickprefix=prefix_bar,
+        yaxis=dict(showgrid=True, gridcolor=BI_GRID, color=BI_SUBTEXT, tickprefix=prefix_bar,
                    title=dict(text=bar_metric, font=dict(color=BI_SUBTEXT, size=11))),
         margin=dict(l=40, r=20, t=30, b=160),
         height=450,
     )
-    st.plotly_chart(fig_bar, use_container_width=True)
+    show_chart(fig_bar, use_container_width=True)
 
     # ── Location table ────────────────────────────────────────────────────
-    st.markdown('<div class="section-header">📋 All Metrics by Location — Latest Week</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header">All Metrics by Location — Latest Week</div>', unsafe_allow_html=True)
     metric_names = [m for m in ALL_METRICS if m in df.columns]
     df_table = df[df["Date"] == latest_date].groupby(loc_col).agg(
         **{m: (m, "sum") for m in SUM_METRICS if m in df.columns}
@@ -1849,623 +1885,233 @@ def report_revenue(df_rv):
         use_container_width=True, hide_index=True,
     )
 # ══════════════════════════════════════════════════════════════════════════════
-# REPORT 11 — AI Data Analysis
+# REPORT 11 — Outliers & Alerts
 # ══════════════════════════════════════════════════════════════════════════════
-def report_claude_outliers(df_wm):
-    st.markdown('<div class="report-title">10 · AI Data Analysis</div>', unsafe_allow_html=True)
-    st.markdown('<div class="report-subtitle">Source: Weekly Membership — latest week performance tables and network outliers</div>', unsafe_allow_html=True)
+def report_outliers_alerts(df_wm, df_rv):
+    st.markdown('<div class="report-title">Outliers & Alerts</div>', unsafe_allow_html=True)
+    st.markdown('<div class="report-subtitle">Source: Weekly Membership, Revenue and Vlookup — centres that need attention, network outliers and data checks</div>', unsafe_allow_html=True)
     df_wm = apply_gpm_filter(df_wm)
+    loc_col = "Success Tutoring - Business name"
+    member_cols = ["# Active members", "# New members", "# Cancelled members", "# Suspended members"]
 
     df = report_filters(df_wm.copy(), key_prefix="r10", show_date=False,
                         show_country=True, show_state=True, show_stage=True,
                         show_gpm=True, show_status=True)
-    loc_col = "Success Tutoring - Business name"
-
-    for c in ["# Active members","# New members","# Cancelled members","# Suspended members"]:
+    for c in member_cols:
         if c in df.columns: df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
 
     all_dates = sorted(df["Date"].unique())
     if not all_dates: st.warning("No data."); return
     latest_date = all_dates[-1]
-    latest_week = df[df["Date"] == latest_date].copy()
 
-    loc_latest = latest_week.groupby(loc_col).agg(
-        Active=("# Active members","sum"),
-        New=("# New members","sum"),
-        Cancelled=("# Cancelled members","sum"),
-        Suspended=("# Suspended members","sum"),
-    ).reset_index()
+    # One row per location per week
+    wk = (df.groupby([loc_col, "Date"])[member_cols].sum().reset_index().sort_values([loc_col, "Date"]))
+    wk["Churn %"] = (wk["# Cancelled members"] / wk["# Active members"] * 100).where(wk["# Active members"] > 0)
+    latest = wk[wk["Date"] == latest_date].set_index(loc_col)
 
-    loc_latest["Churn Rate %"] = loc_latest.apply(
-        lambda r: round(r["Cancelled"] / r["Active"] * 100, 1) if r["Active"] > 0 else 0.0, axis=1)
-    loc_latest["Net Growth Rate %"] = loc_latest.apply(
-        lambda r: round((r["New"] - r["Cancelled"]) / r["Active"] * 100, 2) if r["Active"] > 0 else 0.0, axis=1)
-
+    loc_latest = latest.reset_index().rename(columns={"# Active members": "Active", "# New members": "New",
+                                                      "# Cancelled members": "Cancelled", "# Suspended members": "Suspended"})
+    loc_latest["Churn Rate %"] = loc_latest.apply(lambda r: round(r["Cancelled"] / r["Active"] * 100, 1) if r["Active"] > 0 else 0.0, axis=1)
+    loc_latest["Net Growth Rate %"] = loc_latest.apply(lambda r: round((r["New"] - r["Cancelled"]) / r["Active"] * 100, 2) if r["Active"] > 0 else 0.0, axis=1)
     vl = load_vlookup()
     if not vl.empty and "Stage" in vl.columns:
-        loc_latest = loc_latest.merge(vl[[loc_col,"Stage","GPM","Country","Region"]],
-                                       on=loc_col, how="left")
+        loc_latest = loc_latest.merge(vl[[c for c in [loc_col, "Stage", "GPM", "Country", "Region", "Age (Months)"] if c in vl.columns]],
+                                      on=loc_col, how="left")
+    short = lambda x: str(x).replace("Success Tutoring - ", "")
 
-    def show_ranked(df_sub, sort_col, title, n=5, ascending=False):
-        st.markdown(f'<div class="section-header">{title}</div>', unsafe_allow_html=True)
-        other_cols = [c for c in [loc_col,"Active","New","Cancelled","Churn Rate %",
-                                  "Net Growth Rate %","Stage"] if c in df_sub.columns and c != sort_col]
-        cols_show = [loc_col, sort_col] + [c for c in other_cols if c != loc_col]
-        cols_show = [c for c in cols_show if c in df_sub.columns]
-        ranked = df_sub.sort_values(sort_col, ascending=ascending).head(n).reset_index(drop=True)
-        ranked.index = ranked.index + 1
-        st.dataframe(ranked[cols_show].rename(columns={loc_col:"Location"}),
-                     use_container_width=True)
-
-    def show_all(df_sub, title):
-        st.markdown(f'<div class="section-header">{title}</div>', unsafe_allow_html=True)
-        cols_show = [c for c in [loc_col,"Active","New","Cancelled","Churn Rate %",
-                                  "Net Growth Rate %","Stage"] if c in df_sub.columns]
-        st.dataframe(df_sub[cols_show].rename(columns={loc_col:"Location"}).reset_index(drop=True),
-                     use_container_width=True, hide_index=True)
-
-    def show_outliers(df_sub, col, title):
-        st.markdown(f'<div class="section-header">{title}</div>', unsafe_allow_html=True)
-        mean = df_sub[col].mean(); std = df_sub[col].std()
-        outliers = df_sub[(df_sub[col] > mean + 2*std) | (df_sub[col] < mean - 2*std)].copy()
-        outliers["vs Mean"] = (outliers[col] - mean).round(2)
-        cols_show = [c for c in [loc_col, col, "vs Mean", "Active", "Stage"] if c in outliers.columns]
-        st.markdown(f'<span style="color:{BI_SUBTEXT};font-size:0.82em">Mean: {mean:.1f} | Std Dev: {std:.1f} | Threshold: >{mean+2*std:.1f} or <{mean-2*std:.1f}</span>',
-                    unsafe_allow_html=True)
-        if outliers.empty:
-            st.caption("No locations outside 2σ threshold.")
+    def table(d, **kw):
+        raw = d.data if hasattr(d, "data") and not isinstance(d, pd.DataFrame) else d
+        if raw.empty:
+            st.caption("Nothing to flag this week.")
         else:
-            st.dataframe(outliers[cols_show].rename(columns={loc_col:"Location"}).sort_values(col, ascending=False).reset_index(drop=True),
-                         use_container_width=True, hide_index=True)
+            st.dataframe(d, use_container_width=True, hide_index=True, **kw)
 
-    st.markdown(f'<div style="background:{BI_CARD};border:1px solid {BI_BORDER};border-radius:4px;padding:10px 14px;margin-bottom:16px;font-size:0.88em">'
-                f'<b>Latest Week: {latest_date.strftime("%d %b %Y")}</b> &nbsp;|&nbsp; '
-                f'{len(loc_latest)} locations &nbsp;|&nbsp; '
-                f'Avg Active: <b>{loc_latest["Active"].mean():.0f}</b> &nbsp;|&nbsp; '
-                f'Avg NGR: <b>{loc_latest["Net Growth Rate %"].mean():.1f}%</b> &nbsp;|&nbsp; '
-                f'Avg Churn: <b>{loc_latest["Churn Rate %"].mean():.1f}%</b>'
-                f'</div>', unsafe_allow_html=True)
+    trading = loc_latest[loc_latest["Active"] > 0]
+    st.markdown(f'<div class="metric-card" style="padding:10px 14px;font-size:0.9em">'
+                f'<b>Latest week: {pd.Timestamp(latest_date).strftime("%d %b %Y")}</b> · '
+                f'{len(trading)} trading centres · Avg active: <b>{trading["Active"].mean():.0f}</b> · '
+                f'Avg NGR: <b>{trading["Net Growth Rate %"].mean():.1f}%</b> · '
+                f'Avg churn: <b>{trading["Churn Rate %"].mean():.1f}%</b></div>', unsafe_allow_html=True)
 
-    st.markdown('<div class="section-header">📅 Weekly Network Summary — All Weeks</div>', unsafe_allow_html=True)
-    weekly_summary = []
-    for dt in sorted(df["Date"].unique(), reverse=True):
-        week_df = df[df["Date"] == dt].copy()
-        active = pd.to_numeric(week_df["# Active members"], errors="coerce").fillna(0).sum()
-        new = pd.to_numeric(week_df["# New members"], errors="coerce").fillna(0).sum()
-        cancelled = pd.to_numeric(week_df["# Cancelled members"], errors="coerce").fillna(0).sum()
-        suspended = pd.to_numeric(week_df["# Suspended members"], errors="coerce").fillna(0).sum()
-        locations = week_df[loc_col].nunique()
-        avg_active = round(active / locations, 1) if locations > 0 else 0
-        churn = round(cancelled / active * 100, 1) if active > 0 else 0.0
-        ngr = round((new - cancelled) / active * 100, 1) if active > 0 else 0.0
-        median_active = round(pd.to_numeric(week_df["# Active members"], errors="coerce").fillna(0).median(), 1)
-        weekly_summary.append({
-            "Week": dt.strftime("%d %b %Y"),
-            "Locations": int(locations),
-            "Total Active": int(active),
-            "Avg Active": avg_active,
-            "Median Active": median_active,
-            "New": int(new),
-            "Cancelled": int(cancelled),
-            "Suspended": int(suspended),
-            "Avg NGR %": ngr,
-            "Avg Churn %": churn,
-        })
-    df_summary = pd.DataFrame(weekly_summary)
-    st.dataframe(
-        df_summary.style.set_properties(**{
-            "background-color": "#fffde7",
-            "color": "#1a1a2e",
-            "border": "1px solid #f0e68c",
-        }).format({
-            "Avg Active": "{:.1f}",
-            "Median Active": "{:.1f}",
-            "Avg NGR %": "{:.1f}%",
-            "Avg Churn %": "{:.1f}%",
-        }),
-        use_container_width=True,
-        hide_index=True,
-    )
-    st.markdown("<br>", unsafe_allow_html=True)
+    # ── Watchlist ─────────────────────────────────────────────────────────
+    w1, w2 = st.columns(2)
+    with w1:
+        # (a) Declining streaks: active members down 3+ weeks in a row, ending this week
+        st.markdown('<div class="section-header">Declining Streaks — Active Down 3+ Weeks in a Row</div>', unsafe_allow_html=True)
+        rows = []
+        for loc, g in wk.groupby(loc_col):
+            vals = g["# Active members"].tolist()
+            if not vals or g["Date"].iloc[-1] != latest_date: continue
+            streak = 0
+            for i in range(len(vals) - 1, 0, -1):
+                if vals[i] < vals[i - 1]: streak += 1
+                else: break
+            if streak >= 3:
+                start = vals[-1 - streak]
+                rows.append({"Location": short(loc), "Weeks declining": streak, "Active now": int(vals[-1]),
+                             "Active before": int(start), "Change": int(vals[-1] - start)})
+        table(pd.DataFrame(rows).sort_values("Weeks declining", ascending=False) if rows else pd.DataFrame())
+    with w2:
+        # (b) Churn spikes: this week's churn more than double the centre's own 13-week average
+        st.markdown('<div class="section-header">Churn Spikes — More Than 2× Own 13-Week Average</div>', unsafe_allow_html=True)
+        rows = []
+        for loc, g in wk.groupby(loc_col):
+            if g["Date"].iloc[-1] != latest_date: continue
+            now = g["Churn %"].iloc[-1]
+            prior = g["Churn %"].iloc[-14:-1].dropna()
+            base = prior.mean() if len(prior) else None
+            if pd.notna(now) and base and base > 0 and now > 2 * base:
+                rows.append({"Location": short(loc), "Churn this week %": round(now, 1),
+                             "13-week avg %": round(base, 1), "× average": round(now / base, 1),
+                             "Cancelled": int(g["# Cancelled members"].iloc[-1])})
+        table(pd.DataFrame(rows).sort_values("× average", ascending=False) if rows else pd.DataFrame())
 
-    col1, col2 = st.columns(2)
-
-    with col1:
-        show_ranked(loc_latest, "Active",           "🥇 Top 5 — Active Members",       n=5, ascending=False)
-        show_ranked(loc_latest, "New",              "🥇 Top 5 — New Members",          n=5, ascending=False)
-        show_ranked(loc_latest, "Net Growth Rate %","🥇 Top 5 — Net Growth Rate %",    n=5, ascending=False)
-        st.markdown('<div class="section-header">⚠️ All Locations — Active Members Below 50</div>', unsafe_allow_html=True)
-        df_below50 = loc_latest[loc_latest["Active"] < 50].sort_values("Active").copy()
-        cols_below50 = [c for c in [loc_col,"Active","New","Cancelled","Churn Rate %","Net Growth Rate %","Stage","GPM"] if c in df_below50.columns]
-        st.dataframe(df_below50[cols_below50].rename(columns={loc_col:"Location"}).reset_index(drop=True),
-                     use_container_width=True, hide_index=True)
-
-    with col2:
-        show_ranked(loc_latest, "Churn Rate %",     "🔴 Top 5 — Highest Churn Rate %",          n=5, ascending=False)
-        show_ranked(loc_latest, "Net Growth Rate %","🔴 Bottom 5 — Lowest Net Growth Rate %",    n=5, ascending=True)
-        show_outliers(loc_latest, "New",             "📊 Outliers — New Members (2σ)")
-        show_outliers(loc_latest, "Net Growth Rate %","📊 Outliers — Net Growth Rate % (2σ)")
-        show_outliers(loc_latest, "Churn Rate %",    "📊 Outliers — Churn Rate % (2σ)")
-
-    if not ANTHROPIC_KEY:
-        st.warning("No Anthropic API key found — AI narrative unavailable.")
-        return
-
-    if st.button("🤖 Generate Claude AI Narrative", use_container_width=True):
-        def tbl(df_sub, sort_col, n=5, asc=False):
-            cols = [c for c in [loc_col,"Active","New","Churn Rate %","Net Growth Rate %","Stage"] if c in df_sub.columns]
-            return df_sub.sort_values(sort_col, ascending=asc).head(n)[cols].rename(
-                columns={loc_col:"Location"}).to_string(index=False)
-
-        # Build last 6 weeks of data
-        last_6_dates = sorted(df["Date"].unique())[-6:]
-        df_6w = df[df["Date"].isin(last_6_dates)].copy()
-
-        # Weekly network summary for last 6 weeks
-        weekly_rows = []
-        for dt in sorted(last_6_dates):
-            wdf = df_6w[df_6w["Date"] == dt].copy()
-            active = pd.to_numeric(wdf["# Active members"], errors="coerce").fillna(0).sum()
-            new = pd.to_numeric(wdf["# New members"], errors="coerce").fillna(0).sum()
-            cancelled = pd.to_numeric(wdf["# Cancelled members"], errors="coerce").fillna(0).sum()
-            locs = wdf[loc_col].nunique()
-            churn = round(cancelled / active * 100, 1) if active > 0 else 0
-            ngr = round((new - cancelled) / active * 100, 1) if active > 0 else 0
-            weekly_rows.append(f"{dt.strftime('%d %b %Y')} | Locations: {locs} | Active: {int(active)} | New: {int(new)} | Cancelled: {int(cancelled)} | NGR: {ngr}% | Churn: {churn}%")
-        weekly_trend_str = "\n".join(weekly_rows)
-
-        # Location trends over last 6 weeks
-        loc_trend = df_6w.groupby([loc_col, "Date"]).agg(
-            Active=("# Active members","sum"),
-            New=("# New members","sum"),
-            Cancelled=("# Cancelled members","sum"),
-        ).reset_index()
-        loc_trend["NGR %"] = loc_trend.apply(
-            lambda r: round((r["New"] - r["Cancelled"]) / r["Active"] * 100, 1) if r["Active"] > 0 else 0, axis=1)
-
-        # Region trends over last 6 weeks
-        region_trend_str = ""
-        country_trend_str = ""
-        if "Region" in df_6w.columns and "Country" in df_6w.columns:
-            region_trend = df_6w.groupby(["Region", "Date"]).agg(
-                Active=("# Active members","sum"),
-                New=("# New members","sum"),
-                Cancelled=("# Cancelled members","sum"),
-            ).reset_index()
-            region_trend["NGR %"] = region_trend.apply(
-                lambda r: round((r["New"] - r["Cancelled"]) / r["Active"] * 100, 1) if r["Active"] > 0 else 0, axis=1)
-            region_summary = region_trend.groupby("Region").agg(
-                Avg_Active=("Active","mean"),
-                Avg_NGR=("NGR %","mean"),
-                Avg_New=("New","mean"),
-            ).round(1).reset_index()
-            region_trend_str = region_summary.to_string(index=False)
-
-            country_trend = df_6w.groupby(["Country", "Date"]).agg(
-                Active=("# Active members","sum"),
-                New=("# New members","sum"),
-                Cancelled=("# Cancelled members","sum"),
-            ).reset_index()
-            country_trend["NGR %"] = country_trend.apply(
-                lambda r: round((r["New"] - r["Cancelled"]) / r["Active"] * 100, 1) if r["Active"] > 0 else 0, axis=1)
-            country_summary = country_trend.groupby("Country").agg(
-                Avg_Active=("Active","mean"),
-                Avg_NGR=("NGR %","mean"),
-                Avg_New=("New","mean"),
-            ).round(1).reset_index()
-            country_trend_str = country_summary.to_string(index=False)
-
-        # Top/bottom performing locations over 6 weeks
-        loc_6w_summary = loc_trend.groupby(loc_col).agg(
-            Avg_Active=("Active","mean"),
-            Avg_NGR=("NGR %","mean"),
-            Avg_New=("New","mean"),
-        ).round(1).reset_index()
-        if "Stage" in loc_latest.columns:
-            loc_6w_summary = loc_6w_summary.merge(loc_latest[[loc_col,"Stage","Region","Country"]] if "Region" in loc_latest.columns else loc_latest[[loc_col,"Stage"]], on=loc_col, how="left")
-        top_locs = loc_6w_summary.sort_values("Avg_NGR", ascending=False).head(5).to_string(index=False)
-        bot_locs = loc_6w_summary.sort_values("Avg_NGR", ascending=True).head(5).to_string(index=False)
-
-        prompt = f"""You are a sharp business analyst for Success Tutoring, an Australian tutoring franchise.
-Use Australian English. Analyse TRENDS across the last 6 weeks of data ending {latest_date.strftime('%d %b %Y')}.
-Focus on movement and momentum — is performance improving, declining, or flat? Be specific with numbers.
-
-NETWORK TREND — LAST 6 WEEKS (newest last):
-{weekly_trend_str}
-
-TOP 5 LOCATIONS BY AVG NET GROWTH RATE % (6 weeks):
-{top_locs}
-
-BOTTOM 5 LOCATIONS BY AVG NET GROWTH RATE % (6 weeks):
-{bot_locs}
-
-REGION SUMMARY (6 week averages):
-{region_trend_str}
-
-COUNTRY SUMMARY (6 week averages):
-{country_trend_str}
-
-Provide a trend-focused narrative with these exact sections:
-## 🌐 Overall Network Trend
-Summarise the 6-week trajectory. Is the network growing, declining or flat? Call out the most significant week-on-week movements.
-
-## 📍 Location Performance
-Highlight the top 3 overperforming and top 3 underperforming locations based on NGR % trend. Be specific about which locations are improving vs declining.
-
-## 🗺️ Region Performance
-Which regions are leading and which are lagging? Note any regions showing strong momentum or concerning decline.
-
-## 🌏 Country Performance
-Compare Australia, New Zealand and any other countries. Which is performing best and why?
-
-## 💡 Leadership Recommendations
-4 specific actions for this week based on the trend data. Be direct and actionable."""
-
-        client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
-        with st.spinner("🤖 Claude is analysing..."):
-            message = client.messages.create(
-                model="claude-sonnet-4-20250514", max_tokens=1500,
-                messages=[{"role":"user","content":prompt}])
-        st.markdown(message.content[0].text)
-        # ══════════════════════════════════════════════════════════════════════════════
-# REPORT 12 — Location Performance Analysis
-# ══════════════════════════════════════════════════════════════════════════════
-def report_location_performance(df_wm, df_rv):
-    st.markdown('<div class="report-title">12 · Location Performance Analysis</div>', unsafe_allow_html=True)
-    st.markdown('<div class="report-subtitle">Consolidated metrics for a single location across all reports</div>', unsafe_allow_html=True)
-
-    df_wm = apply_gpm_filter(df_wm)
-    df_rv = apply_gpm_filter(df_rv)
-    loc_col = "Success Tutoring - Business name"
-    vl = load_vlookup()
-
-    # ── Location filter ───────────────────────────────────────────────────
-    all_locs = sorted(df_wm[loc_col].dropna().unique().tolist()) if loc_col in df_wm.columns else []
-    if not all_locs:
-        st.warning("No locations found."); return
-
-    sel_loc = st.selectbox("📌 Select Location", all_locs, key="r12_loc")
-
-    # ── Pull data for selected location ───────────────────────────────────
-    wm_loc = df_wm[df_wm[loc_col] == sel_loc].copy()
-    rv_loc = df_rv[df_rv[loc_col] == sel_loc].copy() if loc_col in df_rv.columns else pd.DataFrame()
-
-    for c in ["# Active members","# New members","# Suspended members","# Cancelled members"]:
-        if c in wm_loc.columns:
-            wm_loc[c] = pd.to_numeric(wm_loc[c], errors="coerce").fillna(0)
-
-    for c in ["Net Revenue","# Active Students","Total Sessions","Revenue per Session",
-              "Revenue per Student","Sessions per Student","Student per Session"]:
-        if c in rv_loc.columns:
-            rv_loc[c] = pd.to_numeric(rv_loc[c], errors="coerce").fillna(0)
-
-    latest_date = wm_loc["Date"].max() if not wm_loc.empty else None
-    prev_date   = sorted(wm_loc["Date"].dropna().unique())[-2] if len(wm_loc["Date"].dropna().unique()) >= 2 else None
-
-    # ── Location metadata ─────────────────────────────────────────────────
-    meta = vl[vl[loc_col] == sel_loc].iloc[0] if not vl.empty and loc_col in vl.columns and not vl[vl[loc_col] == sel_loc].empty else {}
-
-    if not meta.empty if hasattr(meta, 'empty') else not meta:
-        m1, m2, m3, m4, m5 = st.columns(5)
-        with m1: st.markdown(f'<div class="metric-card blue"><div class="metric-label">Stage</div><div class="metric-value" style="font-size:1.2em">{meta.get("Stage","—")}</div></div>', unsafe_allow_html=True)
-        with m2: st.markdown(f'<div class="metric-card blue"><div class="metric-label">GPM</div><div class="metric-value" style="font-size:1.2em">{meta.get("GPM","—")}</div></div>', unsafe_allow_html=True)
-        with m3: st.markdown(f'<div class="metric-card blue"><div class="metric-label">Country</div><div class="metric-value" style="font-size:1.2em">{meta.get("Country","—")}</div></div>', unsafe_allow_html=True)
-        with m4: st.markdown(f'<div class="metric-card blue"><div class="metric-label">Region</div><div class="metric-value" style="font-size:1.2em">{meta.get("Region","—")}</div></div>', unsafe_allow_html=True)
-        with m5: st.markdown(f'<div class="metric-card blue"><div class="metric-label">Age (Months)</div><div class="metric-value" style="font-size:1.2em">{int(meta.get("Age (Months)",0))}</div></div>', unsafe_allow_html=True)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    # ══════════════════════════════════════════════════════════════════════
-    # SECTION 1 — Weekly Metrics Table (one row per week)
-    # ══════════════════════════════════════════════════════════════════════
-    st.markdown('<div class="section-header">📋 Weekly Metrics</div>', unsafe_allow_html=True)
-
-    # Period filter
-    period_sel = st.selectbox("📅 Period", ["Last Week","Last Month","Last Quarter","Last Year","All Time"], key="r12_period")
-    max_wm_date = wm_loc["Date"].max()
-    if period_sel == "Last Week":
-        wm_loc_f = wm_loc[wm_loc["Date"] == max_wm_date]
-    elif period_sel == "Last Month":
-        wm_loc_f = wm_loc[wm_loc["Date"] >= max_wm_date - pd.DateOffset(months=1)]
-    elif period_sel == "Last Quarter":
-        wm_loc_f = wm_loc[wm_loc["Date"] >= max_wm_date - pd.DateOffset(months=3)]
-    elif period_sel == "Last Year":
-        wm_loc_f = wm_loc[wm_loc["Date"] >= max_wm_date - pd.DateOffset(years=1)]
+    # (c) Suspension risk: suspended ÷ active this week
+    st.markdown('<div class="section-header">Suspension Risk — Suspended ÷ Active This Week</div>', unsafe_allow_html=True)
+    net_ratio = trading["Suspended"].sum() / trading["Active"].sum() * 100 if trading["Active"].sum() else 0
+    st.caption(f"Network: {net_ratio:.1f}% of active members are suspended. Centres at more than twice that are highlighted.")
+    sr = trading.assign(**{"Suspended %": (trading["Suspended"] / trading["Active"] * 100).round(1)})
+    sr = sr.sort_values("Suspended %", ascending=False).head(10)
+    sr_tbl = pd.DataFrame({"Location": sr[loc_col].map(short), "Suspended %": sr["Suspended %"],
+                           "Suspended": sr["Suspended"].astype(int), "Active": sr["Active"].astype(int),
+                           "GPM": sr["GPM"] if "GPM" in sr.columns else ""})
+    if not sr_tbl.empty:
+        hl = lambda v: f"background-color: rgba(200,50,47,0.18); font-weight: 600" if net_ratio and v > 2 * net_ratio else ""
+        table(sr_tbl.style.map(hl, subset=["Suspended %"]).format({"Suspended %": "{:.1f}%"}))
     else:
-        wm_loc_f = wm_loc.copy()
+        table(sr_tbl)
 
-    all_wm_dates = sorted(wm_loc_f["Date"].dropna().unique(), reverse=True)
-    weekly_rows = []
-
-    for dt in all_wm_dates:
-        lw_wm = wm_loc[wm_loc["Date"] == dt]
-
-        active    = lw_wm["# Active members"].sum() if "# Active members" in lw_wm.columns else 0
-        new_mem   = lw_wm["# New members"].sum() if "# New members" in lw_wm.columns else 0
-        suspended = lw_wm["# Suspended members"].sum() if "# Suspended members" in lw_wm.columns else 0
-        cancelled = lw_wm["# Cancelled members"].sum() if "# Cancelled members" in lw_wm.columns else 0
-        churn     = round(cancelled / active * 100, 1) if active > 0 else 0
-        ngr       = round((new_mem - cancelled) / active * 100, 2) if active > 0 else 0
-
-        net_rev = students = sessions = 0
-        if not rv_loc.empty and "Date" in rv_loc.columns:
-            rv_dates = rv_loc["Date"].dropna().unique()
-            if len(rv_dates) > 0:
-                closest_rv_date = min(rv_dates, key=lambda d: abs((d - dt).days))
-                if abs((closest_rv_date - dt).days) <= 7:
-                    lw_rv = rv_loc[rv_loc["Date"] == closest_rv_date]
-                    net_rev  = lw_rv["Net Revenue"].sum() if "Net Revenue" in lw_rv.columns else 0
-                    students = lw_rv["# Active Students"].sum() if "# Active Students" in lw_rv.columns else 0
-                    sessions = lw_rv["Total Sessions"].sum() if "Total Sessions" in lw_rv.columns else 0
-
-        rev_sess  = round(net_rev / sessions, 2) if sessions > 0 else 0
-        rev_stud  = round(net_rev / students, 2) if students > 0 else 0
-        sess_stud = round(sessions / students, 2) if students > 0 else 0
-        stud_sess = round(students / sessions, 2) if sessions > 0 else 0
-
-        weekly_rows.append({
-            "Week":                  dt.strftime("%d %b %Y"),
-            "Active Members":        int(active),
-            "New Members":           int(new_mem),
-            "Suspended":             int(suspended),
-            "Cancelled":             int(cancelled),
-            "Churn Rate %":          churn,
-            "Net Growth Rate %":     ngr,
-            "Net Revenue":           f"${net_rev:,.2f}",
-            "Active Students":       int(students),
-            "Total Sessions":        int(sessions),
-            "Rev per Session":       f"${rev_sess:,.2f}",
-            "Rev per Student":       f"${rev_stud:,.2f}",
-            "Sessions per Student":  sess_stud,
-            "Student per Session":   stud_sess,
-        })
-
-    # Set latest week values for AI section
-    if weekly_rows:
-        latest_row = weekly_rows[0]
-        active    = latest_row["Active Members"]
-        new_mem   = latest_row["New Members"]
-        suspended = latest_row["Suspended"]
-        cancelled = latest_row["Cancelled"]
-        churn     = latest_row["Churn Rate %"]
-        ngr       = latest_row["Net Growth Rate %"]
-        net_rev   = float(latest_row["Net Revenue"].replace("$","").replace(",",""))
-        students  = latest_row["Active Students"]
-        sessions  = latest_row["Total Sessions"]
-        rev_sess  = float(latest_row["Rev per Session"].replace("$","").replace(",",""))
-        rev_stud  = float(latest_row["Rev per Student"].replace("$","").replace(",",""))
-        sess_stud = latest_row["Sessions per Student"]
-        stud_sess = latest_row["Student per Session"]
-
-    df_weekly = pd.DataFrame(weekly_rows)
-
-    # Averages row
-    if not df_weekly.empty:
-        avg_row = {"Week": f"── AVG ({period_sel}) ──"}
-        for col in df_weekly.columns:
-            if col == "Week":
-                continue
-            elif col in ["Net Revenue","Rev per Session","Rev per Student"]:
-                # Strip $ and commas to average, then reformat
-                try:
-                    vals = df_weekly[col].str.replace("$","",regex=False).str.replace(",","",regex=False).astype(float)
-                    avg_row[col] = f"${vals.mean():,.2f}"
-                except:
-                    avg_row[col] = "—"
-            else:
-                try:
-                    avg_row[col] = round(pd.to_numeric(df_weekly[col], errors="coerce").mean(), 2)
-                except:
-                    avg_row[col] = "—"
-
-        df_display = pd.concat([df_weekly, pd.DataFrame([avg_row])], ignore_index=True)
+    # (e) Age-adjusted performance: active members vs centres open a similar number of months
+    st.markdown('<div class="section-header">Age-Adjusted Performance — vs Centres Open a Similar Time</div>', unsafe_allow_html=True)
+    if "Age (Months)" in trading.columns:
+        bands = [(0, 6, "0–6 months"), (6, 12, "6–12 months"), (12, 24, "12–24 months"), (24, 36, "24–36 months"), (36, 10**6, "36+ months")]
+        def band(m):
+            try: m = float(m)
+            except: return None
+            for lo, hi, name in bands:
+                if lo <= m < hi: return name
+            return None
+        # Band averages use every trading centre in the network, whatever the filters
+        full = load_weekly_membership()
+        full = full[full["Date"] == full["Date"].max()]
+        full = full.groupby(loc_col)["# Active members"].sum().reset_index()
+        full = full[full["# Active members"] > 0].merge(vl[[loc_col, "Age (Months)"]], on=loc_col, how="left")
+        full["Band"] = full["Age (Months)"].map(band)
+        band_avg = full.groupby("Band")["# Active members"].mean()
+        aa = trading.copy()
+        aa["Band"] = aa["Age (Months)"].map(band)
+        aa = aa.dropna(subset=["Band"])
+        aa["Band average"] = aa["Band"].map(band_avg).round(0)
+        aa["Index"] = (aa["Active"] / aa["Band average"]).round(2)
+        order = {name: i for i, (_, _, name) in enumerate(bands)}
+        aa = aa.sort_values(["Band", "Index"], key=lambda c: c.map(order) if c.name == "Band" else -c)
+        aa_tbl = pd.DataFrame({"Location": aa[loc_col].map(short), "Age (months)": aa["Age (Months)"].astype(int),
+                               "Age band": aa["Band"], "Active": aa["Active"].astype(int),
+                               "Band average": aa["Band average"].astype(int), "Index": aa["Index"]})
+        st.caption("Index = active members ÷ average of trading centres in the same age band across the network. "
+                   "1.00 = typical for its age · 1.28 = 28% ahead · 0.80 = 20% behind.")
+        def shade(v):
+            if pd.isna(v): return ""
+            a = min(abs(v - 1) / 0.5, 1) * 0.55
+            return f"background-color: rgba({'46,133,64' if v >= 1 else '200,50,47'},{a:.2f})"
+        table(aa_tbl.style.map(shade, subset=["Index"]).format({"Index": "{:.2f}"}),
+              height=min(500, 35 * (len(aa_tbl) + 1) + 3))
     else:
-        df_display = df_weekly
+        st.caption("Age (Months) not found in Vlookup.")
 
-    st.dataframe(df_display, use_container_width=True, hide_index=True)
-    # ══════════════════════════════════════════════════════════════════════
-    # SECTION 2 — 13 Month Trend Chart
-    # ══════════════════════════════════════════════════════════════════════
-    st.markdown('<div class="section-header">📈 13 Month Trend</div>', unsafe_allow_html=True)
+    # ── Rankings and statistical outliers (latest week) ───────────────────
+    def show_ranked(d, sort_col, title, n=5, ascending=False):
+        st.markdown(f'<div class="section-header">{title}</div>', unsafe_allow_html=True)
+        cols = [c for c in [sort_col, "Active", "New", "Cancelled", "Churn Rate %", "Net Growth Rate %", "Stage"] if c in d.columns]
+        cols = list(dict.fromkeys(cols))
+        r = d.sort_values(sort_col, ascending=ascending).head(n)
+        table(pd.concat([r[loc_col].map(short).rename("Location"), r[cols]], axis=1))
 
-    max_date = wm_loc["Date"].max()
-    cutoff   = max_date - pd.DateOffset(months=13)
-    wm_13m   = wm_loc[wm_loc["Date"] >= cutoff].copy()
-    rv_13m   = rv_loc[rv_loc["Date"] >= cutoff].copy() if not rv_loc.empty and "Date" in rv_loc.columns else pd.DataFrame()
+    def show_outliers(d, col, title):
+        st.markdown(f'<div class="section-header">{title}</div>', unsafe_allow_html=True)
+        mean, std = d[col].mean(), d[col].std()
+        st.caption(f"Mean {mean:.1f} · Std dev {std:.1f} · Outside {mean-2*std:.1f} to {mean+2*std:.1f}")
+        o = d[(d[col] > mean + 2 * std) | (d[col] < mean - 2 * std)].copy()
+        o["vs Mean"] = (o[col] - mean).round(2)
+        cols = [c for c in [col, "vs Mean", "Active", "Stage"] if c in o.columns]
+        o = o.sort_values(col, ascending=False)
+        table(pd.concat([o[loc_col].map(short).rename("Location"), o[cols]], axis=1))
 
-    # Checkbox metric selection
-    cc1, cc2, cc3, cc4, cc5, cc6 = st.columns(6)
-    show_active   = cc1.checkbox("Active Members",   value=True,  key="r12_active")
-    show_new      = cc2.checkbox("New Members",      value=False, key="r12_new")
-    show_canc     = cc3.checkbox("Cancelled",        value=False, key="r12_canc")
-    show_churn    = cc4.checkbox("Churn Rate %",     value=True,  key="r12_churn")
-    show_ngr      = cc5.checkbox("Net Growth Rate %",value=True,  key="r12_ngr")
-    show_rev      = cc6.checkbox("Net Revenue",      value=False, key="r12_rev")
-    cc7, cc8 = st.columns(8)[:2]
-    show_rps      = cc7.checkbox("Rev per Session",  value=False, key="r12_rps")
-    show_rpu      = cc8.checkbox("Rev per Student",  value=False, key="r12_rpu")
+    c1, c2 = st.columns(2)
+    with c1:
+        show_ranked(trading, "Active", "Top 5 — Active Members")
+        show_ranked(trading, "New", "Top 5 — New Members")
+        show_ranked(trading, "Net Growth Rate %", "Top 5 — Net Growth Rate %")
+    with c2:
+        show_ranked(trading, "Churn Rate %", "Top 5 — Highest Churn Rate %")
+        show_ranked(trading, "Net Growth Rate %", "Bottom 5 — Lowest Net Growth Rate %", ascending=True)
+        show_outliers(trading, "Net Growth Rate %", "Outliers — Net Growth Rate % (2σ)")
 
-    # Build base trend df from membership
-    trend_wm = wm_13m.groupby("Date").agg(
-        Active=("# Active members","sum"),
-        New=("# New members","sum"),
-        Cancelled=("# Cancelled members","sum"),
-        Suspended=("# Suspended members","sum"),
-    ).reset_index().sort_values("Date")
-    trend_wm["Churn Rate %"]     = trend_wm.apply(lambda r: round(r["Cancelled"]/r["Active"]*100,1) if r["Active"]>0 else 0, axis=1)
-    trend_wm["Net Growth Rate %"] = trend_wm.apply(lambda r: round((r["New"]-r["Cancelled"])/r["Active"]*100,2) if r["Active"]>0 else 0, axis=1)
+    # (g-style threshold kept from before) Centres below 50 active
+    st.markdown('<div class="section-header">Centres With Fewer Than 50 Active Members</div>', unsafe_allow_html=True)
+    b50 = trading[trading["Active"] < 50].sort_values("Active")
+    table(pd.concat([b50[loc_col].map(short).rename("Location"),
+                     b50[[c for c in ["Active", "New", "Cancelled", "Churn Rate %", "Stage", "GPM"] if c in b50.columns]]], axis=1))
 
-    # Merge revenue if available
-    if not rv_13m.empty:
-        trend_rv = rv_13m.groupby("Date").agg(
-            net_rev=("Net Revenue","sum"),
-            students=("# Active Students","sum"),
-            sessions=("Total Sessions","sum"),
-        ).reset_index()
-        trend_rv["Net Revenue"]         = trend_rv["net_rev"]
-        trend_rv["Revenue per Session"] = (trend_rv["net_rev"]/trend_rv["sessions"]).round(2).where(trend_rv["sessions"]>0,0)
-        trend_rv["Revenue per Student"] = (trend_rv["net_rev"]/trend_rv["students"]).round(2).where(trend_rv["students"]>0,0)
-        trend_wm = trend_wm.merge(trend_rv[["Date","Net Revenue","Revenue per Session","Revenue per Student"]], on="Date", how="left")
+    # ── Weekly network summary ────────────────────────────────────────────
+    st.markdown('<div class="section-header">Weekly Network Summary</div>', unsafe_allow_html=True)
+    tr = wk[wk["# Active members"] > 0]
+    summ = tr.groupby("Date").agg(Locations=(loc_col, "nunique"), Active=("# Active members", "sum"),
+                                  Median=("# Active members", "median"), New=("# New members", "sum"),
+                                  Cancelled=("# Cancelled members", "sum"), Suspended=("# Suspended members", "sum")
+                                  ).reset_index().sort_values("Date", ascending=False)
+    summ["Avg Active"] = (summ["Active"] / summ["Locations"]).round(1)
+    summ["NGR %"] = ((summ["New"] - summ["Cancelled"]) / summ["Active"] * 100).round(1)
+    summ["Churn %"] = (summ["Cancelled"] / summ["Active"] * 100).round(1)
+    summ["Week"] = summ["Date"].dt.strftime("%d %b %Y")
+    summ = summ[["Week", "Locations", "Active", "Avg Active", "Median", "New", "Cancelled", "Suspended", "NGR %", "Churn %"]]
+    table(summ.style.format({"Active": "{:,.0f}", "Avg Active": "{:.1f}", "Median": "{:.1f}",
+                             "NGR %": "{:.1f}%", "Churn %": "{:.1f}%"}), height=400)
 
-    # Comparison locations
-    st.markdown(f'<div style="color:{BI_SUBTEXT};font-size:0.82em;margin-bottom:4px">Compare with other locations (optional):</div>', unsafe_allow_html=True)
-    other_locs = [l for l in all_locs if l != sel_loc]
-    comp_locs  = st.multiselect("Compare locations:", other_locs, default=[], max_selections=4, key="r12_comp")
+    # ── (h) Data-quality checks ───────────────────────────────────────────
+    st.markdown('<div class="section-header">Data Quality Checks</div>', unsafe_allow_html=True)
+    shown = set(df[loc_col].dropna())
+    checks = []
+    if not vl.empty:
+        for col in ["Stage", "Country", "Region", "GPM"]:
+            if col in vl.columns:
+                missing = vl[vl[col].astype(str).str.strip().isin(["", "nan", "None"])]
+                missing = missing[missing[loc_col].isin(shown) | (st.session_state.get("access_level") == "admin")]
+                for loc in missing[loc_col]:
+                    checks.append({"Check": f"Missing {col} in Vlookup", "Location": short(loc) or "(blank name)", "Detail": ""})
+        not_in_vl = sorted(shown - set(vl[loc_col].dropna()))
+        for loc in not_in_vl:
+            checks.append({"Check": "In Weekly Membership but not in Vlookup", "Location": short(loc),
+                           "Detail": "Check the name matches exactly"})
+    # Missing weeks: centres trading last week with no row this week, and gaps in the last 13 weeks
+    recent = all_dates[-13:]
+    for loc, g in wk.groupby(loc_col):
+        dates = set(g["Date"])
+        if len(all_dates) >= 2 and all_dates[-2] in dates and latest_date not in dates \
+                and g[g["Date"] == all_dates[-2]]["# Active members"].sum() > 0:
+            checks.append({"Check": "No data for latest week", "Location": short(loc),
+                           "Detail": f"Had data on {pd.Timestamp(all_dates[-2]).strftime('%d %b %Y')}"})
+        first = g["Date"].min()
+        gaps = [d for d in recent if d >= first and d not in dates and d != latest_date]
+        if gaps:
+            checks.append({"Check": "Missing weeks (last 13 weeks)", "Location": short(loc),
+                           "Detail": ", ".join(pd.Timestamp(d).strftime("%d %b") for d in gaps[:6]) + ("…" if len(gaps) > 6 else "")})
+    # Revenue recorded with zero active members
+    rv = apply_gpm_filter(df_rv) if not df_rv.empty else df_rv
+    if not rv.empty and "Net Revenue" in rv.columns and loc_col in rv.columns:
+        rv_latest = rv[rv["Date"] == rv["Date"].max()]
+        rv_sum = rv_latest.groupby(loc_col)["Net Revenue"].sum()
+        act = latest["# Active members"] if not latest.empty else pd.Series(dtype=float)
+        for loc, rev in rv_sum.items():
+            if rev > 0 and act.get(loc, 0) == 0 and loc in shown:
+                checks.append({"Check": "Revenue with zero active members", "Location": short(loc),
+                               "Detail": f"${rev:,.0f} net revenue, week of {pd.Timestamp(rv['Date'].max()).strftime('%d %b %Y')}"})
+    if checks:
+        st.caption(f"{len(checks)} item(s) to check in the source sheets.")
+        table(pd.DataFrame(checks))
+    else:
+        st.caption("All checks passed.")
 
-    fig_trend = go.Figure()
-
-    # Primary location traces
-    series_map = []
-    if show_active: series_map.append(("Active", BI_ACCENT, "Active Members"))
-    if show_new:    series_map.append(("New", BI_BLUE, "New Members"))
-    if show_canc:   series_map.append(("Cancelled", BI_RED, "Cancelled"))
-    if show_churn:  series_map.append(("Churn Rate %", BI_ORANGE, "Churn Rate %"))
-    if show_ngr:    series_map.append(("Net Growth Rate %", BI_PURPLE, "Net Growth Rate %"))
-    if show_rev and "Net Revenue" in trend_wm.columns:     series_map.append(("Net Revenue", "#34d399", "Net Revenue"))
-    if show_rps and "Revenue per Session" in trend_wm.columns: series_map.append(("Revenue per Session", "#f472b6", "Rev/Session"))
-    if show_rpu and "Revenue per Student" in trend_wm.columns: series_map.append(("Revenue per Student", "#fbbf24", "Rev/Student"))
-
-    loc_short = sel_loc.replace("Success Tutoring - ", "")
-    for col, color, label in series_map:
-        if col not in trend_wm.columns: continue
-        std_traces(fig_trend, trend_wm, "Date", col, color, f"{loc_short} — {label}")
-
-    # Comparison location traces
-    comp_colors = [BI_BLUE, BI_RED, BI_YELLOW, "#00b4d8"]
-    for i, comp_loc in enumerate(comp_locs):
-        comp_wm = df_wm[df_wm[loc_col]==comp_loc].copy()
-        comp_wm = comp_wm[comp_wm["Date"]>=cutoff]
-        for c in ["# Active members","# New members","# Cancelled members"]:
-            if c in comp_wm.columns: comp_wm[c]=pd.to_numeric(comp_wm[c],errors="coerce").fillna(0)
-        comp_trend = comp_wm.groupby("Date").agg(
-            Active=("# Active members","sum"),
-            New=("# New members","sum"),
-            Cancelled=("# Cancelled members","sum"),
-        ).reset_index().sort_values("Date")
-        comp_trend["Churn Rate %"]      = comp_trend.apply(lambda r: round(r["Cancelled"]/r["Active"]*100,1) if r["Active"]>0 else 0, axis=1)
-        comp_trend["Net Growth Rate %"] = comp_trend.apply(lambda r: round((r["New"]-r["Cancelled"])/r["Active"]*100,2) if r["Active"]>0 else 0, axis=1)
-        comp_short = comp_loc.replace("Success Tutoring - ","")
-        for col, _, label in series_map:
-            if col not in comp_trend.columns: continue
-            std_traces(fig_trend, comp_trend, "Date", col, comp_colors[i%len(comp_colors)], f"{comp_short} — {label}")
-
-    fig_trend.update_layout(**std_layout(f"{loc_short} — 13 Month Trend", "", 520))
-    st.plotly_chart(fig_trend, use_container_width=True)
-
-    # ══════════════════════════════════════════════════════════════════════
-    # SECTION 3 — AI Analysis
-    # ══════════════════════════════════════════════════════════════════════
-    st.markdown('<div class="section-header">🤖 AI Performance Analysis</div>', unsafe_allow_html=True)
-
-    if not ANTHROPIC_KEY:
-        st.warning("No Anthropic API key found — AI analysis unavailable.")
-        return
-
-    if st.button("🤖 Generate AI Analysis", use_container_width=True, key="r12_ai"):
-
-        # Build network averages for outlier comparison
-        latest_wm_all = df_wm[df_wm["Date"]==latest_date].copy() if latest_date else pd.DataFrame()
-        for c in ["# Active members","# New members","# Cancelled members","# Suspended members"]:
-            if c in latest_wm_all.columns: latest_wm_all[c]=pd.to_numeric(latest_wm_all[c],errors="coerce").fillna(0)
-
-        network_stats = {}
-        outliers = []
-        if not latest_wm_all.empty and loc_col in latest_wm_all.columns:
-            loc_agg = latest_wm_all.groupby(loc_col).agg(
-                Active=("# Active members","sum"),
-                New=("# New members","sum"),
-                Cancelled=("# Cancelled members","sum"),
-            ).reset_index()
-            loc_agg["Churn %"] = loc_agg.apply(lambda r: round(r["Cancelled"]/r["Active"]*100,1) if r["Active"]>0 else 0, axis=1)
-            loc_agg["NGR %"]   = loc_agg.apply(lambda r: round((r["New"]-r["Cancelled"])/r["Active"]*100,2) if r["Active"]>0 else 0, axis=1)
-
-            for metric in ["Active","New","Cancelled","Churn %","NGR %"]:
-                mean = loc_agg[metric].mean()
-                std  = loc_agg[metric].std()
-                loc_val = loc_agg[loc_agg[loc_col]==sel_loc][metric].values
-                if len(loc_val) > 0:
-                    val = loc_val[0]
-                    network_stats[metric] = {"mean": round(mean,1), "std": round(std,1), "location": round(val,1)}
-                    if abs(val - mean) > 2*std:
-                        direction = "above" if val > mean else "below"
-                        outliers.append(f"{metric}: {val} ({direction} mean of {mean:.1f}, std {std:.1f})")
-
-        # Build 6-week trend string
-        last_6 = sorted(wm_loc["Date"].dropna().unique())[-6:]
-        trend_rows = []
-        for dt in last_6:
-            w = wm_loc[wm_loc["Date"]==dt]
-            a = w["# Active members"].sum() if "# Active members" in w.columns else 0
-            n = w["# New members"].sum() if "# New members" in w.columns else 0
-            c = w["# Cancelled members"].sum() if "# Cancelled members" in w.columns else 0
-            ch = round(c/a*100,1) if a>0 else 0
-            ng = round((n-c)/a*100,2) if a>0 else 0
-            rv_w = rv_loc[rv_loc["Date"]==dt] if not rv_loc.empty and "Date" in rv_loc.columns else pd.DataFrame()
-            nr = rv_w["Net Revenue"].sum() if not rv_w.empty and "Net Revenue" in rv_w.columns else 0
-            trend_rows.append(f"{dt.strftime('%d %b %Y')} | Active: {int(a)} | New: {int(n)} | Cancelled: {int(c)} | Churn: {ch}% | NGR: {ng}% | Net Revenue: ${nr:,.0f}")
-        trend_str = "\n".join(trend_rows)
-
-        outlier_str = "\n".join(outliers) if outliers else "No metrics outside 2 standard deviations from network mean."
-        network_str = "\n".join([f"{k}: location={v['location']}, network mean={v['mean']}, std={v['std']}" for k,v in network_stats.items()])
-
-        prompt = f"""You are a sharp business analyst for Success Tutoring, an Australian tutoring franchise.
-Use Australian English. You are analysing the performance of {loc_short}.
-
-LOCATION METADATA:
-Stage: {meta.get('Stage','Unknown') if hasattr(meta,'get') else 'Unknown'}
-GPM: {meta.get('GPM','Unknown') if hasattr(meta,'get') else 'Unknown'}
-Age (Months): {int(meta.get('Age (Months)',0)) if hasattr(meta,'get') else 'Unknown'}
-Region: {meta.get('Region','Unknown') if hasattr(meta,'get') else 'Unknown'}
-
-LATEST WEEK METRICS:
-Active Members: {active}
-New Members: {new_mem}
-Cancelled Members: {cancelled}
-Suspended Members: {suspended}
-Churn Rate: {churn}%
-Net Growth Rate: {ngr}%
-Net Revenue: ${net_rev:,.2f}
-Active Students: {students}
-Total Sessions: {sessions}
-Revenue per Session: ${rev_sess:,.2f}
-Revenue per Student: ${rev_stud:,.2f}
-Sessions per Student: {sess_stud}
-
-6-WEEK TREND (oldest to newest):
-{trend_str}
-
-NETWORK COMPARISON (latest week):
-{network_str}
-
-OUTLIERS (metrics outside 2 standard deviations from network mean):
-{outlier_str}
-
-Provide a detailed analysis with these exact sections:
-
-## 📍 Location Overview
-Brief summary of this location — stage, age, GPM, and overall health in 2-3 sentences.
-
-## 📊 Membership Performance
-Analyse active members, new members, churn and NGR. Is the location growing or declining? What is the trend over 6 weeks?
-
-## 💰 Financial Performance
-Analyse net revenue, revenue per session, revenue per student. How is the financial health of this location?
-
-## 📈 Trend Analysis
-What is the 6-week trajectory? Is momentum improving or declining? Call out specific week-on-week movements.
-
-## ⚠️ Outliers & Alerts
-List any metrics outside 2 standard deviations from the network mean. Explain what this means for the location.
-
-## 💡 Recommendations
-3-4 specific, actionable recommendations for the GPM based on the data. Be direct."""
-
-        client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
-        with st.spinner(f"🤖 Analysing {loc_short}..."):
-            message = client.messages.create(
-                model="claude-sonnet-4-20250514", max_tokens=1500,
-                messages=[{"role":"user","content":prompt}])
-        st.markdown(message.content[0].text)
 # ══════════════════════════════════════════════════════════════════════════════
 # LOGIN
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2477,7 +2123,7 @@ def login_section():
             lc1,lc2,lc3=st.columns([1,1,1])
             with lc2: st.image("logo.png",use_container_width=True)
         else:
-            st.markdown(f'<div style="color:{BI_ACCENT};font-size:3em;text-align:center">📊</div>',
+            st.markdown(f'<div style="color:{BI_ACCENT};font-size:3em;text-align:center"></div>',
                         unsafe_allow_html=True)
         st.markdown(f'<h2 style="color:{BI_TEXT};text-align:center;margin-top:8px">Success Tutoring Dashboard</h2>',
                     unsafe_allow_html=True)
@@ -2524,7 +2170,7 @@ def login_section():
                     else:
                         st.query_params.clear()
                         flag_unknown_user(email)
-                        st.error(f"⛔ {email} is not authorised. Contact your administrator.")
+                        st.error(f"{email} is not authorised. Contact your administrator.")
                 else:
                     st.session_state["oauth_processing"] = False
                     st.query_params.clear()
@@ -2556,7 +2202,7 @@ def login_section():
                 </a>
             </div>
             """, unsafe_allow_html=True)
-        st.caption("🔒 Only approved team members can access this dashboard.")
+        st.caption("Only approved team members can access this dashboard.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MAIN
@@ -2575,15 +2221,10 @@ REPORTS=[
     "1 · Campus Locations",
     "2 · Membership",
     "3 · Membership by Age",
-    "4 · New Members",
-    "5 · Suspended Members",
-    "6 · Cancelled Members",
-    "7 · Membership Churn",
     "8 · Net Growth Rate %",
     "9 · Onboarding Progress",
     "10 · Revenue",
     "11 · AI Outlier Analysis",
-    "12 · Location Performance Analysis",
 ]
 
 def report_allowed(report, allowed_tabs):
@@ -2597,79 +2238,92 @@ def report_allowed(report, allowed_tabs):
 REPORTS = [r for r in REPORTS if report_allowed(r, st.session_state.get("allowed_tabs", []))]
 ADMIN_PAGES = ["⚙ Weekly Upload", "⚙ Locations", "⚙ Sheet Setup"] if st.session_state.get("access_level") == "admin" else []
 if not REPORTS:
-    st.warning("⛔ No reports are assigned to your account. Please contact your administrator."); st.stop()
+    st.warning("No reports are assigned to your account. Please contact your administrator."); st.stop()
+
+# Report menu: (report, menu label, icon), grouped like Power BI report sections
+NAV_GROUPS = [
+    ("Network", [
+        ("1 · Campus Locations",   "Campus Locations",    ":material/location_on:"),
+        ("9 · Onboarding Progress", "Onboarding Progress", ":material/checklist:"),
+    ]),
+    ("Membership", [
+        ("2 · Membership",          "Membership",          ":material/groups:"),
+        ("3 · Membership by Age",   "Membership by Age",   ":material/stacks:"),
+    ]),
+    ("Growth", [
+        ("8 · Net Growth Rate %",   "Net Growth Rate %",   ":material/trending_up:"),
+    ]),
+    ("Finance", [
+        ("10 · Revenue",            "Revenue",             ":material/attach_money:"),
+    ]),
+    ("Insights", [
+        ("11 · AI Outlier Analysis",            "Outliers & Alerts",    ":material/notification_important:"),
+    ]),
+]
+# Admin-only pages (ADMIN_PAGES is empty for everyone else, so non-admins never see or reach them)
+ADMIN_NAV = [
+    ("⚙ Weekly Upload", "Weekly Upload", ":material/upload_file:"),
+    ("⚙ Locations",     "Locations",     ":material/store:"),
+    ("⚙ Sheet Setup",   "Sheet Setup",   ":material/table_chart:"),
+]
+REPORT_LABELS = {r: label for _, items in NAV_GROUPS for r, label, _ in items}
+REPORT_LABELS.update({r: label for r, label, _ in ADMIN_NAV})
+
+@st.cache_data(ttl=300)
+def data_loaded_at():
+    """Time the sheet data was last fetched (cleared together with the data cache)."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    return datetime.now(ZoneInfo("Australia/Sydney"))
+
+if st.session_state.get("selected_report") not in REPORTS + ADMIN_PAGES:
+    st.session_state["selected_report"] = REPORTS[0]
 
 with st.sidebar:
     if os.path.exists("logo.png"):
-        st.image("logo.png",width=150)
+        st.image("logo.png", width=130)
     else:
-        st.markdown(f'<div style="color:{BI_ACCENT};font-size:1.1em;font-weight:700;padding:8px 0">📊 Success Tutoring</div>',
+        st.markdown(f'<div style="color:{BI_ACCENT};font-size:1.1em;font-weight:700;padding:8px 0">Success Tutoring</div>',
                     unsafe_allow_html=True)
-    st.markdown(f'<div style="color:#718096;font-size:0.68em;margin-bottom:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{user_email}</div>', unsafe_allow_html=True)
-    st.markdown("---")
-    btn_col1,btn_col2=st.columns(2)
-    with btn_col1:
-        if st.button("🔄 Refresh",use_container_width=True):
-            st.cache_data.clear(); st.success("✅ Refreshed!"); st.rerun()
-    with btn_col2:
-        if st.button("🚪 Logout",use_container_width=True):
-            log_access(
-                st.session_state.get("user_email",""),
-                st.session_state.get("user_name",""),
-                "Logout"
-            )
-            for key in ["connected","email","name","oauth_token"]:
-                st.session_state.pop(key, None)
-            st.session_state.clear()
-            st.rerun()
-    st.markdown("---")
-    st.markdown(f'<div style="color:{BI_ACCENT};font-size:0.72em;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;padding:4px 0 6px 2px">📊 Reports</div>',
-                unsafe_allow_html=True)
-    if st.session_state.get("selected_report") not in REPORTS + ADMIN_PAGES:
-        st.session_state["selected_report"] = REPORTS[0]
-    for r in REPORTS + ADMIN_PAGES:
-        if ADMIN_PAGES and r == ADMIN_PAGES[0]:
-            st.markdown("---")
-            st.markdown(f'<div style="color:{BI_ACCENT};font-size:0.72em;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;padding:4px 0 6px 2px">⚙ Admin</div>',
-                        unsafe_allow_html=True)
-        is_active = st.session_state["selected_report"] == r
-        bg = f"rgba(255,215,0,0.12)" if is_active else "transparent"
-        border = f"#ffd700" if is_active else "transparent"
-        color = "#ffd700" if is_active else "#a0aec0"
-        weight = "700" if is_active else "400"
-        st.markdown(f"""
-            <div onclick="" style="
-                background:{bg};
-                border-left: 3px solid {border};
-                border-radius: 0 6px 6px 0;
-                padding: 7px 10px;
-                margin: 0;
-                cursor: pointer;
-                font-size: 0.85em;
-                font-weight: {weight};
-                color: {color};
-                display: flex;
-                align-items: center;
-                gap: 8px;
-                line-height: 1.2;
-            ">{"▶ " if is_active else "　"}{r}</div>
-        """, unsafe_allow_html=True)
-        if st.button(r, key=f"nav_{r}", use_container_width=True):
-            st.session_state["selected_report"] = r
-            st.rerun()
-    selected_report = st.session_state["selected_report"]
+    for group, items in NAV_GROUPS + [("Admin", ADMIN_NAV)]:
+        visible = [(r, label, icon) for r, label, icon in items if r in REPORTS + ADMIN_PAGES]
+        if not visible:
+            continue
+        st.markdown(f'<div class="nav-group">{group}</div>', unsafe_allow_html=True)
+        for r, label, icon in visible:
+            is_active = st.session_state["selected_report"] == r
+            if st.button(label, key=f"nav_{r}", icon=icon, use_container_width=True,
+                         type="primary" if is_active else "secondary"):
+                st.session_state["selected_report"] = r
+                st.rerun()
 
-selected_report = st.session_state.get("selected_report", REPORTS[0])
+    loaded = data_loaded_at()
+    st.markdown(f'<div class="side-footer"><div class="side-updated">Data updated {loaded.strftime("%-I:%M %p").lower()} {loaded.strftime("%Z")}</div></div>',
+                unsafe_allow_html=True)
+    if st.button("Refresh data", icon=":material/refresh:", use_container_width=True):
+        st.cache_data.clear(); st.rerun()
+    initial = (user_name or user_email or "?").strip()[:1].upper()
+    st.markdown(f"""<div class="user-card">
+        <div class="user-avatar">{html.escape(initial)}</div>
+        <div class="user-text"><div class="user-name">{html.escape(user_name)}</div>
+        <div class="user-mail">{html.escape(user_email)}</div></div>
+    </div>""", unsafe_allow_html=True)
+    if st.button("Log out", icon=":material/logout:", use_container_width=True):
+        log_access(
+            st.session_state.get("user_email",""),
+            st.session_state.get("user_name",""),
+            "Logout"
+        )
+        st.session_state.clear()
+        st.rerun()
 
-hdr_col1, hdr_col2 = st.columns([1, 8])
-with hdr_col1:
-    if os.path.exists("logo.png"):
-        st.image("logo.png", width=110)
-with hdr_col2:
-    st.markdown(f'<h2 style="color:{BI_TEXT};font-weight:700;margin-bottom:2px;margin-top:8px">Success Tutoring Dashboard</h2>',
-                unsafe_allow_html=True)
-    st.markdown(f'<p style="color:{BI_SUBTEXT};margin-bottom:16px;font-size:0.9em">Business intelligence and performance analytics</p>',
-                unsafe_allow_html=True)
+selected_report = st.session_state["selected_report"]
+
+# Top bar: dashboard name, current report, and who is signed in
+st.markdown(f"""<div class="topbar">
+    <div class="topbar-title">Success Tutoring Dashboard <span>/ {REPORT_LABELS.get(selected_report, selected_report)}</span></div>
+    <div class="topbar-meta"><b>{html.escape(st.session_state.get("access_level", ""))}</b> · {html.escape(user_name)}</div>
+</div>""", unsafe_allow_html=True)
 
 with st.spinner("Loading data..."):
     try:
@@ -2686,23 +2340,15 @@ if df_wm.empty:
 
 df_wm = apply_gpm_filter(df_wm)
 if df_wm.empty:
-    st.warning("⛔ No locations are assigned to your account. Please contact your administrator."); st.stop()
+    st.warning("No locations are assigned to your account. Please contact your administrator."); st.stop()
 
 if selected_report=="1 · Campus Locations":           report_locations(df_wm)
-elif selected_report=="2 · Membership":               report_membership(df_wm)
+elif selected_report=="2 · Membership":               report_membership(df_wm, df_rv)
 elif selected_report=="3 · Membership by Age":        report_age_combined(df_wm)
-elif selected_report=="4 · New Members":
-    generic_member_report(df_wm,"4","New Members","# New members","New Members",BI_ACCENT,"r4")
-elif selected_report=="5 · Suspended Members":
-    generic_member_report(df_wm,"5","Suspended Members","# Suspended members","Suspended Members",BI_ORANGE,"r5")
-elif selected_report=="6 · Cancelled Members":
-    generic_member_report(df_wm,"6","Cancelled Members","# Cancelled members","Cancelled Members",BI_RED,"r6")
-elif selected_report=="7 · Membership Churn":         report_churn_combined(df_wm)
 elif selected_report=="8 · Net Growth Rate %":          report_net_growth(df_wm)
 elif selected_report=="9 · Onboarding Progress":      report_onboarding(df_wm)
 elif selected_report=="10 · Revenue":                 report_revenue(df_rv)
-elif selected_report=="11 · AI Outlier Analysis":     report_claude_outliers(df_wm)
-elif selected_report=="12 · Location Performance Analysis": report_location_performance(df_wm, df_rv)
+elif selected_report=="11 · AI Outlier Analysis":     report_outliers_alerts(df_wm, df_rv)
 elif selected_report in ADMIN_PAGES:
     spreadsheet = get_sheets_client().open_by_key(SHEET_ID)
     page = {"⚙ Weekly Upload": admin_pages.page_weekly_upload,

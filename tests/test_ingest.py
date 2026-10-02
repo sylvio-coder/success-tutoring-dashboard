@@ -203,7 +203,7 @@ def test_sheet_records():
     res = ingest.combine(all_exports(), MASTER)
     recs = ingest.revenue_records(res["revenue"], res["week_end"])
     r = next(x for x in recs if x["Location"] == "Success Tutoring - Auburn")
-    assert r["Date - Week/Year"] == "38/2026" and r["Date"] == "20/9/2026"
+    assert r["Date - Week/Year"] == "38/2026" and r["Date"] == "2026-09-20"
     assert r["Revenue per Session"] == round(round(5970 / 1.1, 2) / 36, 2)
 
 

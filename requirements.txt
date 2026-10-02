@@ -7,7 +7,6 @@ scipy
 plotly
 streamlit-echarts
 google-auth
-anthropic
 python-dotenv
 httpx
 openpyxl

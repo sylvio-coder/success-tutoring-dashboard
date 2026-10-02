@@ -1,4 +1,5 @@
 import sheet_setup
+import pytest
 from fake_sheet import FakeSpreadsheet
 
 
@@ -91,3 +92,76 @@ def test_formatting_keeps_existing_unlisted_bands():
     assert "alternating rows" in report["Revenue"]
     assert ss.worksheet("Weekly Membership").frozen_rows == 1     # rest still applied
     assert ss.worksheet("Revenue").banded_ranges                  # other tabs unaffected
+
+
+def test_location_start_formula_text():
+    f = sheet_setup.location_start_formula(5, "A", "C", "D")
+    assert f == ("=IF(COUNTIFS('Weekly Membership'!$A:$A,$A5,'Weekly Membership'!$D:$D,\">0\")"
+                 "=0,\"\",MINIFS('Weekly Membership'!$C:$C,'Weekly Membership'!$A:$A,$A5,"
+                 "'Weekly Membership'!$D:$D,\">0\"))")
+    assert sheet_setup.location_start_formula(5, "A", "C", "D", "I") == (
+        "=IF($I5<>\"\",$I5,IF(COUNTIFS('Weekly Membership'!$A:$A,$A5,'Weekly Membership'!$D:$D,\">0\")"
+        "=0,\"\",MINIFS('Weekly Membership'!$C:$C,'Weekly Membership'!$A:$A,$A5,"
+        "'Weekly Membership'!$D:$D,\">0\")))")
+    assert sheet_setup.weeks_from_start_formula(5, "G", "C") == \
+        "=IF($G5=\"\",\"\",INT((MAX('Weekly Membership'!$C:$C)-$G5)/7)+1)"
+    closed = sheet_setup.weeks_from_start_formula(5, "G", "C", "A", "D", "C")
+    assert closed == ("=IF($G5=\"\",\"\",INT((IF($C5=\"Closed\",MAXIFS('Weekly Membership'!$C:$C,"
+                      "'Weekly Membership'!$A:$A,$A5,'Weekly Membership'!$D:$D,\">0\"),"
+                      "MAX('Weekly Membership'!$C:$C))-$G5)/7)+1)")
+
+
+def test_link_location_start():
+    ss = make()
+    sheet_setup.switch_to_weeks_old(ss)
+    assert not sheet_setup.start_is_formula(ss.worksheet("Vlookup"),
+                                            ss.worksheet("Vlookup").row_values(1))
+    done = sheet_setup.link_location_start(ss)
+    vl = ss.worksheet("Vlookup").cells
+    assert vl[0] == ["Location", "Stage", "Status", "GPM", "Country", "Region",
+                     "Location Start", "Weeks old", "Start Override"]   # override added last
+    for row in (2, 3):
+        assert vl[row - 1][6] == sheet_setup.location_start_formula(row, "A", "C", "D", "I")
+        assert vl[row - 1][7] == sheet_setup.weeks_from_start_formula(row, "G", "C", "A", "D", "C")
+    fmts = [r["repeatCell"] for r in ss.format_requests if "repeatCell" in r][-2:]
+    assert {f["range"]["startColumnIndex"] for f in fmts} == {6, 8}       # Location Start, Start Override
+    assert all(f["cell"]["userEnteredFormat"]["numberFormat"]["type"] == "DATE" for f in fmts)
+    assert any("Start Override date if one is typed" in d for d in done)
+    assert any("added 'Start Override'" in d for d in done)
+    assert sheet_setup.start_is_formula(ss.worksheet("Vlookup"), ss.worksheet("Vlookup").row_values(1))
+    # A typed override survives running it again, and no second column is added.
+    row2 = ss.worksheet("Vlookup").cells[1]
+    row2 += [""] * (9 - len(row2))
+    row2[8] = "10-Aug-2026"
+    again = sheet_setup.link_location_start(ss)
+    vl = ss.worksheet("Vlookup").cells
+    assert vl[0].count("Start Override") == 1 and not any("added 'Start Override'" in d for d in again)
+    assert vl[1][8] == "10-Aug-2026"
+    assert vl[1][6] == sheet_setup.location_start_formula(2, "A", "C", "D", "I")
+
+
+def test_link_location_start_needs_weeks_old():
+    ss = make()        # still has 'Months old'
+    with pytest.raises(ValueError, match="Weeks old"):
+        sheet_setup.link_location_start(ss)
+
+
+def test_repair_text_dates():
+    ss = make()
+    wm = ss.worksheet("Weekly Membership")
+    date_i = wm.row_values(1).index("Date")
+    wm.cells[1][date_i] = "20/9/2026"          # stored as text by an earlier upload
+    done = sheet_setup.repair_text_dates(ss)
+    assert wm.cells[1][date_i] == "2026-09-20"
+    fmt = [r["repeatCell"] for r in ss.format_requests if "repeatCell" in r
+           and r["repeatCell"]["range"]["sheetId"] == wm.id][-1]
+    assert fmt["range"]["startColumnIndex"] == date_i
+    assert fmt["cell"]["userEnteredFormat"]["numberFormat"]["pattern"] == "d/m/yyyy"
+    assert any(d.startswith("Weekly Membership: 1 date") for d in done)
+    assert sheet_setup.repair_text_dates(ss) == [] or all("0 date" not in d for d in done)
+
+
+def test_sheet_date_is_iso():
+    import datetime
+    import ingest
+    assert ingest.sheet_date(datetime.date(2026, 10, 4)) == "2026-10-04"

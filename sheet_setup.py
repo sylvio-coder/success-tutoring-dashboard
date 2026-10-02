@@ -6,6 +6,8 @@
   "Weeks old" formula (week 1 = first week with members) and remove the
   onboarding columns from Vlookup, Weekly Membership and Revenue.
 """
+import re
+
 from gspread.utils import rowcol_to_a1
 
 FONT = {"fontFamily": "Arial", "fontSize": 10}
@@ -26,7 +28,7 @@ NUMBER_FORMATS = [
     (("Sessions per Student", "Student per Session", "Sessions per Student Visit",
       "Student Visits per Session"), "NUMBER", "0.00"),
     (("Date",), "DATE", "d/m/yyyy"),
-    (("Location Start",), "DATE", "d-mmm-yyyy"),
+    (("Location Start", "Start Override"), "DATE", "d-mmm-yyyy"),
     (("Date - Week/Year",), "TEXT", "@"),
 ]
 INTEGER_HEADERS = ("Total Sessions", "Weeks old", "Months old", "Active Members",
@@ -165,6 +167,142 @@ def weeks_old_formula(row, name_col, date_col, active_col, tab="Weekly Membershi
     names, dates, active = (f"{t}!${c}:${c}" for c in (name_col, date_col, active_col))
     return (f'=IF(COUNTIFS({names},$A{row},{active},">0")=0,"",'
             f'INT((MAX({dates})-MINIFS({dates},{names},$A{row},{active},">0"))/7)+1)')
+
+
+def location_start_formula(row, name_col, date_col, active_col, override_col=None,
+                           tab="Weekly Membership"):
+    """First week (Date) the location had active members; blank if none yet.
+    With override_col, a date typed in that column is used instead."""
+    t = f"'{tab}'"
+    names, dates, active = (f"{t}!${c}:${c}" for c in (name_col, date_col, active_col))
+    calc = (f'IF(COUNTIFS({names},$A{row},{active},">0")=0,"",'
+            f'MINIFS({dates},{names},$A{row},{active},">0"))')
+    if override_col:
+        return f'=IF(${override_col}{row}<>"",${override_col}{row},{calc})'
+    return "=" + calc
+
+
+def weeks_from_start_formula(row, start_col, date_col, name_col=None, active_col=None,
+                             status_col=None, tab="Weekly Membership"):
+    """Weeks old counted from Location Start: week 1 = the start week, up to the latest week,
+    or (when Status is Closed) up to the location's last week with active members."""
+    t = f"'{tab}'"
+    dates = f"{t}!${date_col}:${date_col}"
+    end = f"MAX({dates})"
+    if status_col and name_col and active_col:
+        names, active = f"{t}!${name_col}:${name_col}", f"{t}!${active_col}:${active_col}"
+        end = (f'IF(${status_col}{row}="Closed",MAXIFS({dates},{names},$A{row},{active},">0"),'
+               f'{end})')
+    return f'=IF(${start_col}{row}="","",INT(({end}-${start_col}{row})/7)+1)'
+
+
+def link_location_start(spreadsheet):
+    """Vlookup: Location Start = first week with active members (formula), and Weeks old
+    counted from Location Start. Returns a list of change descriptions."""
+    wm_headers = spreadsheet.worksheet("Weekly Membership").row_values(1)
+    name_col = _col_letter(wm_headers.index("Success Tutoring - Business name"))
+    date_col = _col_letter(wm_headers.index("Date"))
+    active_col = _col_letter(wm_headers.index("# Active members"))
+
+    vl = spreadsheet.worksheet("Vlookup")
+    values = vl.get_all_values()
+    headers = [h.strip() for h in values[0]]
+    for needed in ("Location Start", "Weeks old"):
+        if needed not in headers:
+            raise ValueError(f"Vlookup has no '{needed}' column. Run 'Switch to Weeks old' first.")
+    start_i, weeks_i = headers.index("Location Start"), headers.index("Weeks old")
+    start_l, weeks_l = _col_letter(start_i), _col_letter(weeks_i)
+    done_override = []
+    # Start Override: dates typed by hand win over the calculated start. Added once, as the last
+    # column (adding it in the middle would shift columns other tabs look up by position);
+    # existing typed dates are never touched.
+    if "Start Override" not in headers:
+        while headers and headers[-1] == "":
+            headers.pop()
+        ov_i = len(headers)
+        if getattr(vl, "col_count", None) and vl.col_count < ov_i + 1:
+            vl.add_cols(ov_i + 1 - vl.col_count)
+        vl.batch_update([{"range": f"{_col_letter(ov_i)}1", "values": [["Start Override"]]}],
+                        value_input_option="USER_ENTERED")
+        done_override.append("Vlookup: added 'Start Override' as the last column. Type a date there "
+                             "to override a location's start; leave it blank to use the calculated date")
+    else:
+        ov_i = headers.index("Start Override")
+    ov_l = _col_letter(ov_i)
+    status_l = _col_letter(headers.index("Status")) if "Status" in headers else None
+    done = repair_text_dates(spreadsheet) + done_override   # formulas can't use text dates
+    last = max((i + 1 for i, r in enumerate(values) if r and str(r[0]).strip()), default=1)
+    if last < 2:
+        return ["Vlookup has no locations; nothing to change."]
+    rows = range(2, last + 1)
+    vl.batch_update([
+        {"range": f"{start_l}2:{start_l}{last}",
+         "values": [[location_start_formula(r, name_col, date_col, active_col, ov_l)] for r in rows]},
+        {"range": f"{weeks_l}2:{weeks_l}{last}",
+         "values": [[weeks_from_start_formula(r, start_l, date_col, name_col, active_col, status_l)]
+                    for r in rows]},
+    ], value_input_option="USER_ENTERED")
+    # Show the start formula's result as a date.
+    spreadsheet.batch_update({"requests": [{"repeatCell": {
+        "range": {"sheetId": vl.id, "startRowIndex": 1, "endRowIndex": last,
+                  "startColumnIndex": col, "endColumnIndex": col + 1},
+        "cell": {"userEnteredFormat": {"numberFormat": {"type": "DATE", "pattern": "d-mmm-yyyy"}}},
+        "fields": "userEnteredFormat.numberFormat"}} for col in (start_i, ov_i)]})
+    return done + [
+        f"Vlookup: Location Start is the Start Override date if one is typed, otherwise the first "
+        f"week with active members (formula on {last - 1} locations; blank until a location has members)",
+        "Vlookup: Weeks old now counts from Location Start (week 1 = the start week); "
+        "for Closed locations it stops at their last week with active members"]
+
+
+DMY_TEXT = re.compile(r"(\d{1,2})/(\d{1,2})/(\d{4})")
+
+
+def repair_text_dates(spreadsheet, tabs=("Weekly Membership", "Revenue")):
+    """Turn Date cells stored as text (e.g. '20/9/2026', written by earlier uploads) into real
+    dates, read as day/month/year. Returns a list of change descriptions."""
+    done = []
+    for title in tabs:
+        ws = spreadsheet.worksheet(title)
+        headers = [h.strip() for h in ws.row_values(1)]
+        if "Date" not in headers:
+            continue
+        letter = _col_letter(headers.index("Date"))
+        last = len(ws.get_all_values())
+        if last < 2:
+            continue
+        cells = ws.get(f"{letter}2:{letter}{last}", value_render_option="UNFORMATTED_VALUE")
+        updates = []
+        for i, row in enumerate(cells, start=2):
+            v = row[0] if row else ""
+            m = DMY_TEXT.fullmatch(v.strip()) if isinstance(v, str) else None
+            if m:
+                d, mth, y = (int(x) for x in m.groups())
+                updates.append({"range": f"{letter}{i}", "values": [[f"{y:04d}-{mth:02d}-{d:02d}"]]})
+        if updates:
+            ws.batch_update(updates, value_input_option="USER_ENTERED")
+            done.append(f"{title}: {len(updates)} date(s) stored as text converted to real dates")
+        # Show every date the same way (20/9/2026), including ones entered as 2026-09-20
+        di = headers.index("Date")
+        spreadsheet.batch_update({"requests": [{"repeatCell": {
+            "range": {"sheetId": ws.id, "startRowIndex": 1, "endRowIndex": last,
+                      "startColumnIndex": di, "endColumnIndex": di + 1},
+            "cell": {"userEnteredFormat": {"numberFormat": {"type": "DATE", "pattern": "d/m/yyyy"}}},
+            "fields": "userEnteredFormat.numberFormat"}}]})
+    return done
+
+
+def start_is_formula(ws, headers):
+    """True when Vlookup's Location Start column is calculated (checked on the last row)."""
+    if "Location Start" not in headers:
+        return False
+    values = ws.get_all_values()
+    last = len(values)
+    if last < 2:
+        return False
+    cell = rowcol_to_a1(last, headers.index("Location Start") + 1)
+    got = ws.get(f"{cell}:{cell}", value_render_option="FORMULA")
+    return bool(got and got[0] and str(got[0][0]).startswith("="))
 
 
 def _col_letter(i):
