@@ -541,7 +541,9 @@ def page_sheet_setup(spreadsheet, df_wm, df_rv, clear_cache):
 
     st.markdown("#### Vlookup: Location Start from Weekly Membership")
     st.caption("Sets Location Start to the first week each location had more than 0 active "
-               "members in Weekly Membership (a formula, so it stays correct), and makes Weeks "
+               "members in Weekly Membership (a formula, so it stays correct), unless you type a "
+               "date in the 'Start Override' column (added as the last column if it isn't there; "
+               "your typed dates are never changed). Makes Weeks "
                "old count from Location Start, with the start week as week 1 (Closed locations "
                "stop at their last week with members). Locations with no active members yet show "
                "blank. New locations pick up both formulas automatically. Also converts any "

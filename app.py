@@ -196,6 +196,15 @@ def get_sheets_client():
         # Local — read from file
         creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES_SHEETS)
     return gspread.authorize(creds)
+def parse_sheet_dates(values):
+    """Dates as the Sheet shows them: 2026-09-20 (ISO), 20/9/2026 (day first) or 20-Sep-2026.
+    ISO is checked first so 2026-10-04 is never read as 10 April."""
+    s = pd.Series(values).astype(str).str.strip()
+    iso = pd.to_datetime(s, format="%Y-%m-%d", errors="coerce")
+    dmy = pd.to_datetime(s, format="%d/%m/%Y", errors="coerce")
+    rest = pd.to_datetime(s.where(iso.isna() & dmy.isna()), format="mixed", dayfirst=True, errors="coerce")
+    return iso.fillna(dmy).fillna(rest)
+
 @st.cache_data(ttl=300)
 def load_sheet_data(tab_name, attempts=3):
     """Read a whole tab. Retries brief network failures (e.g. 'Response ended prematurely');
@@ -218,7 +227,7 @@ def load_sheet_data(tab_name, attempts=3):
 def load_weekly_membership():
     df = load_sheet_data("Weekly Membership")
     if "Date" in df.columns:
-        df["Date"] = pd.to_datetime(df["Date"], dayfirst=True, errors="coerce")
+        df["Date"] = parse_sheet_dates(df["Date"])
         df = df.dropna(subset=["Date"])
     num_cols = ["# Active members","# New members","# Suspended members",
                 "# Cancelled members","Onboarding Members","Onboarding week","Age (Months)"]
@@ -246,7 +255,7 @@ def load_school_holidays():
 def _load_revenue():
     df = load_sheet_data("Revenue")
     df = df.rename(columns={"Location": "Success Tutoring - Business name"})
-    df["Date"] = pd.to_datetime(df["Date"], dayfirst=True, errors="coerce")
+    df["Date"] = parse_sheet_dates(df["Date"])
     for c in ["# Active Students","Total Sessions","Gross Revenue","Net Revenue",
               "Student Visits","Revenue per Session","Revenue per Student",
               "Sessions per Student","Student per Session",
@@ -1465,6 +1474,12 @@ def report_onboarding(df_wm):
     wm["# Active members"] = pd.to_numeric(wm["# Active members"], errors="coerce").fillna(0)
     wm = wm.groupby([loc_col, "Date"])["# Active members"].sum().reset_index()
     starts = wm[wm["# Active members"] > 0].groupby(loc_col)["Date"].min()
+    # A date typed in Vlookup's 'Start Override' column wins over the calculated start
+    if "Start Override" in vl.columns:
+        ov_raw = vl.set_index(loc_col)["Start Override"]
+        ov = pd.Series(parse_sheet_dates(ov_raw).values, index=ov_raw.index).dropna()
+        ov = ov[~ov.index.duplicated()]
+        starts = ov.combine_first(starts)
     latest_date = load_weekly_membership()["Date"].max()     # latest week in the whole Sheet
     weeks_old = ((latest_date - starts).dt.days // 7 + 1).astype(int)
 
@@ -1554,7 +1569,8 @@ def report_onboarding(df_wm):
     for a in annotations:          # added after the layout so the milestone labels are kept
         fig.add_annotation(**a)
     show_chart(fig, use_container_width=True)
-    st.caption("Orange line and shading = target. Week 1 is each location's first week with active members.")
+    st.caption("Orange line and shading = target. Week 1 is each location's first week with active members, "
+               "or its Start Override date where one is set in the Sheet.")
 
     # ── Table ─────────────────────────────────────────────────────────────
     st.markdown('<div class="section-header">Onboarding Locations</div>', unsafe_allow_html=True)

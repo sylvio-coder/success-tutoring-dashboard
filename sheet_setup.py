@@ -28,7 +28,7 @@ NUMBER_FORMATS = [
     (("Sessions per Student", "Student per Session", "Sessions per Student Visit",
       "Student Visits per Session"), "NUMBER", "0.00"),
     (("Date",), "DATE", "d/m/yyyy"),
-    (("Location Start",), "DATE", "d-mmm-yyyy"),
+    (("Location Start", "Start Override"), "DATE", "d-mmm-yyyy"),
     (("Date - Week/Year",), "TEXT", "@"),
 ]
 INTEGER_HEADERS = ("Total Sessions", "Weeks old", "Months old", "Active Members",
@@ -169,12 +169,17 @@ def weeks_old_formula(row, name_col, date_col, active_col, tab="Weekly Membershi
             f'INT((MAX({dates})-MINIFS({dates},{names},$A{row},{active},">0"))/7)+1)')
 
 
-def location_start_formula(row, name_col, date_col, active_col, tab="Weekly Membership"):
-    """First week (Date) the location had active members; blank if none yet."""
+def location_start_formula(row, name_col, date_col, active_col, override_col=None,
+                           tab="Weekly Membership"):
+    """First week (Date) the location had active members; blank if none yet.
+    With override_col, a date typed in that column is used instead."""
     t = f"'{tab}'"
     names, dates, active = (f"{t}!${c}:${c}" for c in (name_col, date_col, active_col))
-    return (f'=IF(COUNTIFS({names},$A{row},{active},">0")=0,"",'
+    calc = (f'IF(COUNTIFS({names},$A{row},{active},">0")=0,"",'
             f'MINIFS({dates},{names},$A{row},{active},">0"))')
+    if override_col:
+        return f'=IF(${override_col}{row}<>"",${override_col}{row},{calc})'
+    return "=" + calc
 
 
 def weeks_from_start_formula(row, start_col, date_col, name_col=None, active_col=None,
@@ -207,15 +212,32 @@ def link_location_start(spreadsheet):
             raise ValueError(f"Vlookup has no '{needed}' column. Run 'Switch to Weeks old' first.")
     start_i, weeks_i = headers.index("Location Start"), headers.index("Weeks old")
     start_l, weeks_l = _col_letter(start_i), _col_letter(weeks_i)
+    done_override = []
+    # Start Override: dates typed by hand win over the calculated start. Added once, as the last
+    # column (adding it in the middle would shift columns other tabs look up by position);
+    # existing typed dates are never touched.
+    if "Start Override" not in headers:
+        while headers and headers[-1] == "":
+            headers.pop()
+        ov_i = len(headers)
+        if getattr(vl, "col_count", None) and vl.col_count < ov_i + 1:
+            vl.add_cols(ov_i + 1 - vl.col_count)
+        vl.batch_update([{"range": f"{_col_letter(ov_i)}1", "values": [["Start Override"]]}],
+                        value_input_option="USER_ENTERED")
+        done_override.append("Vlookup: added 'Start Override' as the last column. Type a date there "
+                             "to override a location's start; leave it blank to use the calculated date")
+    else:
+        ov_i = headers.index("Start Override")
+    ov_l = _col_letter(ov_i)
     status_l = _col_letter(headers.index("Status")) if "Status" in headers else None
-    done = repair_text_dates(spreadsheet)     # formulas can't use dates stored as text
+    done = repair_text_dates(spreadsheet) + done_override   # formulas can't use text dates
     last = max((i + 1 for i, r in enumerate(values) if r and str(r[0]).strip()), default=1)
     if last < 2:
         return ["Vlookup has no locations; nothing to change."]
     rows = range(2, last + 1)
     vl.batch_update([
         {"range": f"{start_l}2:{start_l}{last}",
-         "values": [[location_start_formula(r, name_col, date_col, active_col)] for r in rows]},
+         "values": [[location_start_formula(r, name_col, date_col, active_col, ov_l)] for r in rows]},
         {"range": f"{weeks_l}2:{weeks_l}{last}",
          "values": [[weeks_from_start_formula(r, start_l, date_col, name_col, active_col, status_l)]
                     for r in rows]},
@@ -223,12 +245,12 @@ def link_location_start(spreadsheet):
     # Show the start formula's result as a date.
     spreadsheet.batch_update({"requests": [{"repeatCell": {
         "range": {"sheetId": vl.id, "startRowIndex": 1, "endRowIndex": last,
-                  "startColumnIndex": start_i, "endColumnIndex": start_i + 1},
+                  "startColumnIndex": col, "endColumnIndex": col + 1},
         "cell": {"userEnteredFormat": {"numberFormat": {"type": "DATE", "pattern": "d-mmm-yyyy"}}},
-        "fields": "userEnteredFormat.numberFormat"}}]})
+        "fields": "userEnteredFormat.numberFormat"}} for col in (start_i, ov_i)]})
     return done + [
-        f"Vlookup: Location Start is now the first week with active members (formula on "
-        f"{last - 1} locations; blank until a location has members)",
+        f"Vlookup: Location Start is the Start Override date if one is typed, otherwise the first "
+        f"week with active members (formula on {last - 1} locations; blank until a location has members)",
         "Vlookup: Weeks old now counts from Location Start (week 1 = the start week); "
         "for Closed locations it stops at their last week with active members"]
 
@@ -260,6 +282,13 @@ def repair_text_dates(spreadsheet, tabs=("Weekly Membership", "Revenue")):
         if updates:
             ws.batch_update(updates, value_input_option="USER_ENTERED")
             done.append(f"{title}: {len(updates)} date(s) stored as text converted to real dates")
+        # Show every date the same way (20/9/2026), including ones entered as 2026-09-20
+        di = headers.index("Date")
+        spreadsheet.batch_update({"requests": [{"repeatCell": {
+            "range": {"sheetId": ws.id, "startRowIndex": 1, "endRowIndex": last,
+                      "startColumnIndex": di, "endColumnIndex": di + 1},
+            "cell": {"userEnteredFormat": {"numberFormat": {"type": "DATE", "pattern": "d/m/yyyy"}}},
+            "fields": "userEnteredFormat.numberFormat"}}]})
     return done
 
 
