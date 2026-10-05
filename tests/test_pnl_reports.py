@@ -230,3 +230,56 @@ def test_report_shows_outliers_for_a_centre():
     at.selectbox(key="pnl_view").set_value("Centre").run()
     at.toggle(key="pnl_out_detail").set_value(True).run()
     assert not at.exception, at.exception
+
+
+def test_entity_months_and_groups():
+    info = pr.location_info(PNL, VL)
+    assert info.loc["Success Tutoring - Howick", "Currency"] == "NZD"
+    opts = pr.group_options(info, "Country", lambda r: r)
+    assert set(opts) == {"Australia (2)", "New Zealand (1)"}
+    lm = pnl.location_months(PNL)
+    data, cur, left = pr.entity_months(lm, pr.members_by_month(WM), info,
+                                       ["Success Tutoring - Auburn"])
+    assert cur == "AUD" and list(data.index) == ["2026-07", "2026-08"]
+    assert data.loc["2026-08", "Total Revenue"] == 12600 and data.loc["2026-08", "Members"] == 50
+    net, cur, _ = pr.entity_months(lm, pr.members_by_month(WM), info, list(info.index))
+    assert cur == "AUD"
+    assert net.loc["2026-08", "Total Revenue"] == pytest.approx(12600 + 5000 + 8000 * 0.9)
+    assert net.loc["2026-08", "Centres"] == 3 and net.loc["2026-07", "Centres"] == 1
+    assert net.loc["2026-07", "Members"] == 50          # only centres that reported
+
+
+def run_deep_dive(level="admin", allowed=()):
+    def script(level, allowed):
+        import streamlit as st
+        import pnl_reports as pr
+        from test_pnl_reports import PNL, VL, WM, AGE
+        df = PNL if level == "admin" else PNL[PNL["Location"].isin(allowed)]
+        pr.report_deep_dive(df, WM, VL, dict(
+            age_group=AGE, age_order=[], state_of=lambda r: r, show_chart=st.plotly_chart,
+            std_layout=lambda t, y="", height=400: dict(title=t, height=height),
+            report_filters=None), bench=(PNL, WM))
+    return AppTest.from_function(script, args=(level, allowed), default_timeout=30).run()
+
+
+def test_deep_dive_centre_and_group():
+    at = run_deep_dive()
+    assert not at.exception, at.exception
+    text = "".join(m.value for m in at.markdown)
+    assert "Where the revenue goes" in text and "Every line by month" in text
+    at.selectbox(key="dd_pick_Centre").set_value("Auburn").run()
+    assert not at.exception, at.exception
+    assert "vs previous month" in "".join(m.value for m in at.markdown)
+    for unit in pr.UNITS:
+        at.selectbox(key="dd_unit").set_value(unit).run()
+        assert not at.exception, at.exception
+    at.selectbox(key="dd_view").set_value("Network").run()
+    assert not at.exception, at.exception
+    at.selectbox(key="dd_line").set_value("Rent").run()
+    assert not at.exception, at.exception
+
+
+def test_deep_dive_gpm_sees_only_their_centres():
+    at = run_deep_dive("gpm", ["Success Tutoring - Howick"])
+    assert not at.exception, at.exception
+    assert at.selectbox(key="dd_pick_Centre").options == ["Howick"]

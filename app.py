@@ -298,18 +298,19 @@ def load_pnl():
         st.error(f"Could not load the P&L tab ({e}). Click Refresh data to try again.")
         return pd.DataFrame()
 
-def report_pnl(df_wm):
+def report_pnl(df_wm, page=None):
+    """P&L reports. Admins see every centre; anyone else only their own (none if not set).
+    Typical values for comparisons use every centre, but other centres are never named."""
     loc_col = "Success Tutoring - Business name"
     df = full = load_pnl()
     if not df.empty:
-        # Admins see every centre; anyone else only their own (none if not set).
         df = apply_gpm_filter(df.rename(columns={"Location": loc_col})) \
             .rename(columns={loc_col: "Location"})
-    pnl_reports.report_pnl(df, apply_gpm_filter(df_wm), load_vlookup(), dict(
+    page = page or pnl_reports.report_pnl
+    page(df, apply_gpm_filter(df_wm), load_vlookup(), dict(
         age_group=get_age_group, age_order=AGE_ORDER + ["Unknown"],
         state_of=lambda r: REGION_TO_STATE.get(r, r) if isinstance(r, str) and r.strip() else None,
         show_chart=show_chart, std_layout=std_layout, report_filters=report_filters),
-        # Band benchmarks use every centre (only typical values are shown).
         bench=(full, load_weekly_membership()))
 
 @st.cache_data(ttl=300)
@@ -2268,6 +2269,7 @@ REPORTS=[
     "9 · Onboarding Progress",
     "10 · Revenue",
     "12 · P&L Summary",
+    "13 · P&L Deep Dive",
     "11 · AI Outlier Analysis",
 ]
 
@@ -2300,6 +2302,7 @@ NAV_GROUPS = [
     ("Finance", [
         ("10 · Revenue",            "Revenue",             ":material/attach_money:"),
         ("12 · P&L Summary",        "P&L & Break-even",    ":material/account_balance:"),
+        ("13 · P&L Deep Dive",      "P&L Deep Dive",       ":material/query_stats:"),
     ]),
     ("Insights", [
         ("11 · AI Outlier Analysis",            "Outliers & Alerts",    ":material/notification_important:"),
@@ -2395,6 +2398,7 @@ elif selected_report=="8 · Net Growth Rate %":          report_net_growth(df_wm
 elif selected_report=="9 · Onboarding Progress":      report_onboarding(df_wm)
 elif selected_report=="10 · Revenue":                 report_revenue(df_rv)
 elif selected_report=="12 · P&L Summary":            report_pnl(df_wm)
+elif selected_report=="13 · P&L Deep Dive":          report_pnl(df_wm, pnl_reports.report_deep_dive)
 elif selected_report=="11 · AI Outlier Analysis":     report_outliers_alerts(df_wm, df_rv)
 elif selected_report in ADMIN_PAGES:
     spreadsheet = get_sheets_client().open_by_key(SHEET_ID)

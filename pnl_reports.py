@@ -591,3 +591,290 @@ def network_outliers(cent, bench, label):
                                 "Typical %": st.column_config.NumberColumn(format="%.1f%%"),
                                 "Cost vs typical $/month":
                                     st.column_config.NumberColumn(format="%,.0f")})
+
+
+# ── Deep dive ─────────────────────────────────────────────────────────────────
+UNITS = ["$", "% of revenue", "$ per member"]
+TREND_LINES = pnl.ROW_ORDER + ["EBITDA", "Net Profit"]
+
+
+def location_info(df_pnl, vl):
+    """Country, currency, latest rate to AUD, state region and GPM per location."""
+    last = df_pnl.sort_values("Period").groupby("Location").last()
+    info = pd.DataFrame(index=last.index)
+    info["Country"] = last["Country"].replace("", None)
+    info["Currency"] = last["Currency"]
+    info["FX"] = pd.to_numeric(last["FX rate to AUD"], errors="coerce")
+    info.loc[info["Currency"] == "AUD", "FX"] = 1.0
+    v = vl.set_index(LOC) if LOC in vl.columns else pd.DataFrame()
+    for c in ["Region", "GPM", "Country"]:
+        col = v[c].reindex(info.index) if c in v.columns else pd.Series(None, index=info.index)
+        info[c] = info[c].fillna(col) if c in info else col
+    return info
+
+
+def group_options(info, view, state_of):
+    """{option label: [locations]} for the chosen view."""
+    if view == "Centre":
+        return {loc.replace(PREFIX, ""): [loc] for loc in sorted(info.index)}
+    if view == "Network":
+        return {"Network": list(info.index)}
+    key = info["Country"].fillna("Not set") if view == "Country" else \
+        info["GPM"].replace("", None).fillna("Not set") if view == "GPM" else \
+        info["Region"].map(state_of).fillna("Not set")
+    return {f"{k} ({len(g)})": list(g.index) for k, g in info.groupby(key)}
+
+
+def entity_months(lm, members, info, locs):
+    """Month-by-month totals for these locations (AUD if they mix currencies).
+    Returns (DataFrame indexed by Period, currency, locations left out)."""
+    rows = lm[lm.index.get_level_values("Location").isin(locs)].copy()
+    mixed = info.loc[info.index.intersection(locs), "Currency"].nunique() > 1
+    left_out = []
+    if mixed:
+        fx = info["FX"].reindex(rows.index.get_level_values("Location")).values
+        left_out = sorted(info.index[info.index.isin(locs) & info["FX"].isna()])
+        rows = rows.mul(fx, axis=0).dropna(how="all")
+    out = rows.groupby(level="Period").sum()
+    out["Centres"] = rows.groupby(level="Period").size()
+    if not members.empty:
+        m = members[members.index.get_level_values(0).isin(locs)]
+        # Members of centres that reported a P&L that month.
+        reported = set(rows.index)
+        m = m[[k in reported for k in m.index]]
+        out["Members"] = m.groupby(level="Period").sum().reindex(out.index)
+    else:
+        out["Members"] = None
+    cur = "AUD" if mixed else (info.loc[info.index.intersection(locs), "Currency"].iloc[0]
+                               if len(info.index.intersection(locs)) else "")
+    return out.sort_index(), cur, left_out
+
+
+def _in_units(df, unit, lines):
+    if unit == "% of revenue":
+        rev = df["Total Revenue"].where(df["Total Revenue"] > 0)
+        return df[lines].div(rev, axis=0) * 100
+    if unit == "$ per member":
+        mem = df["Members"].where(df["Members"] > 0)
+        return df[lines].div(mem, axis=0)
+    return df[lines]
+
+
+def _fmt_unit(v, unit):
+    if v is None or pd.isna(v):
+        return "–"
+    if unit == "% of revenue":
+        return f"{v:.1f}%"
+    if unit == "$ per member":
+        s = f"${abs(v):,.2f}"
+        return f"({s})" if v < 0 else s
+    return _money(v)
+
+
+def _card(label, value, delta=None, delta_text="", good=None):
+    d = ""
+    if delta is not None and not pd.isna(delta):
+        arrow = "▲" if delta > 0 else "▼" if delta < 0 else "●"
+        colour = "#5d6d73" if good is None or delta == 0 else ("#2e8540" if good else "#c8322f")
+        d = (f'<div class="metric-delta" style="color:{colour}">{arrow} {delta_text} '
+             '<span>vs previous month</span></div>')
+    return (f'<div class="metric-card"><div class="metric-label">{html.escape(label)}</div>'
+            f'<div class="metric-value">{html.escape(value)}</div>{d}</div>')
+
+
+def peer_typical_by_month(bench_lm, bench_members, binfo, line, country, per_centre, exclude):
+    """Typical (median) % of revenue for this line among similar centres, each month."""
+    out = {}
+    for period, g in bench_lm.groupby(level="Period"):
+        t = g.droplevel("Period").copy()
+        t["Country"] = binfo["Country"].reindex(t.index)
+        t["Members"] = bench_members.xs(period, level="Period").reindex(t.index) \
+            if not bench_members.empty and period in bench_members.index.get_level_values(
+                "Period") else None
+        peers, _ = pnl.peer_set(t, country, per_centre, exclude)
+        peers = peers[peers["Total Revenue"] > 0]
+        if len(peers) >= 2:
+            out[period] = (peers[line] / peers["Total Revenue"] * 100).median()
+    return pd.Series(out, dtype=float)
+
+
+def report_deep_dive(df_pnl, df_wm, vl, helpers, bench=None):
+    """One centre or group month by month: headline numbers, where the revenue goes,
+    every line over time (with the typical value for similar centres), every account."""
+    st.markdown('<div class="report-title">P&L Deep Dive</div>', unsafe_allow_html=True)
+    st.markdown('<div class="report-subtitle">One centre or group month by month: headline '
+                'numbers, where the money goes, and each revenue and expense line over time '
+                'against similar centres.</div>', unsafe_allow_html=True)
+    if df_pnl.empty:
+        st.info("No P&L figures yet. An admin can add a month on the P&L Upload page.")
+        return
+    info = location_info(df_pnl, vl)
+    lm = pnl.location_months(df_pnl)
+    members = members_by_month(df_wm)
+    periods = sorted(df_pnl["Period"].unique())
+
+    panel = st.container(border=True)
+    with panel:
+        st.markdown('<div class="filter-label">Filters</div>', unsafe_allow_html=True)
+        a, b, c, d = st.columns([1, 2, 1, 1])
+        view = a.selectbox("Show by", VIEWS, key="dd_view")
+        opts = group_options(info, view, helpers["state_of"])
+        pick = b.selectbox("Centre or group", list(opts), key=f"dd_pick_{view}")
+        month = c.selectbox("Month", periods[::-1], format_func=pnl.period_name, key="dd_month")
+        unit = d.selectbox("Show as", UNITS, key="dd_unit")
+    locs = opts[pick]
+    data, cur, left_out = entity_months(lm, members, info, locs)
+    data = data[data.index <= month]
+    if month not in data.index:
+        st.warning(f"{pick} has no P&L for {pnl.period_name(month)}.")
+        return
+    if left_out:
+        st.warning("Left out of AUD totals (no exchange rate): " +
+                   ", ".join(x.replace(PREFIX, "") for x in left_out))
+    now = data.loc[month]
+    prev = data.iloc[-2] if len(data) >= 2 else None
+    n_now = int(now["Centres"])
+
+    # ── Headline numbers ──
+    st.markdown(f'<div class="section-header">{html.escape(pick)} — {pnl.period_name(month)} '
+                f'({html.escape(cur)})</div>', unsafe_allow_html=True)
+    rev = now["Total Revenue"]
+    gm = rev - now["Tutor Wages + Super"]
+    mem = now.get("Members")
+    rpm = rev / mem / pnl.WEEKS_PER_MONTH if mem and not pd.isna(mem) and mem > 0 else None
+
+    def delta(key, fn=None):
+        if prev is None:
+            return None
+        f = fn or (lambda r: r[key])
+        try:
+            return f(now) - f(prev)
+        except (TypeError, ZeroDivisionError):
+            return None
+
+    gm_pct = lambda r: (r["Total Revenue"] - r["Tutor Wages + Super"]) / r["Total Revenue"] * 100 \
+        if r["Total Revenue"] > 0 else None
+    eb_pct = lambda r: r["EBITDA"] / r["Total Revenue"] * 100 if r["Total Revenue"] > 0 else None
+    cards = [
+        ("Revenue", _money(rev), delta("Total Revenue"), True, _money),
+        ("Gross margin (after tutor wages)", f"{gm_pct(now):.1f}%" if rev > 0 else "–",
+         delta(None, gm_pct), True, lambda v: f"{abs(v):.1f} pts"),
+        ("EBITDA", _money(now["EBITDA"]), delta("EBITDA"), True, _money),
+        ("EBITDA % of revenue", f"{eb_pct(now):.1f}%" if rev > 0 else "–",
+         delta(None, eb_pct), True, lambda v: f"{abs(v):.1f} pts"),
+        ("Members", _count(mem), delta("Members"), True, lambda v: f"{abs(v):,.0f}"),
+        ("Revenue per member / week", f"${rpm:,.2f}" if rpm else "–",
+         delta(None, lambda r: r["Total Revenue"] / r["Members"] / pnl.WEEKS_PER_MONTH
+               if r.get("Members") and r["Members"] > 0 else None), True,
+         lambda v: f"${abs(v):,.2f}"),
+    ]
+    html_cards = []
+    for label, value, dlt, up_good, fmt in cards:
+        ok = dlt is not None and not pd.isna(dlt)
+        html_cards.append(_card(label, value, dlt if ok else None,
+                                fmt(abs(dlt)) if ok else "", (dlt > 0) == up_good if ok else None))
+    cols = st.columns(len(html_cards))
+    for col, h in zip(cols, html_cards):
+        col.markdown(h, unsafe_allow_html=True)
+    if n_now > 1:
+        st.caption(f"{n_now} centres reported for {pnl.period_name(month)}.")
+
+    # ── Where the revenue goes ──
+    st.markdown('<div class="section-header">Where the revenue goes</div>',
+                unsafe_allow_html=True)
+    costs = [k for k in pnl.ROW_ORDER if k != "Total Revenue"]
+    fig = go.Figure(go.Waterfall(
+        x=["Revenue"] + costs + ["EBITDA"],
+        y=[rev] + [-now[k] for k in costs] + [0],
+        measure=["absolute"] + ["relative"] * len(costs) + ["total"],
+        text=[_money(rev)] + [_money(-now[k]) for k in costs] + [_money(now["EBITDA"])],
+        textposition="outside",
+        increasing=dict(marker=dict(color="#2e8540")),
+        decreasing=dict(marker=dict(color="#c8322f")),
+        totals=dict(marker=dict(color="#1f9a9a" if now["EBITDA"] >= 0 else "#c8322f")),
+        connector=dict(line=dict(color="#c9d3d6")),
+        hovertemplate="%{x}: %{text}<extra></extra>"))
+    fig.update_layout(**helpers["std_layout"](f"From revenue to EBITDA — {pick}, "
+                                               f"{pnl.period_name(month)}",
+                                               f"{cur} per month", height=440))
+    fig.update_layout(showlegend=False)
+    helpers["show_chart"](fig)
+
+    # ── Every line by month ──
+    recent = data.tail(12)
+    st.markdown(f'<div class="section-header">Every line by month ({unit})</div>',
+                unsafe_allow_html=True)
+    table = _in_units(recent, unit, TREND_LINES).T
+    table.columns = [pnl.period_name(p) for p in table.columns]
+    shown = table.apply(lambda col: col.map(lambda v: _fmt_unit(v, unit)))
+    if prev is not None:
+        chg = _in_units(data.tail(2), unit, TREND_LINES).T
+        diff = chg.iloc[:, -1] - chg.iloc[:, -2]
+        shown["Change vs previous month"] = [
+            "–" if pd.isna(v) else (f"{v:+.1f} pts" if unit == "% of revenue" else
+                                   ("+" if v >= 0 else "−") + _fmt_unit(abs(v), unit))
+            for v in diff]
+    ytd = data[(data.index >= f"{month[:4]}-01")]
+    if len(ytd) > 1:
+        shown[f"Year to date ({len(ytd)} months, avg/month)"] = [
+            _fmt_unit(v, unit) for v in _in_units(
+                ytd.mean().to_frame().T.assign(Members=ytd["Members"].mean()), unit,
+                TREND_LINES).iloc[0]]
+    members_row = pd.DataFrame([[_count(v) for v in recent["Members"]] +
+                                [""] * (shown.shape[1] - len(recent))],
+                               index=["Members"], columns=shown.columns)
+    st.dataframe(pd.concat([members_row, shown]), use_container_width=True)
+    if len(data) < 2:
+        st.caption("Only one month uploaded so far: trends and month-on-month changes appear "
+                   "as more months are added.")
+
+    # ── A line over time against similar centres ──
+    st.markdown('<div class="section-header">A line over time, against similar centres</div>',
+                unsafe_allow_html=True)
+    line = st.selectbox("Line", TREND_LINES[1:], key="dd_line")
+    b_pnl, b_wm = bench if bench is not None else (df_pnl, df_wm)
+    b_lm = pnl.location_months(b_pnl)
+    b_info = location_info(b_pnl, vl)
+    countries = info.loc[info.index.intersection(locs), "Country"].dropna().unique()
+    country = countries[0] if len(countries) == 1 else None
+    per_centre = mem / n_now if mem and not pd.isna(mem) and n_now else None
+    typical = peer_typical_by_month(b_lm, members_by_month(b_wm), b_info, line, country,
+                                    per_centre if len(locs) == 1 else None,
+                                    locs if len(locs) == 1 else None)
+    own = _in_units(data, "% of revenue", [line])[line]
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=[pnl.period_name(p) for p in own.index], y=own.values,
+                             mode="lines+markers", name=pick, line=dict(color="#1f9a9a", width=3),
+                             hovertemplate="%{x}: %{y:.1f}%<extra>" + html.escape(pick) +
+                             "</extra>"))
+    t = typical.reindex(own.index)
+    if t.notna().any():
+        fig.add_trace(go.Scatter(x=[pnl.period_name(p) for p in t.index], y=t.values,
+                                 mode="lines+markers", name="Typical for similar centres",
+                                 line=dict(color="#5d6d73", width=2, dash="dash"),
+                                 hovertemplate="%{x}: %{y:.1f}%<extra>Typical</extra>"))
+    fig.update_layout(**helpers["std_layout"](f"{line} as % of revenue — {pick}",
+                                               "% of revenue", height=380))
+    helpers["show_chart"](fig)
+    st.caption("Typical = the middle value for centres in the same country and members band "
+               "each month (other centres are never named). Shown as % of revenue so centres "
+               "of different sizes and currencies compare fairly.")
+
+    # ── Every account ──
+    with st.expander("Every account line by month"):
+        d = df_pnl[df_pnl["Location"].isin(locs) & (df_pnl["Period"] <= month)].copy()
+        d["Amount"] = d["Amount"].astype(float)
+        if len(locs) > 1 and info.loc[info.index.intersection(locs), "Currency"].nunique() > 1:
+            d["Amount"] = d["Amount"] * d["Location"].map(info["FX"])
+        acc = d.pivot_table(index=["P&L section", "Account"], columns="Period", values="Amount",
+                            aggfunc="sum", fill_value=0.0)
+        acc = acc[sorted(acc.columns)[-12:]]
+        rev_m = data["Total Revenue"].reindex(acc.columns)
+        if unit == "% of revenue":
+            acc = acc.div(rev_m.where(rev_m > 0), axis=1) * 100
+        elif unit == "$ per member":
+            acc = acc.div(data["Members"].reindex(acc.columns).where(lambda m: m > 0), axis=1)
+        acc.columns = [pnl.period_name(p) for p in acc.columns]
+        st.dataframe(acc.apply(lambda col: col.map(lambda v: _fmt_unit(v, unit))),
+                     use_container_width=True)
+        st.caption("Unrelated Expenses (479) are a memo line and aren't in EBITDA or Net Profit.")
