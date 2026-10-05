@@ -180,3 +180,53 @@ def test_report_with_no_pnl_yet():
         pr.report_pnl(pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), {})
     at = AppTest.from_function(script).run()
     assert any("No P&L figures yet" in i.value for i in at.info)
+
+
+def bench_frame():
+    rng = [(f"C{i}", "Australia", 50 + i, 10000, 3500 + 100 * i, 0) for i in range(8)]
+    rng += [("Big", "Australia", 55, 10000, 6000, 3000)]
+    rows = []
+    for name, country, mem, rev, tutor, mgr in rng:
+        r = {"Country": country, "Members": mem, "Total Revenue": rev,
+             "Tutor Wages + Super": tutor, "Rent": 2000, pnl.MANAGER: mgr, "Royalties": 800,
+             "Marketing - Agency Fees": 0, "Marketing": 500, "OPEX": 1000}
+        r["EBITDA"] = rev - sum(v for k, v in r.items() if k not in
+                                ("Country", "Members", "Total Revenue"))
+        rows.append(pd.Series(r, name=name))
+    return pd.DataFrame(rows)
+
+
+def test_peers_compare_and_outliers():
+    b = bench_frame()
+    peers, desc = pnl.peer_set(b, "Australia", 55, "Big")
+    assert "Big" not in peers.index and len(peers) >= pnl.MIN_PEERS
+    assert desc.startswith("Australia centres with")
+    cmp = pnl.compare_lines(b.loc["Big"], peers, pnl.BENCH_LINES).set_index("Line")
+    assert cmp.at["Tutor Wages + Super", "Status"] == "Very high"
+    assert cmp.at["Tutor Wages + Super", "Gap $"] == pytest.approx(6000 - 3850)
+    assert cmp.at[pnl.MANAGER, "Gap $"] == 3000          # typical is no manager wage
+    assert "↳ vs centres that pay a manager" not in cmp.index   # no peer pays one
+    assert cmp.at["EBITDA", "Status"].endswith("low")
+    assert pnl.is_bad("EBITDA", "Very low") and pnl.is_bad("Rent", "High")
+    assert not pnl.is_bad("Rent", "Low")
+    assert cmp.at["Average Membership Value", "Status"] == "Typical"
+
+
+def test_peer_set_widens_then_falls_back():
+    b = bench_frame()
+    _, desc = pnl.peer_set(b, "Australia", 150, None)          # nobody near 150 members
+    assert desc == "all Australia centres"
+    _, desc = pnl.peer_set(b, "New Zealand", 55, None)
+    assert desc == "all reporting centres"
+
+
+def test_report_shows_outliers_for_a_centre():
+    at = run_report()
+    assert not at.exception, at.exception
+    heads = "".join(m.value for m in at.markdown)
+    assert "Outliers vs similar centres" in heads and "Outlier list" in heads
+    at.selectbox(key="pnl_view").set_value("GPM").run()
+    assert not at.exception, at.exception
+    at.selectbox(key="pnl_view").set_value("Centre").run()
+    at.toggle(key="pnl_out_detail").set_value(True).run()
+    assert not at.exception, at.exception

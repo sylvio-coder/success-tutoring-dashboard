@@ -329,7 +329,8 @@ def row_of(code):
 def location_months(lines):
     """One row per (Location, Period) with the summary rows, EBITDA, Interest, Net Profit.
     lines: the Sheet's P&L tab (Location, Period, Account code, Amount)."""
-    df = lines.assign(Row=lines["Account code"].map(row_of)).dropna(subset=["Row"])
+    df = lines.assign(Row=lines["Account code"].map(row_of),
+                      Amount=lines["Amount"].astype(float)).dropna(subset=["Row"])
     out = df.pivot_table(index=["Location", "Period"], columns="Row", values="Amount",
                          aggfunc="sum", fill_value=0.0)
     for c in ROW_ORDER + ["Interest"]:
@@ -485,3 +486,123 @@ def break_even_banded(per_member, fixed, royalty_min, rates, centres=1, max_memb
         else:
             lo = mid
     return hi * per_member * centres, hi * centres
+
+
+# ── Benchmarks and outliers ───────────────────────────────────────────────────
+BENCH_LINES = ROW_ORDER[1:] + ["EBITDA"]
+HIGHER_IS_BETTER = {"EBITDA", "Total Revenue", "Average Membership Value"}
+MANAGER = "Wages - Manager/Admin + Super"
+MIN_PEERS = 5                   # ranges from fewer centres jump around too much
+
+
+def peer_set(bench, country=None, members=None, exclude=None, min_n=MIN_PEERS):
+    """Centres to compare with: same country and members band, widened to nearby bands
+    until there are min_n, then the whole country, then every centre. Centres with very
+    low revenue are left out (their percentages aren't meaningful).
+    Returns (peers DataFrame, description)."""
+    pool = bench[bench["Total Revenue"] >= LOW_REVENUE]
+    if exclude is not None:
+        pool = pool[~pool.index.isin([exclude] if isinstance(exclude, str) else exclude)]
+    where = pool
+    if country:
+        where = pool[pool["Country"].astype(str) == str(country)]
+    bands = membership_bands()
+    if members is not None and not pd.isna(members) and members > 0:
+        i = bands.index(membership_band(members))
+        idx = where["Members"].map(lambda m: bands.index(membership_band(m))
+                                   if m is not None and not pd.isna(m) and m > 0 else None)
+        for w in range(len(bands)):
+            sel = where[idx.notna() & ((idx - i).abs() <= w)]
+            if len(sel) >= min_n:
+                lo, hi = bands[max(i - w, 0)], bands[min(i + w, len(bands) - 1)]
+                span = lo if lo == hi else f"{lo.split('–')[0]}–{hi.split('–')[-1].rstrip('+')}" \
+                    + ("+" if hi.endswith("+") else "")
+                return sel, f"{country + ' c' if country else 'C'}entres with {span} members"
+            if w >= 2:
+                break
+    if country and len(where) >= min_n:
+        return where, f"all {country} centres"
+    return pool, "all reporting centres"
+
+
+def _status(v, q1, q3):
+    iqr = q3 - q1
+    if v > q3 + 1.5 * iqr and v > q3:
+        return "Very high"
+    if v > q3:
+        return "High"
+    if v < q1 - 1.5 * iqr and v < q1:
+        return "Very low"
+    if v < q1:
+        return "Low"
+    return "Typical"
+
+
+def compare_lines(values, peers, lines):
+    """Each line as % of revenue against the peers' typical (median) and normal range
+    (middle half). Gap $ = what the difference from typical is worth each month:
+    positive means it costs more (or earns less) than typical."""
+    rev = values["Total Revenue"]
+    rows = []
+    pp = peers[peers["Total Revenue"] > 0]
+    for line in lines:
+        if line not in values or line not in pp:
+            continue
+        pct = pp[line] / pp["Total Revenue"] * 100
+        actual = values[line] / rev * 100 if rev > 0 else None
+        med, q1, q3 = pct.median(), pct.quantile(0.25), pct.quantile(0.75)
+        good_up = line in HIGHER_IS_BETTER
+        gap = None if actual is None else (med - actual if good_up else actual - med) / 100 * rev
+        rows.append({"Line": line, "Actual $": values[line], "Actual %": actual,
+                     "Typical %": med, "Range low %": q1, "Range high %": q3,
+                     "Centres": len(pct), "Gap $": gap,
+                     "Status": _status(actual, q1, q3) if actual is not None else ""})
+    # Manager wages: also against only the centres that pay a manager.
+    if MANAGER in lines and values.get(MANAGER, 0) > 0 and rev > 0 and MANAGER in pp:
+        payers = pp[pp[MANAGER] > 0]
+        if len(payers):
+            pct = payers[MANAGER] / payers["Total Revenue"] * 100
+            actual = values[MANAGER] / rev * 100
+            med = pct.median()
+            rows.append({"Line": "↳ vs centres that pay a manager", "Actual $": values[MANAGER],
+                         "Actual %": actual, "Typical %": med,
+                         "Range low %": pct.quantile(0.25), "Range high %": pct.quantile(0.75),
+                         "Centres": len(pct), "Gap $": (actual - med) / 100 * rev,
+                         "Status": _status(actual, pct.quantile(0.25), pct.quantile(0.75))})
+    # Revenue side: average membership value against the peers'.
+    mem = values.get("Members")
+    if mem and not pd.isna(mem) and mem > 0 and "Members" in pp:
+        ok = pp[pp["Members"].fillna(0) > 0]
+        # Dollar amounts only compare within one currency (country).
+        country = values.get("Country")
+        if isinstance(country, str) and "Country" in ok:
+            ok = ok[ok["Country"].astype(str) == country]
+        if len(ok):
+            amv = ok["Total Revenue"] / ok["Members"] / WEEKS_PER_MONTH
+            a = rev / mem / WEEKS_PER_MONTH
+            rows.append({"Line": "Average Membership Value", "Actual $": a, "Actual %": None,
+                         "Typical %": None, "Typical $": amv.median(),
+                         "Range low $": amv.quantile(0.25), "Range high $": amv.quantile(0.75),
+                         "Centres": len(amv),
+                         "Gap $": (amv.median() - a) * mem * WEEKS_PER_MONTH,
+                         "Status": _status(a, amv.quantile(0.25), amv.quantile(0.75))})
+    return pd.DataFrame(rows)
+
+
+def is_bad(line, status):
+    if status in ("", "Typical"):
+        return False
+    up = status.lower().endswith("high")
+    return (not up) if line in HIGHER_IS_BETTER else up
+
+
+def account_table(lines, periods):
+    """Monthly average per location and account (expense accounts only)."""
+    d = lines[lines["Period"].isin(periods) &
+              ~lines["Account code"].isin(REVENUE_CODES | EXCLUDED_CODES)]
+    d = d.assign(Amount=d["Amount"].astype(float))
+    if d.empty:
+        return pd.DataFrame()
+    per = d.pivot_table(index=["Location", "Period"], columns="Account", values="Amount",
+                        aggfunc="sum", fill_value=0.0)
+    return per.groupby(level="Location").mean()

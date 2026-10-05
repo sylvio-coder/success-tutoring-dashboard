@@ -10,7 +10,7 @@ import pnl
 
 LOC = "Success Tutoring - Business name"
 PREFIX = "Success Tutoring - "
-VIEWS = ["Centre", "State", "Country", "Network"]
+VIEWS = ["Centre", "State", "Country", "GPM", "Network"]
 PERIODS = ["Single month", "Last 3 months", "Year to date", "All months"]
 
 # Rows of the side-by-side table: (label, key, style)
@@ -164,12 +164,15 @@ def build_columns(cent, view, state_of, rates):
     cols = []
     if view == "Centre":
         for loc, r in cent.sort_values("Total Revenue", ascending=False).iterrows():
-            cols.append((loc.replace(PREFIX, ""), r["Currency"], add_break_even(r.copy(), rates)))
+            col = add_break_even(r.copy(), rates)
+            col["Locations"] = (loc,)
+            cols.append((loc.replace(PREFIX, ""), r["Currency"], col))
         return cols, []
     if view == "Network":
         groups = {"Network": cent}
     else:
         key = cent["Country"].fillna("Not set") if view == "Country" else \
+            cent["GPM"].replace("", None).fillna("Not set") if view == "GPM" else \
             cent["Region"].map(state_of).fillna("Not set")
         groups = {k: g for k, g in cent.groupby(key)}
     left_out = []
@@ -178,6 +181,9 @@ def build_columns(cent, view, state_of, rates):
         if mixed:
             left_out += g[g["FX"].isna()].index.tolist()
         col = add_break_even(combine(g, mixed), rates)
+        countries = g["Country"].dropna().unique()
+        col["Country"] = countries[0] if len(countries) == 1 else None
+        col["Locations"] = tuple(g.index)
         cols.append((f"{name} ({int(col['Centres'])})", "AUD" if mixed else g["Currency"].iloc[0],
                      col))
     return cols, left_out
@@ -322,6 +328,9 @@ def report_pnl(df_pnl, df_wm, vl, helpers, bench=None):
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                        key="pnl_dl")
 
+    acct_bench = pnl.account_table(b_pnl, periods)
+    outliers_section(cols, cent, bench_cent, acct_bench, label, helpers)
+    network_outliers(cent, bench_cent, label)
     break_even_model(cols, label, helpers, rates)
 
 
@@ -385,10 +394,10 @@ def break_even_model(cols, label, helpers, rates):
                   "changing with size.")
     if be_mem:
         gap = mem - be_mem
-        st.markdown(f"**{pick}** needs **{be_mem:,.0f} members** "
-                    f"({cur} {_money(be_rev)} a month) to break even and has **{mem:,.0f}**: "
-                    + (f"**{gap:,.0f} above** break-even." if gap >= 0 else
-                       f"**{-gap:,.0f} short**.") + tutor_note)
+        st.markdown(_md(f"**{pick}** needs **{be_mem:,.0f} members** "
+                        f"({cur} {_money(be_rev)} a month) to break even and has "
+                        f"**{mem:,.0f}**: " + (f"**{gap:,.0f} above** break-even." if gap >= 0
+                                              else f"**{-gap:,.0f} short**.") + tutor_note))
     else:
         st.warning("At these settings tutor wages and royalties use up all the revenue, so more "
                    "members never reach break-even." + tutor_note)
@@ -413,3 +422,172 @@ def break_even_model(cols, label, helpers, rates):
                                                f"EBITDA per month ({cur})", height=420))
     fig.update_xaxes(title_text=unit.capitalize())
     helpers["show_chart"](fig)
+
+
+# ── Outliers ──────────────────────────────────────────────────────────────────
+STATUS_ICON = {"Very high": "▲▲", "High": "▲", "Typical": "", "Low": "▼", "Very low": "▼▼"}
+
+
+def _md(text):
+    """Markdown with dollar signs shown as dollars (not maths)."""
+    return text.replace("$", "\\$")
+
+
+def _fmt_pct(v):
+    return "" if v is None or pd.isna(v) else f"{v:.1f}%"
+
+
+def comparison_rows(values, peers, lines):
+    cmp = pnl.compare_lines(values, peers, lines)
+    if cmp.empty:
+        return cmp
+    out = []
+    for _, r in cmp.iterrows():
+        amv = r["Line"] == "Average Membership Value"
+        bad = pnl.is_bad(r["Line"], r["Status"])
+        good = r["Status"] not in ("", "Typical") and not bad
+        flag = ("🔴 " if bad else "🟢 " if good else "") + \
+            (f"{r['Status']} {STATUS_ICON.get(r['Status'], '')}".strip() if r["Status"] else "")
+        out.append({
+            "Line": r["Line"],
+            "Actual": _money(r["Actual $"]) if not amv else f"${r['Actual $']:,.2f}/wk",
+            "% of revenue": _fmt_pct(r["Actual %"]),
+            "Typical": f"${r['Typical $']:,.2f}/wk" if amv else _fmt_pct(r["Typical %"]),
+            "Normal range": (f"${r['Range low $']:,.2f}–${r['Range high $']:,.2f}" if amv else
+                             f"{_fmt_pct(r['Range low %'])} – {_fmt_pct(r['Range high %'])}"),
+            "Compared with": f"{int(r['Centres'])} centres",
+            "Cost vs typical $/month": r["Gap $"],
+            "Status": flag})
+    return pd.DataFrame(out)
+
+
+def _peers_for(col, bench, exclude):
+    members = col.get("Members")
+    n = int(col.get("Centres", 1) or 1)
+    per_centre = members / n if members and not pd.isna(members) else None
+    country = col.get("Country") if isinstance(col.get("Country"), str) else None
+    return pnl.peer_set(bench, country, per_centre if n == 1 else None, exclude)
+
+
+def outliers_section(cols, cent, bench, acct_bench, label, helpers):
+    st.markdown('<div class="section-header">Outliers vs similar centres</div>',
+                unsafe_allow_html=True)
+    names = [h for h, _, _ in cols]
+    a, b = st.columns([2, 2])
+    pick = a.selectbox("Centre or group", names, key="pnl_out_pick")
+    single = len(cols) and next(c for c in cols if c[0] == pick)[2].get("Centres") is None
+    detail = b.toggle("Every account line (not just the grouped lines)", key="pnl_out_detail",
+                      disabled=not single,
+                      help="Available for a single centre (Show by: Centre).")
+    heading, cur, col = next(c for c in cols if c[0] == pick)
+    rev = col["Total Revenue"]
+    if not rev or rev < pnl.LOW_REVENUE:
+        st.info(f"{pick} has little or no revenue for {label}, so comparing its lines as a % "
+                "of revenue wouldn't mean much.")
+        return
+    locs = list(col.get("Locations") or [])
+    loc = locs[0] if single and locs else None
+    # A centre is compared with other centres; a group with typical centres (its own included).
+    peers, desc = _peers_for(col, bench, [loc] if loc else None)
+    if detail and single and loc in acct_bench.index:
+        acct = acct_bench.copy()
+        for c in ["Total Revenue", "Members", "Country"]:
+            acct[c] = bench[c].reindex(acct.index)
+        peers = acct.loc[acct.index.intersection(peers.index)]
+        values = acct.loc[loc].copy()
+        lines = [c for c in acct_bench.columns if acct_bench[c].abs().sum() > 0]
+    else:
+        values, lines = col, pnl.BENCH_LINES
+    if len(peers) < 2:
+        st.info("Not enough other centres have reported yet to compare with.")
+        return
+    table = comparison_rows(values, peers, lines)
+    n = int(col.get("Centres", 1) or 1)
+    who = desc if n == 1 else f"a typical centre ({desc})"
+    st.caption(f"{pick} compared with {who} for {label}: each line as a % of revenue against "
+               "the typical (middle) value and the normal range (middle half of centres). "
+               "'Cost vs typical' is what the difference is worth each month: positive costs "
+               "money, negative saves it. Other centres' names and figures are never shown.")
+    show = table.sort_values("Cost vs typical $/month", ascending=False, key=lambda s: s.fillna(0))
+    st.dataframe(show, hide_index=True, use_container_width=True, column_config={
+        "Cost vs typical $/month": st.column_config.NumberColumn(format="%,.0f")})
+
+    # Plain-words summary and chart of the biggest gaps.
+    lines_only = show[~show["Line"].isin(["EBITDA", "↳ vs centres that pay a manager"])]
+    costly = lines_only[lines_only["Cost vs typical $/month"].fillna(0) > 0]
+    ebitda = col.get("EBITDA") if not detail else None
+    parts = []
+    if ebitda is not None and not pd.isna(ebitda):
+        parts.append(f"**{pick}** {'made' if ebitda >= 0 else 'lost'} **{_money(abs(ebitda))}** "
+                     f"a month ({label}).")
+    top = costly.head(3)
+    if not top.empty:
+        parts.append("Biggest costs above typical: " + "; ".join(
+            f"**{r['Line']}** ({_money(r['Cost vs typical $/month'])} more)"
+            for _, r in top.iterrows()) + ".")
+        if ebitda is not None and not pd.isna(ebitda):
+            parts.append(f"If every line above typical were typical, EBITDA would be about "
+                         f"**{_money(ebitda + costly['Cost vs typical $/month'].sum())}**.")
+    if parts:
+        st.markdown(_md(" ".join(parts)))
+    chart = lines_only.dropna(subset=["Cost vs typical $/month"])
+    chart = chart[chart["Cost vs typical $/month"].abs() >= 1]
+    if not chart.empty:
+        chart = chart.sort_values("Cost vs typical $/month")
+        fig = go.Figure(go.Bar(
+            x=chart["Cost vs typical $/month"], y=chart["Line"], orientation="h",
+            marker_color=["#c8322f" if v > 0 else "#2e8540"
+                          for v in chart["Cost vs typical $/month"]],
+            hovertemplate="%{y}: $%{x:,.0f} a month vs typical<extra></extra>"))
+        fig.add_vline(x=0, line=dict(color="#5d6d73", width=1))
+        fig.update_layout(**helpers["std_layout"](
+            f"Cost vs typical — {pick} ({cur} per month; red costs money, green saves it)", "",
+            height=max(280, 34 * len(chart) + 120)))
+        fig.update_layout(showlegend=False)
+        helpers["show_chart"](fig)
+
+
+def network_outliers(cent, bench, label):
+    st.markdown('<div class="section-header">Outlier list</div>', unsafe_allow_html=True)
+    rows = []
+    for loc, r in cent.iterrows():
+        if not r["Total Revenue"] or r["Total Revenue"] < pnl.LOW_REVENUE:
+            continue
+        peers, desc = pnl.peer_set(bench, r.get("Country"), r.get("Members"), loc)
+        if len(peers) < 2:
+            continue
+        cmp = pnl.compare_lines(r, peers, pnl.BENCH_LINES)
+        for _, c in cmp.iterrows():
+            if c["Status"] in ("", "Typical") or c["Line"].startswith("↳"):
+                continue
+            rows.append({"Location": loc.replace(PREFIX, ""), "Line": c["Line"],
+                         "Bad": pnl.is_bad(c["Line"], c["Status"]), "Status": c["Status"],
+                         "Actual %": c["Actual %"], "Typical %": c["Typical %"],
+                         "Cost vs typical $/month": c["Gap $"], "Currency": r["Currency"],
+                         "Compared with": desc})
+    if not rows:
+        st.info("No lines outside the normal range for the chosen centres.")
+        return
+    df = pd.DataFrame(rows)
+    a, b, c = st.columns([2, 2, 1])
+    which = a.selectbox("Show", ["Costing more than typical", "Doing better than typical",
+                                 "Both"], key="pnl_out_which")
+    by_line = b.multiselect("Lines", sorted(df["Line"].unique()), key="pnl_out_lines",
+                            placeholder="All lines")
+    strong = c.toggle("Very high/low only", key="pnl_out_strong")
+    if which != "Both":
+        df = df[df["Bad"] == (which == "Costing more than typical")]
+    if by_line:
+        df = df[df["Line"].isin(by_line)]
+    if strong:
+        df = df[df["Status"].str.startswith("Very")]
+    df = df.sort_values("Cost vs typical $/month", ascending=(which == "Doing better than typical"),
+                        key=lambda s: s.fillna(0))
+    st.caption(f"Every line outside the normal range for each centre's comparison group "
+               f"({label}). 'Very' = far outside the range. Centres with under "
+               f"{pnl.LOW_REVENUE:,} revenue a month are left out.")
+    st.dataframe(df.drop(columns="Bad"), hide_index=True, use_container_width=True,
+                 column_config={"Actual %": st.column_config.NumberColumn(format="%.1f%%"),
+                                "Typical %": st.column_config.NumberColumn(format="%.1f%%"),
+                                "Cost vs typical $/month":
+                                    st.column_config.NumberColumn(format="%,.0f")})
