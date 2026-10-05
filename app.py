@@ -14,6 +14,7 @@ from google.oauth2.service_account import Credentials
 import os
 import html
 import admin_pages
+import pnl_reports
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -54,6 +55,9 @@ REGION_TO_STATE = {
     "Queensland": "QLD",
     "Western Australia": "WA",
     "South Australia": "SA",
+    "Australian Capital Territory": "ACT",
+    "Tasmania": "TAS",
+    "Northern Territory": "NT",
     "New Zealand": "NZ",
     "Auckland (N)": "NZ",
     "Canterbury (S)": "NZ",
@@ -270,6 +274,43 @@ def load_revenue():
     except Exception as e:
         st.error(f"Could not load the Revenue sheet ({e}). Click Refresh data to try again.")
         return pd.DataFrame()
+
+@st.cache_data(ttl=300)
+def _load_pnl():
+    df = load_sheet_data("P&L")
+    if df.empty:
+        return df
+    df["Period"] = df["Period"].astype(str).str.strip().str.lstrip("'")
+    df["Account code"] = pd.to_numeric(df["Account code"], errors="coerce")
+    df["Amount"] = pd.to_numeric(df["Amount"].astype(str).str.replace("[$,]", "", regex=True),
+                                 errors="coerce").fillna(0)
+    df = df.dropna(subset=["Account code"])
+    df["Account code"] = df["Account code"].astype(int)
+    return df[df["Period"].str.match(r"^\d{4}-\d{2}$")]
+
+def load_pnl():
+    """The P&L tab; empty if it doesn't exist yet. A failed read is not cached."""
+    try:
+        return _load_pnl()
+    except gspread.exceptions.WorksheetNotFound:
+        return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Could not load the P&L tab ({e}). Click Refresh data to try again.")
+        return pd.DataFrame()
+
+def report_pnl(df_wm):
+    loc_col = "Success Tutoring - Business name"
+    df = full = load_pnl()
+    if not df.empty:
+        # Admins see every centre; anyone else only their own (none if not set).
+        df = apply_gpm_filter(df.rename(columns={"Location": loc_col})) \
+            .rename(columns={loc_col: "Location"})
+    pnl_reports.report_pnl(df, apply_gpm_filter(df_wm), load_vlookup(), dict(
+        age_group=get_age_group, age_order=AGE_ORDER + ["Unknown"],
+        state_of=lambda r: REGION_TO_STATE.get(r, r) if isinstance(r, str) and r.strip() else None,
+        show_chart=show_chart, std_layout=std_layout, report_filters=report_filters),
+        # Band benchmarks use every centre (only typical values are shown).
+        bench=(full, load_weekly_membership()))
 
 @st.cache_data(ttl=300)
 def _load_vlookup():
@@ -526,13 +567,15 @@ def get_13m_filtered(df_wm, df_filtered):
 
 def report_filters(df, key_prefix="", show_date=True,
                    show_country=True, show_state=True,
-                   show_stage=True, show_gpm=True, show_location=False, show_status=True, panel=None):
+                   show_stage=True, show_gpm=True, show_location=False, show_status=True, panel=None,
+                   show_label=True):
     """Filters in one labelled panel. Pass `panel` to add more controls to the same panel."""
     loc_col = "Success Tutoring - Business name"
     if panel is None:
         panel = st.container(border=True)
     with panel:
-        st.markdown('<div class="filter-label">Filters</div>', unsafe_allow_html=True)
+        if show_label:
+            st.markdown('<div class="filter-label">Filters</div>', unsafe_allow_html=True)
         n_cols = 6 if show_location else 5
         cols = st.columns(n_cols); i = 0
         if show_date and "Date" in df.columns:
@@ -2224,6 +2267,7 @@ REPORTS=[
     "8 · Net Growth Rate %",
     "9 · Onboarding Progress",
     "10 · Revenue",
+    "12 · P&L Summary",
     "11 · AI Outlier Analysis",
 ]
 
@@ -2255,6 +2299,7 @@ NAV_GROUPS = [
     ]),
     ("Finance", [
         ("10 · Revenue",            "Revenue",             ":material/attach_money:"),
+        ("12 · P&L Summary",        "P&L & Break-even",    ":material/account_balance:"),
     ]),
     ("Insights", [
         ("11 · AI Outlier Analysis",            "Outliers & Alerts",    ":material/notification_important:"),
@@ -2349,6 +2394,7 @@ elif selected_report=="3 · Membership by Age":        report_age_combined(df_wm
 elif selected_report=="8 · Net Growth Rate %":          report_net_growth(df_wm)
 elif selected_report=="9 · Onboarding Progress":      report_onboarding(df_wm)
 elif selected_report=="10 · Revenue":                 report_revenue(df_rv)
+elif selected_report=="12 · P&L Summary":            report_pnl(df_wm)
 elif selected_report=="11 · AI Outlier Analysis":     report_outliers_alerts(df_wm, df_rv)
 elif selected_report in ADMIN_PAGES:
     spreadsheet = get_sheets_client().open_by_key(SHEET_ID)

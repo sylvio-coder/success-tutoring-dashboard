@@ -303,3 +303,185 @@ def records(lines, centres, period):
                     "P&L section": r["P&L section"], "Amount": float(r["Amount"]),
                     "FX rate to AUD": "" if _blank(fx) else float(fx)})
     return out
+
+
+# ── Summary and break-even ────────────────────────────────────────────────────
+WEEKS_PER_MONTH = 4.2
+ROYALTY_RATE = 0.08
+DEFAULT_ROYALTY_MIN = 2200.0
+FIXED_ROWS = ["Rent", "Wages - Manager/Admin + Super", "Marketing - Agency Fees", "Marketing",
+              "OPEX"]
+ROW_ORDER = [r for r, _ in SUMMARY_ROWS]
+
+
+def row_of(code):
+    """Summary row an account adds into (None = left out of profit)."""
+    if code in EXCLUDED_CODES:
+        return None
+    if code in INTEREST_CODES:
+        return "Interest"
+    for name, codes in SUMMARY_ROWS:
+        if codes and code in codes:
+            return name
+    return "OPEX"
+
+
+def location_months(lines):
+    """One row per (Location, Period) with the summary rows, EBITDA, Interest, Net Profit.
+    lines: the Sheet's P&L tab (Location, Period, Account code, Amount)."""
+    df = lines.assign(Row=lines["Account code"].map(row_of)).dropna(subset=["Row"])
+    out = df.pivot_table(index=["Location", "Period"], columns="Row", values="Amount",
+                         aggfunc="sum", fill_value=0.0)
+    for c in ROW_ORDER + ["Interest"]:
+        if c not in out.columns:
+            out[c] = 0.0
+    costs = [r for r in ROW_ORDER if r != "Total Revenue"]
+    out["EBITDA"] = out["Total Revenue"] - out[costs].sum(axis=1)
+    out["Net Profit"] = out["EBITDA"] - out["Interest"]
+    return out[ROW_ORDER + ["EBITDA", "Interest", "Net Profit"]]
+
+
+def royalty(revenue, royalty_min, rate=ROYALTY_RATE):
+    return max(royalty_min, rate * revenue)
+
+
+def break_even(revenue, tutor, fixed, royalty_min, members=0, rate=ROYALTY_RATE):
+    """Monthly revenue and members where EBITDA is 0.
+
+    Tutor wages move with revenue (at this centre's tutor % of revenue); rent,
+    manager wages, marketing and OPEX stay fixed; royalties are the higher of the
+    minimum or 8% of revenue. Returns (revenue, members); None where it can't be
+    worked out (no revenue, or tutor costs leave nothing to cover the rest).
+    """
+    if revenue <= 0:
+        return None, None
+    margin = 1 - tutor / revenue
+    r = None
+    if margin > 0 and rate * (fixed + royalty_min) / margin <= royalty_min:
+        r = (fixed + royalty_min) / margin
+    elif margin - rate > 0:
+        r = fixed / (margin - rate)
+    if r is None:
+        return None, None
+    per_member = revenue / members if members > 0 else 0
+    return r, (r / per_member if per_member > 0 else None)
+
+
+def model_column(members, per_member, tutor_pct, fixed_lines, royalty_min):
+    """Summary rows for a centre with this many members (all monthly)."""
+    rev = members * per_member
+    col = {"Total Revenue": rev, "Tutor Wages + Super": tutor_pct * rev,
+           "Royalties": royalty(rev, royalty_min)}
+    col.update({k: fixed_lines.get(k, 0.0) for k in FIXED_ROWS})
+    col["EBITDA"] = rev - sum(v for k, v in col.items() if k != "Total Revenue")
+    return col
+
+
+def membership_band(members, step=20, top=200):
+    if members is None or pd.isna(members):
+        return "No members data"
+    if members >= top:
+        return f"{top}+"
+    lo = int(members // step) * step
+    return f"{lo}–{lo + step - 1}"
+
+
+def membership_bands(step=20, top=200):
+    return [f"{lo}–{lo + step - 1}" for lo in range(0, top, step)] + [f"{top}+"]
+
+
+# ── Tutor % of revenue by members band ────────────────────────────────────────
+MIN_BENCH_CENTRES = 3
+
+
+def tutor_benchmarks(cent, min_n=MIN_BENCH_CENTRES):
+    """Typical (median) tutor wages + super as % of revenue for each members band.
+
+    cent: one row per centre with Members, Total Revenue and Tutor Wages + Super.
+    Centres with no revenue, no members or no tutor wages are left out. A band with
+    fewer than min_n centres borrows the nearest band that has enough (else the
+    median of all centres). Returns a DataFrame indexed by band:
+    Centres, Benchmark % (its own median, if any), Use %, Source.
+    """
+    bands = membership_bands()
+    ok = cent[(cent["Total Revenue"] > 0) & (cent["Tutor Wages + Super"] > 0) &
+              cent["Members"].notna() & (cent["Members"] > 0)]
+    pct = ok["Tutor Wages + Super"] / ok["Total Revenue"] * 100
+    band = ok["Members"].map(membership_band)
+    out = pd.DataFrame(index=bands)
+    out["Centres"] = band.value_counts().reindex(bands).fillna(0).astype(int)
+    out["Benchmark %"] = pct.groupby(band).median().reindex(bands)
+    enough = [i for i, b in enumerate(bands) if out.at[b, "Centres"] >= min_n]
+    overall = float(pct.median()) if len(pct) else 35.0
+    use, source = [], []
+    for i, b in enumerate(bands):
+        if i in enough:
+            use.append(out.at[b, "Benchmark %"])
+            source.append("This band")
+        elif enough:
+            j = min(enough, key=lambda k: (abs(k - i), k))
+            use.append(out.at[bands[j], "Benchmark %"])
+            source.append(f"Nearest band ({bands[j]})")
+        else:
+            use.append(overall)
+            source.append("All centres" if len(pct) else "Default")
+    # Tutor costs don't rise as a share of revenue as centres grow: cap each band at
+    # the band below it.
+    for i in range(1, len(use)):
+        if use[i] > use[i - 1]:
+            use[i] = use[i - 1]
+            source[i] = f"Capped at {bands[i - 1]}"
+    out["Use %"] = [round(float(u), 1) for u in use]
+    out["Source"] = source
+    return out
+
+
+def _band_mid(band, step=20, top=200):
+    return top + step / 2 if band.endswith("+") else int(band.split("–")[0]) + step / 2
+
+
+def rate_for(members, rates):
+    """Tutor % (0–1) for this many members: each band's % applies at the middle of the
+    band (10, 30, 50 …) and blends smoothly in between, so there are no jumps at band
+    edges. rates: {band: percent}."""
+    pts = sorted((_band_mid(b), r) for b, r in rates.items())
+    if not pts:
+        return 0.0
+    if members <= pts[0][0]:
+        return pts[0][1] / 100
+    for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+        if members <= x1:
+            return (y0 + (y1 - y0) * (members - x0) / (x1 - x0)) / 100
+    return pts[-1][1] / 100
+
+
+def ebitda_at(members, per_member, rates, fixed, royalty_min):
+    rev = members * per_member
+    return rev * (1 - rate_for(members, rates)) - fixed - royalty(rev, royalty_min)
+
+
+def break_even_banded(per_member, fixed, royalty_min, rates, centres=1, max_members=600):
+    """Members (and monthly revenue) from which EBITDA stays at 0 or above, with tutor %
+    from the members band. A group is treated as `centres` average centres sharing its
+    costs. Returns (revenue, members), or (None, None) if not reached."""
+    if per_member <= 0 or centres <= 0:
+        return None, None
+    f, rm = fixed / centres, royalty_min / centres
+    step = 0.25
+    n = int(max_members / step)
+    last_neg = None
+    for i in range(n + 1):
+        if ebitda_at(i * step, per_member, rates, f, rm) < 0:
+            last_neg = i
+    if last_neg is None:
+        return 0.0, 0.0
+    if last_neg == n:
+        return None, None
+    lo, hi = last_neg * step, (last_neg + 1) * step
+    for _ in range(30):
+        mid = (lo + hi) / 2
+        if ebitda_at(mid, per_member, rates, f, rm) >= 0:
+            hi = mid
+        else:
+            lo = mid
+    return hi * per_member * centres, hi * centres
