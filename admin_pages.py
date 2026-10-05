@@ -5,12 +5,14 @@ import pandas as pd
 import streamlit as st
 
 import ingest
+import pnl
 import sheet_setup
 import sheet_writer as sw
 
 WM_NAME = "Success Tutoring - Business name"
 VLOOKUP_TAB = "Vlookup"
 EDITABLE = ["Stage", "Status", "GPM", "Country", "Region"]
+NUMBER_EDITABLE = ["Royalty Min"]
 REVENUE_CALCULATED = [
     "Student Visits", "Revenue per Session", "Revenue per Student",
     "Sessions per Student", "Student per Session", "Sessions per Student Visit",
@@ -213,6 +215,166 @@ def page_weekly_upload(spreadsheet, df_wm, df_rv, clear_cache):
         st.caption("Resolve the items above to enable writing.")
 
 
+# ── Monthly P&L upload ────────────────────────────────────────────────────────
+def _recent_months(n=24):
+    d = date.today().replace(day=1)
+    out = []
+    for _ in range(n):
+        out.append(pnl.period_label(d))
+        d = (d - timedelta(days=1)).replace(day=1)
+    return out
+
+
+def page_pnl_upload(spreadsheet, df_wm, df_rv, clear_cache):
+    st.markdown('<div class="report-title">P&L Upload</div>', unsafe_allow_html=True)
+    _subtitle("Drop in the monthly P&L workbook (e.g. success-insights-pnl-2026-08.xlsx). "
+              "Each centre's figures are saved in its own currency to the 'P&L' tab.")
+
+    f = st.file_uploader("P&L workbook", type=["xlsx"], key="pnl_file")
+    if not f:
+        st.info("Upload the month's P&L workbook to see a preview. Nothing is written to "
+                "the Sheet until you confirm.")
+        return
+    try:
+        data = pnl.read_pnl(f.name, f.getvalue())
+    except pnl.PnlError as e:
+        st.error(str(e))
+        return
+    try:
+        _, _, master = _load_master(spreadsheet)
+        aliases = sw.read_aliases(spreadsheet)
+    except Exception as e:
+        st.error(f"Could not read the master location list: {e}")
+        return
+
+    months = _recent_months()
+    if data["period"] and data["period"] not in months:
+        months.insert(0, data["period"])
+    period = st.selectbox("Month", months,
+                          index=months.index(data["period"]) if data["period"] else 0,
+                          format_func=pnl.period_name, key="pnl_period")
+    if not data["period"]:
+        st.warning("The month isn't in the file name or title. Check the month above.")
+    st.caption(f"Read from the '{data['source']}' tab: {len(data['centres'])} centres declared"
+               + (f", {len(data['pending'])} still pending" if data["pending"] else "") + ".")
+
+    centres = pnl.match_centres(data["centres"], master, aliases)
+
+    # Centre names the location list doesn't know: map them or leave them out.
+    extra_aliases, left_out = {}, set()
+    unknown = centres[centres["Location"].isna()]
+    if not unknown.empty:
+        st.markdown("#### Centres not in the master list")
+        st.caption("Pick the location each name refers to (likely matches first), or leave it "
+                   "out. A mapping you choose is remembered for future P&L uploads.")
+        all_names = master["Location"].tolist()
+        SKIP, CHOOSE = "Leave out this month", "— choose —"
+        for _, u in unknown.iterrows():
+            opts = [CHOOSE] + u["suggestions"] + [SKIP] + \
+                [n for n in all_names if n not in u["suggestions"]]
+            c1, c2 = st.columns([2, 3])
+            c1.markdown(f"**{u['Centre']}**  \n<span style='font-size:0.8em'>{u['Country']} · "
+                        f"revenue {u['Revenue']:,.0f} {u['Currency']}</span>",
+                        unsafe_allow_html=True)
+            choice = c2.selectbox("Maps to", opts, key=f"pnl_map_{u['Centre']}",
+                                  label_visibility="collapsed")
+            if choice == SKIP:
+                left_out.add(u["Centre"])
+            elif choice != CHOOSE:
+                extra_aliases[ingest.scoped_alias(pnl.CRM, u["Centre"])] = choice
+        if extra_aliases:
+            centres = pnl.match_centres(data["centres"], master, {**aliases, **extra_aliases})
+    centres.loc[centres["Centre"].isin(left_out), "Location"] = None
+    unresolved = [n for n in centres.loc[centres["Location"].isna(), "Centre"]
+                  if n not in left_out]
+
+    # The location list's country where the file has none.
+    country = dict(zip(master["Location"], master.get("Country", pd.Series(dtype=str))))
+    blank = centres["Country"].astype(str).str.strip() == ""
+    centres.loc[blank, "Country"] = centres.loc[blank, "Location"].map(country).fillna("")
+
+    clash = centres[centres["Location"].notna()].groupby("Location")["Centre"].apply(list)
+    clash = clash[clash.str.len() > 1]
+    for loc, names in clash.items():
+        st.error(f"{' and '.join(names)} both map to {loc}. Map one of them to another location.")
+
+    st.markdown("#### Preview")
+    view = centres.assign(Location=centres["Location"].fillna("(left out)" if left_out else "?"))
+    st.dataframe(view[["Centre", "Location", "Country", "Currency", "Status", "Revenue",
+                       "Expenses", "EBITDA", "Net Profit"]],
+                 hide_index=True, use_container_width=True,
+                 column_config={c: st.column_config.NumberColumn(c, format="%,.0f")
+                                for c in ["Revenue", "Expenses", "EBITDA", "Net Profit"]})
+    st.caption("Own currency. Expenses = cost of sales + operating costs (before interest). "
+               "Unrelated Expenses (479) are kept as a memo line and left out of profit.")
+
+    matched = centres[centres["Location"].notna()]
+    found = pnl.checks(data["lines"], matched, master)
+    with st.expander(f"Data checks ({len(found)})", expanded=bool(len(found))):
+        if found.empty:
+            st.success("Nothing unusual found.")
+        else:
+            st.caption("Worth a look before relying on this month. These don't stop the upload.")
+            counts = found["Check"].value_counts()
+            st.write(" · ".join(f"**{k}**: {v}" for k, v in counts.items()))
+            st.dataframe(found, hide_index=True, use_container_width=True)
+        trading = master[~master.get("Status", pd.Series("", index=master.index))
+                         .astype(str).str.lower().str.contains("closed")]["Location"]
+        missing = sorted(set(trading) - set(matched["Location"]))
+        if missing:
+            st.info(f"{len(missing)} locations in the master list have no P&L for "
+                    f"{pnl.period_name(period)}: " + ", ".join(
+                        m.removeprefix(ingest.PREFIX) for m in missing))
+
+    existing = set()
+    try:
+        ws = spreadsheet.worksheet(pnl.PNL_TAB)
+        headers, rows = sw.read_tab(ws)
+        if "Period" in headers and "Location" in headers:
+            pi, li = headers.index("Period"), headers.index("Location")
+            existing = {r[li] for r in rows if len(r) > max(pi, li) and r[pi].strip() == period}
+    except Exception:
+        pass
+    if existing:
+        st.info(f"The Sheet already has {pnl.period_name(period)} figures for {len(existing)} "
+                "locations. Those in this upload will be replaced, not duplicated.")
+        kept = sorted(existing - set(matched["Location"]))
+        if kept:
+            st.warning(f"These locations have earlier {pnl.period_name(period)} figures that "
+                       "this upload won't change: " +
+                       ", ".join(m.removeprefix(ingest.PREFIX) for m in kept) +
+                       ". If they're no longer right (e.g. the centre went back to Pending), "
+                       f"delete their {period} rows in the Sheet's '{pnl.PNL_TAB}' tab.")
+
+    if unresolved:
+        st.warning("Choose what these names map to: " + ", ".join(unresolved))
+    blocked = bool(unresolved) or not clash.empty or matched.empty
+    recs = pnl.records(data["lines"], centres, period)
+    if st.button(f"✅ Confirm and write {pnl.period_name(period)} to the Sheet",
+                 type="primary", disabled=blocked):
+        try:
+            with st.spinner("Writing to the Sheet..."):
+                if extra_aliases:
+                    sw.add_aliases(spreadsheet, list(extra_aliases.items()))
+                ws = sw.get_or_add_tab(spreadsheet, pnl.PNL_TAB, pnl.PNL_HEADERS)
+                deleted, added = sw.replace_week(ws, recs, "Location", period,
+                                                 key_header="Period")
+                vl_added = sheet_setup.ensure_last_column(
+                    spreadsheet.worksheet(VLOOKUP_TAB), "Royalty Min")
+            clear_cache()
+            st.success(f"{pnl.period_name(period)} written: {added} lines for "
+                       f"{matched['Location'].nunique()} locations ({deleted} earlier lines "
+                       "for this month replaced).")
+            if vl_added:
+                st.info("Added a 'Royalty Min' column at the end of the Vlookup tab. Type each "
+                        "centre's current minimum royalty there (own currency), or on the "
+                        "Locations page. Blank means $2,200.")
+        except Exception as e:
+            st.error(f"Writing to the Sheet failed: {e}\n\n{WRITE_HINT}")
+    elif blocked:
+        st.caption("Resolve the items above to enable writing.")
+
+
 def _preview(mem, rev, master, df_wm, df_rv, week_end):
     country = dict(zip(master["Location"], master["Country"])) if "Country" in master.columns else {}
     st.markdown("#### Preview")
@@ -405,12 +567,19 @@ def _master_editor(vl_ws, vl_headers, master, df_wm, clear_cache):
     if search:
         view = view[view["Location"].str.contains(search, case=False, regex=False)]
 
-    show = ["Location"] + [c for c in EDITABLE + ["Location Start"] if c in view.columns] + \
+    show = ["Location"] + [c for c in EDITABLE + ["Location Start"] + NUMBER_EDITABLE
+                           if c in view.columns] + \
         [c for c in ["Weeks old", "Months old", "Onboarding Week", "Active members",
                      "Last week with members"] if c in view.columns]
     cfg = {c: st.column_config.SelectboxColumn(c, options=_options(master, c))
            for c in EDITABLE if c in view.columns}
     cfg["Location"] = st.column_config.TextColumn("Location", disabled=True)
+    if "Royalty Min" in view.columns:
+        view["Royalty Min"] = pd.to_numeric(view["Royalty Min"].astype(str).str.replace(
+            r"[$,\s]", "", regex=True), errors="coerce")
+        cfg["Royalty Min"] = st.column_config.NumberColumn(
+            "Royalty Min", min_value=0, format="%,.0f",
+            help="Current minimum monthly royalty in the centre's own currency. Blank = 2,200.")
     start_calc = sheet_setup.start_is_formula(vl_ws, vl_headers)
     if start_calc:
         cfg["Location Start"] = st.column_config.Column(
@@ -433,10 +602,17 @@ def _master_editor(vl_ws, vl_headers, master, df_wm, clear_cache):
     changes = []
     orig = view[show]
     for idx in edited.index:
-        for c in [c for c in EDITABLE + ([] if start_calc else ["Location Start"]) if c in show]:
-            if str(edited.at[idx, c]) != str(orig.at[idx, c]):
-                changes.append((int(master.at[idx, "_row"]), vl_headers.index(c) + 1,
-                                edited.at[idx, c], master.at[idx, "Location"], c))
+        for c in [c for c in EDITABLE + NUMBER_EDITABLE +
+                  ([] if start_calc else ["Location Start"]) if c in show]:
+            new, old = edited.at[idx, c], orig.at[idx, c]
+            if c in NUMBER_EDITABLE:
+                if (pd.isna(new) and pd.isna(old)) or new == old:
+                    continue
+                new = "" if pd.isna(new) else float(new)
+            elif str(new) == str(old):
+                continue
+            changes.append((int(master.at[idx, "_row"]), vl_headers.index(c) + 1,
+                            new, master.at[idx, "Location"], c))
     if changes:
         st.info(f"{len(changes)} unsaved change(s): " +
                 "; ".join(f"{loc} {c} → {v}" for _, _, v, loc, c in changes[:8]) +

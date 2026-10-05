@@ -366,7 +366,7 @@ def scoped_alias(crm, raw):
 
 
 def split_scope(alias):
-    m = re.match(r"\s*(hapana|in-house)\s*:\s*(.*)$", str(alias), re.I)
+    m = re.match(r"\s*(hapana|in-house|p&l)\s*:\s*(.*)$", str(alias), re.I)
     return (m.group(1).lower(), m.group(2)) if m else (None, str(alias))
 
 

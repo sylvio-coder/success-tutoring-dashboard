@@ -1,0 +1,305 @@
+"""Monthly P&L workbook: reading it, checking it, and rows for the Sheet's P&L tab.
+
+The workbook has one column per centre in its own currency ("P&L (native
+currency)"), a long "Line items" tab with the same amounts, and a "Summary" tab
+with each centre's country, currency, status and rate to AUD. Amounts are stored
+in each centre's own currency; AUD is only worked out for mixed totals.
+"""
+import io
+import re
+from datetime import date
+
+import pandas as pd
+from openpyxl import load_workbook
+
+import ingest
+
+PNL_TAB = "P&L"
+PNL_HEADERS = ["Period", "Location", "Country", "Currency", "Status", "Account code",
+               "Account", "P&L section", "Amount", "FX rate to AUD"]
+CRM = "P&L"                     # alias scope: names matched for P&L uploads only
+
+REVENUE_CODES = {200, 260, 270}
+TUTOR_CODES = {472, 474}
+EXCLUDED_CODES = {479}          # Unrelated Expenses: memo only, not in profit
+INTEREST_CODES = {437}
+
+# Rows of the summary / break-even layout and the accounts each one adds up.
+SUMMARY_ROWS = [
+    ("Total Revenue", REVENUE_CODES),
+    ("Tutor Wages + Super", TUTOR_CODES),
+    ("Rent", {469}),
+    ("Wages - Manager/Admin + Super", {471, 478}),
+    ("Royalties", {467}),
+    ("Marketing - Agency Fees", {402}),
+    ("Marketing", {400}),
+    ("OPEX", None),             # every other operating cost
+]
+
+MONTHS = {m.lower(): i for i, m in enumerate(
+    ["January", "February", "March", "April", "May", "June", "July", "August",
+     "September", "October", "November", "December"], start=1)}
+LOW_REVENUE = 1000
+
+
+class PnlError(Exception):
+    pass
+
+
+def period_label(d):
+    return f"{d.year:04d}-{d.month:02d}"
+
+
+def period_name(period):
+    y, m = map(int, period.split("-"))
+    return date(y, m, 1).strftime("%B %Y")
+
+
+def _period_from_text(text):
+    s = str(text or "")
+    m = re.search(r"\b(20\d\d)-(0[1-9]|1[0-2])\b", s)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}"
+    m = re.search(r"\b(" + "|".join(MONTHS) + r")\s+(20\d\d)\b", s, re.I)
+    if m:
+        return f"{m.group(2)}-{MONTHS[m.group(1).lower()]:02d}"
+    return None
+
+
+def _code(value):
+    try:
+        return int(float(str(value).strip()))
+    except (TypeError, ValueError):
+        return None
+
+
+def section_of(code, given=""):
+    if code in REVENUE_CODES:
+        return "Revenue"
+    if code in TUTOR_CODES:
+        return "Cost of Sales"
+    if code in INTEREST_CODES:
+        return "Interest, Tax & Depreciation"
+    if code in EXCLUDED_CODES:
+        return "Memo (excluded from Net Profit)"
+    return str(given).strip() or "Operating Costs"
+
+
+def _summary(wb):
+    """{centre: {country, currency, status, fx}} plus the period, from 'Summary'."""
+    info, period = {}, None
+    if "Summary" not in wb.sheetnames:
+        return info, period
+    rows = list(wb["Summary"].iter_rows(values_only=True))
+    for r in rows[:3]:
+        period = period or _period_from_text(r[0] if r else "")
+    hdr = next((i for i, r in enumerate(rows)
+                if r and [ingest.norm_header(c) for c in r[:2]] == ["centre", "country"]), None)
+    if hdr is None:
+        return info, period
+    cols = [ingest.norm_header(c) for c in rows[hdr]]
+    fx_i = next((i for i, c in enumerate(cols) if c.startswith("fx rate")), None)
+    for r in rows[hdr + 1:]:
+        name = str(r[0] or "").strip()
+        if not name or name.lower().startswith("network total"):
+            continue
+        get = lambda h: str(r[cols.index(h)] or "").strip() if h in cols else ""
+        fx = r[fx_i] if fx_i is not None and fx_i < len(r) else None
+        info.setdefault(name, []).append({
+            "country": get("country"), "currency": get("currency"),
+            "status": get("status"),
+            "fx": float(fx) if isinstance(fx, (int, float)) and fx else None})
+    return info, period
+
+
+def _read_native(ws):
+    rows = list(ws.iter_rows(values_only=True))
+    hdr = next((i for i, r in enumerate(rows)
+                if r and [ingest.norm_header(c) for c in r[:2]] == ["code", "account"]), None)
+    if hdr is None:
+        return None, None
+    period = next((p for r in rows[:hdr] for p in [_period_from_text(r[0] if r else "")] if p),
+                  None)
+    centres = []
+    for j, h in enumerate(rows[hdr][2:], start=2):
+        m = re.match(r"\s*(.+?)\s*\(([A-Z]{3})\)\s*$", str(h or ""))
+        if m:
+            centres.append((j, m.group(1), m.group(2)))
+        elif str(h or "").strip():
+            centres.append((j, str(h).strip(), ""))
+    out, section = [], ""
+    for r in rows[hdr + 1:]:
+        code = _code(r[0])
+        if code is None:
+            label = str(r[1] or "").strip() if len(r) > 1 else ""
+            if label and all(v in (None, "") for v in r[2:]):
+                section = label
+            continue
+        for j, name, cur in centres:
+            out.append({"Centre": name, "Currency": cur, "Account code": code,
+                        "Account": str(r[1] or "").strip(),
+                        "P&L section": section_of(code, section),
+                        "Amount": ingest.parse_number(r[j] if j < len(r) else None)})
+    return pd.DataFrame(out), period
+
+
+def _read_line_items(ws):
+    rows = list(ws.iter_rows(values_only=True))
+    if not rows:
+        return None, None
+    cols = [ingest.norm_header(c) for c in rows[0]]
+    need = ["centre", "account code", "account", "amount"]
+    if not all(c in cols for c in need):
+        return None, None
+    ix = {c: cols.index(c) for c in cols}
+    out, periods = [], set()
+    for r in rows[1:]:
+        code = _code(r[ix["account code"]])
+        name = str(r[ix["centre"]] or "").strip()
+        if code is None or not name:
+            continue
+        if "period" in ix and r[ix["period"]]:
+            periods.add(_period_from_text(str(r[ix["period"]])))
+        out.append({"Centre": name,
+                    "Currency": str(r[ix["currency"]] or "").strip() if "currency" in ix else "",
+                    "Account code": code, "Account": str(r[ix["account"]] or "").strip(),
+                    "P&L section": section_of(code, r[ix["p&l section"]]
+                                              if "p&l section" in ix else ""),
+                    "Amount": ingest.parse_number(r[ix["amount"]])})
+    periods.discard(None)
+    if len(periods) > 1:
+        raise PnlError("The Line items tab has more than one month: " + ", ".join(sorted(periods)))
+    return pd.DataFrame(out), (periods.pop() if periods else None)
+
+
+def read_pnl(filename, data):
+    """Read a monthly P&L workbook.
+
+    Returns {"period", "lines" (one row per centre and account, own currency),
+    "centres" (one row per declared centre), "pending" (names not yet declared),
+    "source" (tab read)}.
+    """
+    try:
+        wb = load_workbook(io.BytesIO(data), data_only=True, read_only=True)
+    except Exception as e:
+        raise PnlError(f"Could not open {filename} as an Excel file ({e}).")
+    info, period = _summary(wb)
+
+    lines, source = None, None
+    order = sorted(wb.sheetnames, key=lambda n: (0 if "native" in n.lower() else
+                                                 1 if n.lower() == "line items" else 2))
+    for name in order:
+        if name == "Summary" or "aud" in name.lower() and "native" not in name.lower():
+            continue
+        reader = _read_line_items if name.lower() == "line items" else _read_native
+        df, p = reader(wb[name])
+        if df is not None and not df.empty:
+            lines, source, period = df, name, p or period
+            break
+    if lines is None:
+        raise PnlError("No P&L found. Expected a 'P&L (native currency)' tab with Code and "
+                       "Account columns and one column per centre, or a 'Line items' tab.")
+    period = period or _period_from_text(filename)
+
+    dupes = sorted(lines.groupby(["Centre", "Account code"]).size().loc[lambda s: s > 1]
+                   .index.get_level_values(0).unique())
+    if dupes:
+        raise PnlError("These centres appear more than once in the file: " + ", ".join(dupes))
+
+    centres = []
+    for name, g in lines.groupby("Centre", sort=True):
+        meta = (info.get(name) or [{}])[0]
+        centres.append({"Centre": name,
+                        "Country": meta.get("country", ""),
+                        "Currency": meta.get("currency") or g["Currency"].iloc[0],
+                        "Status": meta.get("status") or "Submitted",
+                        "FX rate to AUD": 1.0 if (meta.get("currency") or g["Currency"].iloc[0])
+                        == "AUD" else meta.get("fx")})
+    centres = pd.DataFrame(centres)
+    totals = summarise(lines)
+    centres = centres.merge(totals, on="Centre", how="left")
+    declared = set(centres["Centre"])
+    pending = sorted({n for n, metas in info.items()
+                      if n not in declared and any(m["status"].lower() == "pending" for m in metas)})
+    return {"period": period, "lines": lines, "centres": centres, "pending": pending,
+            "source": source}
+
+
+def summarise(lines):
+    """Revenue, expenses, EBITDA and net profit per centre (own currency)."""
+    df = lines[~lines["Account code"].isin(EXCLUDED_CODES)]
+    rev = df[df["Account code"].isin(REVENUE_CODES)].groupby("Centre")["Amount"].sum()
+    opex = df[~df["Account code"].isin(REVENUE_CODES | INTEREST_CODES)] \
+        .groupby("Centre")["Amount"].sum()
+    interest = df[df["Account code"].isin(INTEREST_CODES)].groupby("Centre")["Amount"].sum()
+    out = pd.DataFrame({"Revenue": rev, "Expenses": opex, "Interest": interest}).fillna(0.0)
+    out["EBITDA"] = out["Revenue"] - out["Expenses"]
+    out["Net Profit"] = out["EBITDA"] - out["Interest"]
+    return out.drop(columns="Interest").rename_axis("Centre").reset_index()
+
+
+def _blank(v):
+    return v is None or (isinstance(v, float) and pd.isna(v)) or str(v).strip() == ""
+
+
+def match_centres(centres, master, aliases):
+    """Add a 'Location' column (master name or None) and 'suggestions'."""
+    matcher = ingest.LocationMatcher(master["Location"].tolist(), aliases)
+    out = centres.copy()
+    out["Location"] = [matcher.resolve(n, crm=CRM) for n in out["Centre"]]
+    out["suggestions"] = [matcher.suggestions(n) if _blank(loc) else []
+                          for n, loc in zip(out["Centre"], out["Location"])]
+    return out
+
+
+def checks(lines, centres, master):
+    """Things to look at before trusting the month. List of {Location, Check, Detail}."""
+    out = []
+    master_country = {r["Location"]: str(r.get("Country", "")).strip()
+                      for _, r in master.iterrows()}
+    amounts = lines.pivot_table(index="Centre", columns="Account code", values="Amount",
+                                aggfunc="sum", fill_value=0.0)
+    for _, c in centres.iterrows():
+        name = c["Centre"]
+        loc = c["Centre"] if _blank(c.get("Location")) else c["Location"]
+        a = amounts.loc[name] if name in amounts.index else pd.Series(dtype=float)
+        get = lambda codes: float(sum(a.get(k, 0.0) for k in codes))
+        rev = get(REVENUE_CODES)
+        if rev <= 0:
+            out.append((loc, "No revenue", "Total revenue is 0 or less"))
+        elif rev < LOW_REVENUE:
+            out.append((loc, "Very low revenue", f"Total revenue {rev:,.0f}"))
+        if rev > 0 and get(TUTOR_CODES) == 0:
+            out.append((loc, "No tutor wages", "Wages - Tutor and super are 0"))
+        if rev > 0 and get({467}) == 0:
+            out.append((loc, "No royalties", "Royalties are 0"))
+        neg = lines[(lines["Centre"] == name) & (lines["Amount"] < 0) &
+                    ~lines["Account code"].isin(REVENUE_CODES)]
+        if not neg.empty:
+            out.append((loc, "Negative costs (credits)", ", ".join(
+                f"{r['Account']} {r['Amount']:,.0f}" for _, r in neg.iterrows())))
+        if c["Currency"] not in ("", "AUD") and _blank(c.get("FX rate to AUD")):
+            out.append((loc, "No exchange rate",
+                        f"{c['Currency']} with no rate to AUD: left out of AUD totals"))
+        mc = master_country.get(loc)
+        if mc and not _blank(c.get("Country")) and mc.lower() != str(c["Country"]).lower():
+            out.append((loc, "Country differs",
+                        f"File says {c['Country']}, location list says {mc}"))
+    return pd.DataFrame(out, columns=["Location", "Check", "Detail"])
+
+
+def records(lines, centres, period):
+    """Rows for the Sheet's P&L tab (matched centres only)."""
+    meta = centres.set_index("Centre")
+    out = []
+    for _, r in lines.iterrows():
+        c = meta.loc[r["Centre"]]
+        if _blank(c.get("Location")):
+            continue
+        fx = c.get("FX rate to AUD")
+        out.append({"Period": period, "Location": c["Location"], "Country": c["Country"],
+                    "Currency": c["Currency"], "Status": c["Status"],
+                    "Account code": int(r["Account code"]), "Account": r["Account"],
+                    "P&L section": r["P&L section"], "Amount": float(r["Amount"]),
+                    "FX rate to AUD": "" if _blank(fx) else float(fx)})
+    return out

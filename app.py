@@ -2236,7 +2236,7 @@ def report_allowed(report, allowed_tabs):
     return num in tabs or name.lower() in tabs or report.lower() in tabs
 
 REPORTS = [r for r in REPORTS if report_allowed(r, st.session_state.get("allowed_tabs", []))]
-ADMIN_PAGES = ["⚙ Weekly Upload", "⚙ Locations", "⚙ Sheet Setup"] if st.session_state.get("access_level") == "admin" else []
+ADMIN_PAGES = ["⚙ Weekly Upload", "⚙ P&L Upload", "⚙ Locations", "⚙ Sheet Setup"] if st.session_state.get("access_level") == "admin" else []
 if not REPORTS:
     st.warning("No reports are assigned to your account. Please contact your administrator."); st.stop()
 
@@ -2263,6 +2263,7 @@ NAV_GROUPS = [
 # Admin-only pages (ADMIN_PAGES is empty for everyone else, so non-admins never see or reach them)
 ADMIN_NAV = [
     ("⚙ Weekly Upload", "Weekly Upload", ":material/upload_file:"),
+    ("⚙ P&L Upload",    "P&L Upload",    ":material/request_quote:"),
     ("⚙ Locations",     "Locations",     ":material/store:"),
     ("⚙ Sheet Setup",   "Sheet Setup",   ":material/table_chart:"),
 ]
@@ -2352,6 +2353,7 @@ elif selected_report=="11 · AI Outlier Analysis":     report_outliers_alerts(df
 elif selected_report in ADMIN_PAGES:
     spreadsheet = get_sheets_client().open_by_key(SHEET_ID)
     page = {"⚙ Weekly Upload": admin_pages.page_weekly_upload,
+            "⚙ P&L Upload": admin_pages.page_pnl_upload,
             "⚙ Locations": admin_pages.page_locations,
             "⚙ Sheet Setup": admin_pages.page_sheet_setup}[selected_report]
     page(spreadsheet, df_wm, df_rv, st.cache_data.clear)

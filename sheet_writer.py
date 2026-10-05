@@ -25,8 +25,8 @@ def _grid_range(ws, row0, row1, col0, col1):
 
 
 def _text_safe(value):
-    """Stop Sheets reading a week label like '1/2027' as a date."""
-    if isinstance(value, str) and re.fullmatch(r"\d{1,2}/\d{4}", value):
+    """Stop Sheets reading a week label like '1/2027' or a month like '2026-08' as a date."""
+    if isinstance(value, str) and re.fullmatch(r"\d{1,2}/\d{4}|\d{4}-\d{2}", value):
         return "'" + value
     return value
 
@@ -134,14 +134,15 @@ def append_records(ws, records, prefer_formula=()):
     return len(rows)
 
 
-def replace_week(ws, records, name_header, week_label, prefer_formula=()):
-    """Replace this week's rows for these locations.
+def replace_week(ws, records, name_header, week_label, prefer_formula=(),
+                 key_header="Date - Week/Year"):
+    """Replace this week's (or month's, with key_header="Period") rows for these locations.
 
     New rows are added first and the old ones removed afterwards, so a
     failure part-way leaves the week in twice rather than missing.
     """
     headers, rows = read_tab(ws)
-    ni, wi = headers.index(name_header), headers.index("Date - Week/Year")
+    ni, wi = headers.index(name_header), headers.index(key_header)
     names = {r[name_header] for r in records}
     old = [i + 2 for i, r in enumerate(rows)
            if len(r) > max(ni, wi) and r[wi].strip() == week_label and r[ni] in names]
@@ -156,6 +157,17 @@ def update_cells(ws, updates):
         return
     ws.batch_update([{"range": rowcol_to_a1(r, c), "values": [[_text_safe(v)]]}
                      for r, c, v in updates], value_input_option="USER_ENTERED")
+
+
+def get_or_add_tab(spreadsheet, title, headers):
+    """The tab, created with this header row if it doesn't exist yet."""
+    import gspread
+    try:
+        return spreadsheet.worksheet(title)
+    except gspread.WorksheetNotFound:
+        ws = spreadsheet.add_worksheet(title, rows=1000, cols=len(headers))
+        ws.update([headers], "A1")
+        return ws
 
 
 def get_aliases_ws(spreadsheet, create=True):
