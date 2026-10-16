@@ -170,7 +170,9 @@ def test_report_for_a_gpm_shows_only_their_centres():
     html = "".join(m.value for m in at.markdown)
     assert "Howick" in html and "Auburn" not in html
     bench = at.dataframe[0].value          # typical values come from every centre
-    assert bench["Centres"].sum() == 3
+    assert bench["Centres"].sum() == 2     # established only: Burwood is 2 months old
+    dev = at.dataframe[1].value            # developing centres get their own benchmark
+    assert dev["Centres"].sum() == 1
 
 
 def test_report_with_no_pnl_yet():
@@ -275,11 +277,60 @@ def test_deep_dive_centre_and_group():
         assert not at.exception, at.exception
     at.selectbox(key="dd_view").set_value("Network").run()
     assert not at.exception, at.exception
-    at.selectbox(key="dd_line").set_value("Rent").run()
-    assert not at.exception, at.exception
+    for span in pr.DD_SPANS:
+        at.selectbox(key="dd_span").set_value(span).run()
+        assert not at.exception, at.exception
+    assert "A line over time" not in "".join(m.value for m in at.markdown)
 
 
 def test_deep_dive_gpm_sees_only_their_centres():
     at = run_deep_dive("gpm", ["Success Tutoring - Howick"])
     assert not at.exception, at.exception
     assert at.selectbox(key="dd_pick_Centre").options == ["Howick"]
+
+
+def test_months_shown():
+    ps = ["2025-11", "2025-12", "2026-01", "2026-02", "2026-03"]
+    assert pr.months_shown(ps, "Last 3 months", "2026-02") == ["2025-12", "2026-01", "2026-02"]
+    assert pr.months_shown(ps, "Year to date", "2026-03") == ["2026-01", "2026-02", "2026-03"]
+    assert pr.months_shown(ps, "All months", "2026-01") == ps[:3]
+
+
+def test_small_samples_and_developing_centres():
+    assert pnl.small_sample(7) and not pnl.small_sample(8)
+    assert pnl.is_developing(11) and not pnl.is_developing(12) and not pnl.is_developing(None)
+    b = bench_frame()
+    b["Age (Months)"] = [30] * 8 + [6]
+    est, dev = pnl.split_by_age(b)
+    assert list(dev.index) == ["Big"] and len(est) == 8
+    t = pnl.tutor_benchmarks(est)
+    assert t.at["40–59", "Based on"] == 8 and t.at["40–59", "Sample"] == ""
+    t = pnl.tutor_benchmarks(est.iloc[:5])
+    assert t.at["40–59", "Based on"] == 5 and t.at["40–59", "Sample"].startswith("⚠")
+    assert t.at["60–79", "Sample"].startswith("⚠")         # borrowed from a small band
+    peers, desc = pr.peers_by_age(b, 6, "Australia", 55, "Big")
+    assert len(peers) == 0 or desc.startswith("developing")
+    peers, desc = pr.peers_by_age(b, 30, "Australia", 55, "C0")
+    assert "Big" not in peers.index and desc.startswith("established")
+
+
+def test_months_reported_and_break_even_flags():
+    cent = pr.centre_table(PNL, pr.members_by_month(WM), VL, ["2026-07", "2026-08"], AGE)
+    rates = {b: 30.0 for b in pnl.membership_bands()}
+    samples = {b: 3 for b in pnl.membership_bands()}
+    cols, _ = pr.build_columns(cent, "Centre", lambda r: r, rates, samples, 2)
+    html = pr.side_by_side_html(cols)
+    assert "1 of 2 ⚠" in html and "2 of 2" in html       # Howick/Burwood missed July
+    assert "⚠</td>" in html                              # break-even on a small sample
+    net, _ = pr.build_columns(cent, "Network", lambda r: r, rates, samples, 2)
+    assert "2 missed a month" in pr.side_by_side_html(net)
+
+
+def test_break_even_model_has_only_actual_and_break_even():
+    at = run_report()
+    at.selectbox(key="pnl_model_pick").set_value("Auburn").run()
+    assert not at.exception, at.exception
+    text = "".join(m.value for m in at.markdown)
+    assert "20 members" not in text and "Break-even" in text
+    assert any("case by case" in i.value for i in at.info)
+    assert not at.get("plotly_chart")

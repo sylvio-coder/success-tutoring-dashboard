@@ -393,6 +393,33 @@ def membership_bands(step=20, top=200):
 
 # ── Tutor % of revenue by members band ────────────────────────────────────────
 MIN_BENCH_CENTRES = 3
+SMALL_SAMPLE = 8                # benchmarks from fewer centres are flagged as indicative
+NEW_CENTRE_MONTHS = 12          # younger centres get their own "developing" benchmarks
+
+
+def is_developing(age_months):
+    """Under 12 months old (unknown age counts as established)."""
+    try:
+        return age_months is not None and not pd.isna(age_months) and \
+            float(age_months) < NEW_CENTRE_MONTHS
+    except (TypeError, ValueError):
+        return False
+
+
+def split_by_age(bench):
+    """(established, developing) centres. bench needs an 'Age (Months)' column."""
+    if "Age (Months)" not in bench:
+        return bench, bench.iloc[0:0]
+    dev = bench["Age (Months)"].map(is_developing).astype(bool)
+    return bench[~dev], bench[dev]
+
+
+def small_sample(n):
+    return n is not None and n < SMALL_SAMPLE
+
+
+def sample_flag(n):
+    return f"⚠ small sample ({int(n)} centres)" if small_sample(n) else ""
 
 
 def tutor_benchmarks(cent, min_n=MIN_BENCH_CENTRES):
@@ -402,7 +429,8 @@ def tutor_benchmarks(cent, min_n=MIN_BENCH_CENTRES):
     Centres with no revenue, no members or no tutor wages are left out. A band with
     fewer than min_n centres borrows the nearest band that has enough (else the
     median of all centres). Returns a DataFrame indexed by band:
-    Centres, Benchmark % (its own median, if any), Use %, Source.
+    Centres, Benchmark % (its own median, if any), Use %, Source, Based on (centres
+    behind the % used) and Sample (a flag when that is fewer than SMALL_SAMPLE).
     """
     bands = membership_bands()
     ok = cent[(cent["Total Revenue"] > 0) & (cent["Tutor Wages + Super"] > 0) &
@@ -414,26 +442,32 @@ def tutor_benchmarks(cent, min_n=MIN_BENCH_CENTRES):
     out["Benchmark %"] = pct.groupby(band).median().reindex(bands)
     enough = [i for i, b in enumerate(bands) if out.at[b, "Centres"] >= min_n]
     overall = float(pct.median()) if len(pct) else 35.0
-    use, source = [], []
+    use, source, basis = [], [], []
     for i, b in enumerate(bands):
         if i in enough:
             use.append(out.at[b, "Benchmark %"])
             source.append("This band")
+            basis.append(int(out.at[b, "Centres"]))
         elif enough:
             j = min(enough, key=lambda k: (abs(k - i), k))
             use.append(out.at[bands[j], "Benchmark %"])
             source.append(f"Nearest band ({bands[j]})")
+            basis.append(int(out.at[bands[j], "Centres"]))
         else:
             use.append(overall)
             source.append("All centres" if len(pct) else "Default")
+            basis.append(len(pct))
     # Tutor costs don't rise as a share of revenue as centres grow: cap each band at
     # the band below it.
     for i in range(1, len(use)):
         if use[i] > use[i - 1]:
             use[i] = use[i - 1]
             source[i] = f"Capped at {bands[i - 1]}"
+            basis[i] = basis[i - 1]
     out["Use %"] = [round(float(u), 1) for u in use]
     out["Source"] = source
+    out["Based on"] = basis
+    out["Sample"] = [sample_flag(n) for n in basis]
     return out
 
 

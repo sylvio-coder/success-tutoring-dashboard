@@ -141,12 +141,14 @@ def combine(rows, to_aud):
     s["Members"] = r["Members"].sum(min_count=1)
     s["Months"] = r["Months"].max()
     s["Centres"] = len(r)
+    s["Months short"] = int((r["Months"] < r["Months"].max()).sum())
     return s
 
 
-def add_break_even(col, rates):
+def add_break_even(col, rates, samples=None):
     """Break-even with tutor % from the members band. A group counts as its number of
-    centres, each with the group's average members and costs."""
+    centres, each with the group's average members and costs. samples: {band: centres
+    behind that band's %}, to flag break-evens resting on a small sample."""
     rev, mem = col["Total Revenue"], col.get("Members")
     mem = 0 if mem is None or pd.isna(mem) else mem
     n = int(col.get("Centres", 1) or 1)
@@ -154,18 +156,21 @@ def add_break_even(col, rates):
     per_member = rev / mem if mem else 0
     be_rev, be_mem = pnl.break_even_banded(per_member, fixed, col["Royalty Min"], rates, n)
     col["BE revenue"], col["BE members"] = be_rev, be_mem
+    col["BE sample"] = (samples or {}).get(pnl.membership_band(be_mem / n)) \
+        if be_mem else None
     col["BE gap"] = (mem - be_mem) if be_mem is not None and mem else None
     col["AMV"] = rev / mem / pnl.WEEKS_PER_MONTH if mem else None
     return col
 
 
-def build_columns(cent, view, state_of, rates):
+def build_columns(cent, view, state_of, rates, samples=None, n_periods=1):
     """[(heading, currency, column)] for the chosen view."""
     cols = []
     if view == "Centre":
         for loc, r in cent.sort_values("Total Revenue", ascending=False).iterrows():
-            col = add_break_even(r.copy(), rates)
+            col = add_break_even(r.copy(), rates, samples)
             col["Locations"] = (loc,)
+            col["Months of"] = n_periods
             cols.append((loc.replace(PREFIX, ""), r["Currency"], col))
         return cols, []
     if view == "Network":
@@ -180,13 +185,20 @@ def build_columns(cent, view, state_of, rates):
         mixed = g["Currency"].nunique() > 1
         if mixed:
             left_out += g[g["FX"].isna()].index.tolist()
-        col = add_break_even(combine(g, mixed), rates)
+        col = add_break_even(combine(g, mixed), rates, samples)
+        col["Months of"] = n_periods
+        col["Months short"] = int((g["Months"] < n_periods).sum())
         countries = g["Country"].dropna().unique()
         col["Country"] = countries[0] if len(countries) == 1 else None
         col["Locations"] = tuple(g.index)
         cols.append((f"{name} ({int(col['Centres'])})", "AUD" if mixed else g["Currency"].iloc[0],
                      col))
     return cols, left_out
+
+
+DISCLAIMER = ("Break-even figures are estimates from network benchmarks and this centre's "
+              "recent figures. A true break-even should be worked out case by case with the "
+              "centre's own costs, lease and staffing plans.")
 
 
 # ── Rendering ─────────────────────────────────────────────────────────────────
@@ -210,6 +222,20 @@ def side_by_side_html(cols, notes=None, rows=None):
                 cells.append(f'<td class="{neg}">{_money(v)}</td><td class="pct">{_pct(v, rev)}</td>')
             elif key == "AMV" or style == "money":
                 cells.append(f"<td>{_money(v)}</td><td></td>")
+            elif key == "Months":
+                of = int(c.get("Months of") or 0)
+                short = int(c.get("Months short") or 0)
+                if of and v is not None and not pd.isna(v):
+                    if c.get("Centres"):
+                        txt = f"{int(v)} of {of}" + (f" · {short} missed a month ⚠" if short else "")
+                    else:
+                        txt = f"{int(v)} of {of}" + (" ⚠" if v < of else "")
+                else:
+                    txt = _count(v)
+                cells.append(f"<td>{html.escape(txt)}</td><td></td>")
+            elif key == "BE members":
+                flag = " ⚠" if pnl.small_sample(c.get("BE sample")) else ""
+                cells.append(f"<td>{_count(v)}{flag}</td><td></td>")
             elif key == "BE gap":
                 neg = " neg" if v is not None and not pd.isna(v) and v < 0 else ""
                 cells.append(f'<td class="{neg}">{_count(v, True)}</td><td></td>')
@@ -238,22 +264,38 @@ def to_excel(cols, sheet="P&L"):
 
 # ── Report ────────────────────────────────────────────────────────────────────
 def tutor_rate_settings(bench_cent, key):
-    """Editable tutor % by members band, starting from the benchmark. Returns {band: %}."""
-    bench = pnl.tutor_benchmarks(bench_cent).rename_axis("Members band").reset_index()
+    """Editable tutor % by members band from established centres (12 months or older),
+    plus a reference table for developing centres. Returns ({band: %}, {band: centres})."""
+    established, developing = pnl.split_by_age(bench_cent)
+    bench = pnl.tutor_benchmarks(established).rename_axis("Members band").reset_index()
     with st.expander("Break-even settings: tutor wages + super % of revenue by members band"):
         st.caption("Tutor costs fall as a share of revenue as centres grow, so the break-even "
-                   "uses the typical (median) % for centres of each size instead of carrying a "
-                   "centre's current % forward. Worked out from all reporting centres; bands "
-                   f"with fewer than {pnl.MIN_BENCH_CENTRES} centres borrow the nearest band. "
-                   "Change 'Use %' to test higher or lower costs.")
+                   "uses the typical (median) % for established centres (12 months or older) "
+                   "of each size instead of carrying a centre's current % forward. Bands with "
+                   f"fewer than {pnl.MIN_BENCH_CENTRES} centres borrow the nearest band; "
+                   f"⚠ marks a % based on fewer than {pnl.SMALL_SAMPLE} centres, which may not "
+                   "be a big enough sample. Change 'Use %' to test higher or lower costs.")
         edited = st.data_editor(
-            bench, key=key, hide_index=True, use_container_width=True,
-            disabled=["Members band", "Centres", "Benchmark %", "Source"],
+            bench.drop(columns="Based on"), key=key, hide_index=True,
+            use_container_width=True,
+            disabled=["Members band", "Centres", "Benchmark %", "Source", "Sample"],
             column_config={
                 "Benchmark %": st.column_config.NumberColumn(format="%.1f%%"),
                 "Use %": st.column_config.NumberColumn(min_value=0.0, max_value=100.0,
                                                        step=0.5, format="%.1f%%")})
-    return dict(zip(edited["Members band"], edited["Use %"].fillna(0).astype(float)))
+        dev = pnl.tutor_benchmarks(developing) if len(developing) else None
+        st.markdown("**Developing centres (under 12 months)**: for guidance only; not used in "
+                    "the break-even.")
+        if dev is None or dev["Centres"].sum() == 0:
+            st.caption("No developing centres reported for these months.")
+        else:
+            dev = dev[dev["Centres"] > 0].rename_axis("Members band").reset_index()
+            st.dataframe(dev[["Members band", "Centres", "Benchmark %", "Sample"]],
+                         hide_index=True, use_container_width=True,
+                         column_config={"Benchmark %":
+                                        st.column_config.NumberColumn(format="%.1f%%")})
+    rates = dict(zip(edited["Members band"], edited["Use %"].fillna(0).astype(float)))
+    return rates, dict(zip(bench["Members band"], bench["Based on"]))
 
 
 def report_pnl(df_pnl, df_wm, vl, helpers, bench=None):
@@ -306,8 +348,10 @@ def report_pnl(df_pnl, df_wm, vl, helpers, bench=None):
         f"{pnl.period_name(periods[0])} – {pnl.period_name(periods[-1])} ({len(periods)} months)"
     b_pnl, b_wm = bench if bench is not None else (df_pnl, df_wm)
     bench_cent = centre_table(b_pnl, members_by_month(b_wm), vl, periods, helpers["age_group"])
-    rates = tutor_rate_settings(bench_cent, key=f"pnl_rates_{periods[0]}_{periods[-1]}")
-    cols, left_out = build_columns(cent, view, helpers["state_of"], rates)
+    rates, samples = tutor_rate_settings(bench_cent,
+                                         key=f"pnl_rates_{periods[0]}_{periods[-1]}")
+    cols, left_out = build_columns(cent, view, helpers["state_of"], rates, samples,
+                                   len(periods))
 
     st.markdown(f'<div class="section-header">P&L by {view.lower()} — {label}</div>',
                 unsafe_allow_html=True)
@@ -315,11 +359,14 @@ def report_pnl(df_pnl, df_wm, vl, helpers, bench=None):
     st.caption(
         "Average per month over the months each centre reported. Members = average active "
         "members (Weekly Membership); Average Membership Value = revenue ÷ members ÷ 4.2 weeks. "
-        "Break-even: tutor wages at the typical % for the members band (see settings above); "
-        "rent, manager wages, marketing and OPEX stay fixed; royalties are the higher of the "
-        "centre's Royalty Min (Vlookup, blank = 2,200) or 8% of revenue. A state, country or "
-        "network counts as its number of centres, each with the average members and costs. "
-        "Groups mixing currencies are in AUD.")
+        "Months reported: ⚠ when a centre missed a month in the chosen period. "
+        "Break-even: tutor wages at the typical % for established centres of that size (see "
+        "settings above); rent, manager wages, marketing and OPEX stay at the centre's own "
+        "amounts; royalties are the higher of the centre's Royalty Min (Vlookup, blank = "
+        "2,200) or 8% of revenue. A state, country or network counts as its number of "
+        "centres, each with the average members and costs. ⚠ on break-even members: the "
+        f"tutor % used comes from fewer than {pnl.SMALL_SAMPLE} centres. Groups mixing "
+        "currencies are in AUD. " + DISCLAIMER)
     if left_out:
         st.warning("Left out of AUD totals (no exchange rate): " +
                    ", ".join(x.replace(PREFIX, "") for x in left_out))
@@ -331,10 +378,10 @@ def report_pnl(df_pnl, df_wm, vl, helpers, bench=None):
     acct_bench = pnl.account_table(b_pnl, periods)
     outliers_section(cols, cent, bench_cent, acct_bench, label, helpers)
     network_outliers(cent, bench_cent, label)
-    break_even_model(cols, label, helpers, rates)
+    break_even_model(cols, label, rates, samples)
 
 
-def break_even_model(cols, label, helpers, rates):
+def break_even_model(cols, label, rates, samples):
     st.markdown('<div class="section-header">Break-even model</div>', unsafe_allow_html=True)
     names = [h for h, _, _ in cols]
     a, b = st.columns([2, 3])
@@ -356,72 +403,49 @@ def break_even_model(cols, label, helpers, rates):
         rmin = c2.number_input("Royalty minimum $ / month" + (" (all centres)" if n > 1 else ""),
                                min_value=0.0, value=float(col["Royalty Min"]), step=100.0,
                                key=f"pnl_rmin_{pick}")
-    r1, r2 = st.columns([3, 1])
-    lo, hi = r1.select_slider(f"Range ({unit})", options=list(range(10, 310, 10)),
-                              value=(20, 200), key="pnl_model_range")
-    step = r2.selectbox("Step", [10, 20, 50], index=1, key="pnl_model_step")
 
     per_member = amv * pnl.WEEKS_PER_MONTH
     fixed_lines = {k: col[k] for k in pnl.FIXED_ROWS}
     fixed = sum(fixed_lines.values())
     be_rev, be_mem = pnl.break_even_banded(per_member, fixed, rmin, rates, n)
 
-    def model(per_centre):
-        """The whole centre or group with this many members per centre."""
-        total = per_centre * n
-        c = pnl.model_column(total, per_member, pnl.rate_for(per_centre, rates), fixed_lines,
-                             rmin)
-        c.update({"Members": total, "AMV": amv})
-        return c
-
     actual = {k: col.get(k) for k in AMOUNT_KEYS}
     actual.update({"Members": mem, "AMV": amv0})
     model_cols = [("Actual", label, actual)]
+    be_band = sample = None
     if be_mem:
-        model_cols.append(("Break-even", f"{be_mem / n:,.1f} {unit}", model(be_mem / n)))
-    model_cols += [(f"{m} {unit}", "Model", model(m)) for m in range(lo, hi + 1, step)]
+        per_centre = be_mem / n
+        be_band = pnl.membership_band(per_centre)
+        sample = samples.get(be_band)
+        c = pnl.model_column(be_mem, per_member, pnl.rate_for(per_centre, rates), fixed_lines,
+                             rmin)
+        c.update({"Members": be_mem, "AMV": amv})
+        model_cols.append(("Break-even" + (" ⚠" if pnl.small_sample(sample) else ""),
+                           f"{per_centre:,.1f} {unit}", c))
 
     notes = {"Total Revenue": f"Members × 4.2 wks × ${amv:,.2f}",
-             "Tutor Wages + Super": "% for the members band (break-even settings)",
+             "Tutor Wages + Super": "Typical % for established centres of this size",
              "Royalties": f"Higher of ${rmin:,.0f} or 8% of revenue"}
-    notes.update({k: "Dollar value fixed (actual)" for k in pnl.FIXED_ROWS})
+    notes.update({k: "Centre's own amount (fixed)" for k in pnl.FIXED_ROWS})
     rows = [r for r in TABLE_ROWS[:13] if r[1] != "Months"]
     st.markdown(side_by_side_html(model_cols, notes, rows), unsafe_allow_html=True)
 
-    band_now = pnl.membership_band(mem / n)
-    tutor_note = (f" Tutor costs are {tutor0:.0f}% of revenue now; the break-even uses "
-                  f"{rates.get(band_now, 0):.0f}% at its current size ({band_now} {unit}), "
-                  "changing with size.")
+    tutor_note = (f" Tutor costs are {tutor0:.0f}% of revenue now; at break-even size the "
+                  f"typical is {pnl.rate_for(be_mem / n, rates) * 100:.0f}%." if be_mem else "")
     if be_mem:
         gap = mem - be_mem
-        st.markdown(_md(f"**{pick}** needs **{be_mem:,.0f} members** "
+        st.markdown(_md(f"**{pick}** needs about **{be_mem:,.0f} members** "
                         f"({cur} {_money(be_rev)} a month) to break even and has "
                         f"**{mem:,.0f}**: " + (f"**{gap:,.0f} above** break-even." if gap >= 0
                                               else f"**{-gap:,.0f} short**.") + tutor_note))
+        if pnl.small_sample(sample):
+            st.warning(f"⚠ The tutor % at break-even size ({be_band} {unit}) is based on "
+                       f"{int(sample)} centres, fewer than {pnl.SMALL_SAMPLE}. Treat this "
+                       "break-even as indicative.")
     else:
         st.warning("At these settings tutor wages and royalties use up all the revenue, so more "
-                   "members never reach break-even." + tutor_note)
-
-    top = max(hi, int((be_mem or 0) / n * 1.2), int(mem / n * 1.2))
-    xs = [x / 2 for x in range(0, top * 2 + 1)]
-    ys = [model(x)["EBITDA"] for x in xs]
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", name="EBITDA (model)",
-                             line=dict(color="#1f9a9a", width=3),
-                             hovertemplate="%{x:,.0f} " + unit + ": $%{y:,.0f}<extra></extra>"))
-    fig.add_hline(y=0, line=dict(color="#5d6d73", width=1))
-    fig.add_trace(go.Scatter(x=[mem / n], y=[col["EBITDA"]], mode="markers+text", name="Actual",
-                             marker=dict(color="#e0562a", size=11), text=["Actual"],
-                             textposition="top center",
-                             hovertemplate="Actual: %{x:,.0f} " + unit +
-                             ", $%{y:,.0f}<extra></extra>"))
-    if be_mem:
-        fig.add_vline(x=be_mem / n, line=dict(color="#2f6fb5", dash="dash"),
-                      annotation_text=f"Break-even {be_mem / n:,.0f}", annotation_position="top")
-    fig.update_layout(**helpers["std_layout"](f"EBITDA by members — {pick}",
-                                               f"EBITDA per month ({cur})", height=420))
-    fig.update_xaxes(title_text=unit.capitalize())
-    helpers["show_chart"](fig)
+                   "members never reach break-even.")
+    st.info(DISCLAIMER)
 
 
 # ── Outliers ──────────────────────────────────────────────────────────────────
@@ -455,10 +479,22 @@ def comparison_rows(values, peers, lines):
             "Typical": f"${r['Typical $']:,.2f}/wk" if amv else _fmt_pct(r["Typical %"]),
             "Normal range": (f"${r['Range low $']:,.2f}–${r['Range high $']:,.2f}" if amv else
                              f"{_fmt_pct(r['Range low %'])} – {_fmt_pct(r['Range high %'])}"),
-            "Compared with": f"{int(r['Centres'])} centres",
+            "Compared with": f"{int(r['Centres'])} centres" +
+                             (" ⚠ small sample" if pnl.small_sample(r["Centres"]) else ""),
             "Cost vs typical $/month": r["Gap $"],
             "Status": flag})
     return pd.DataFrame(out)
+
+
+def peers_by_age(bench, age, country, members, exclude):
+    """Similar centres of the same stage: a centre under 12 months old is compared with
+    other developing centres, everyone else with established centres."""
+    established, developing = pnl.split_by_age(bench)
+    if pnl.is_developing(age):
+        peers, desc = pnl.peer_set(developing, country, members, exclude)
+        return peers, "developing (under 12 months) " + desc[0].lower() + desc[1:]
+    peers, desc = pnl.peer_set(established, country, members, exclude)
+    return peers, "established " + desc[0].lower() + desc[1:]
 
 
 def _peers_for(col, bench, exclude):
@@ -466,7 +502,8 @@ def _peers_for(col, bench, exclude):
     n = int(col.get("Centres", 1) or 1)
     per_centre = members / n if members and not pd.isna(members) else None
     country = col.get("Country") if isinstance(col.get("Country"), str) else None
-    return pnl.peer_set(bench, country, per_centre if n == 1 else None, exclude)
+    age = col.get("Age (Months)") if n == 1 else None
+    return peers_by_age(bench, age, country, per_centre if n == 1 else None, exclude)
 
 
 def outliers_section(cols, cent, bench, acct_bench, label, helpers):
@@ -512,7 +549,7 @@ def outliers_section(cols, cent, bench, acct_bench, label, helpers):
     st.dataframe(show, hide_index=True, use_container_width=True, column_config={
         "Cost vs typical $/month": st.column_config.NumberColumn(format="%,.0f")})
 
-    # Plain-words summary and chart of the biggest gaps.
+    # Plain-words summary of the biggest gaps.
     lines_only = show[~show["Line"].isin(["EBITDA", "↳ vs centres that pay a manager"])]
     costly = lines_only[lines_only["Cost vs typical $/month"].fillna(0) > 0]
     ebitda = col.get("EBITDA") if not detail else None
@@ -530,21 +567,6 @@ def outliers_section(cols, cent, bench, acct_bench, label, helpers):
                          f"**{_money(ebitda + costly['Cost vs typical $/month'].sum())}**.")
     if parts:
         st.markdown(_md(" ".join(parts)))
-    chart = lines_only.dropna(subset=["Cost vs typical $/month"])
-    chart = chart[chart["Cost vs typical $/month"].abs() >= 1]
-    if not chart.empty:
-        chart = chart.sort_values("Cost vs typical $/month")
-        fig = go.Figure(go.Bar(
-            x=chart["Cost vs typical $/month"], y=chart["Line"], orientation="h",
-            marker_color=["#c8322f" if v > 0 else "#2e8540"
-                          for v in chart["Cost vs typical $/month"]],
-            hovertemplate="%{y}: $%{x:,.0f} a month vs typical<extra></extra>"))
-        fig.add_vline(x=0, line=dict(color="#5d6d73", width=1))
-        fig.update_layout(**helpers["std_layout"](
-            f"Cost vs typical — {pick} ({cur} per month; red costs money, green saves it)", "",
-            height=max(280, 34 * len(chart) + 120)))
-        fig.update_layout(showlegend=False)
-        helpers["show_chart"](fig)
 
 
 def network_outliers(cent, bench, label):
@@ -553,7 +575,8 @@ def network_outliers(cent, bench, label):
     for loc, r in cent.iterrows():
         if not r["Total Revenue"] or r["Total Revenue"] < pnl.LOW_REVENUE:
             continue
-        peers, desc = pnl.peer_set(bench, r.get("Country"), r.get("Members"), loc)
+        peers, desc = peers_by_age(bench, r.get("Age (Months)"), r.get("Country"),
+                                   r.get("Members"), loc)
         if len(peers) < 2:
             continue
         cmp = pnl.compare_lines(r, peers, pnl.BENCH_LINES)
@@ -564,7 +587,8 @@ def network_outliers(cent, bench, label):
                          "Bad": pnl.is_bad(c["Line"], c["Status"]), "Status": c["Status"],
                          "Actual %": c["Actual %"], "Typical %": c["Typical %"],
                          "Cost vs typical $/month": c["Gap $"], "Currency": r["Currency"],
-                         "Compared with": desc})
+                         "Compared with": f"{desc} ({int(c['Centres'])})" +
+                         (" ⚠ small sample" if pnl.small_sample(c["Centres"]) else "")})
     if not rows:
         st.info("No lines outside the normal range for the chosen centres.")
         return
@@ -585,7 +609,9 @@ def network_outliers(cent, bench, label):
                         key=lambda s: s.fillna(0))
     st.caption(f"Every line outside the normal range for each centre's comparison group "
                f"({label}). 'Very' = far outside the range. Centres with under "
-               f"{pnl.LOW_REVENUE:,} revenue a month are left out.")
+               f"{pnl.LOW_REVENUE:,} revenue a month are left out. Centres under 12 months "
+               "old are compared with other developing centres. ⚠ = fewer than "
+               f"{pnl.SMALL_SAMPLE} centres to compare with, so treat as indicative.")
     st.dataframe(df.drop(columns="Bad"), hide_index=True, use_container_width=True,
                  column_config={"Actual %": st.column_config.NumberColumn(format="%.1f%%"),
                                 "Typical %": st.column_config.NumberColumn(format="%.1f%%"),
@@ -595,6 +621,19 @@ def network_outliers(cent, bench, label):
 
 # ── Deep dive ─────────────────────────────────────────────────────────────────
 UNITS = ["$", "% of revenue", "$ per member"]
+DD_SPANS = ["Last 12 months", "Last 3 months", "Year to date", "All months"]
+
+
+def months_shown(index, span, month):
+    """Months up to `month` for the Deep Dive tables."""
+    ps = [p for p in index if p <= month]
+    if span == "Last 3 months":
+        return ps[-3:]
+    if span == "Last 12 months":
+        return ps[-12:]
+    if span == "Year to date":
+        return [p for p in ps if p >= f"{month[:4]}-01"]
+    return ps
 TREND_LINES = pnl.ROW_ORDER + ["EBITDA", "Net Profit"]
 
 
@@ -682,29 +721,13 @@ def _card(label, value, delta=None, delta_text="", good=None):
             f'<div class="metric-value">{html.escape(value)}</div>{d}</div>')
 
 
-def peer_typical_by_month(bench_lm, bench_members, binfo, line, country, per_centre, exclude):
-    """Typical (median) % of revenue for this line among similar centres, each month."""
-    out = {}
-    for period, g in bench_lm.groupby(level="Period"):
-        t = g.droplevel("Period").copy()
-        t["Country"] = binfo["Country"].reindex(t.index)
-        t["Members"] = bench_members.xs(period, level="Period").reindex(t.index) \
-            if not bench_members.empty and period in bench_members.index.get_level_values(
-                "Period") else None
-        peers, _ = pnl.peer_set(t, country, per_centre, exclude)
-        peers = peers[peers["Total Revenue"] > 0]
-        if len(peers) >= 2:
-            out[period] = (peers[line] / peers["Total Revenue"] * 100).median()
-    return pd.Series(out, dtype=float)
-
-
 def report_deep_dive(df_pnl, df_wm, vl, helpers, bench=None):
     """One centre or group month by month: headline numbers, where the revenue goes,
-    every line over time (with the typical value for similar centres), every account."""
+    every line by month, every account."""
     st.markdown('<div class="report-title">P&L Deep Dive</div>', unsafe_allow_html=True)
     st.markdown('<div class="report-subtitle">One centre or group month by month: headline '
-                'numbers, where the money goes, and each revenue and expense line over time '
-                'against similar centres.</div>', unsafe_allow_html=True)
+                'numbers, where the money goes, and each revenue and expense line over time.'
+                '</div>', unsafe_allow_html=True)
     if df_pnl.empty:
         st.info("No P&L figures yet. An admin can add a month on the P&L Upload page.")
         return
@@ -716,12 +739,13 @@ def report_deep_dive(df_pnl, df_wm, vl, helpers, bench=None):
     panel = st.container(border=True)
     with panel:
         st.markdown('<div class="filter-label">Filters</div>', unsafe_allow_html=True)
-        a, b, c, d = st.columns([1, 2, 1, 1])
+        a, b, c, d, e = st.columns([1, 2, 1, 1, 1])
         view = a.selectbox("Show by", VIEWS, key="dd_view")
         opts = group_options(info, view, helpers["state_of"])
         pick = b.selectbox("Centre or group", list(opts), key=f"dd_pick_{view}")
         month = c.selectbox("Month", periods[::-1], format_func=pnl.period_name, key="dd_month")
-        unit = d.selectbox("Show as", UNITS, key="dd_unit")
+        span = d.selectbox("Months shown", DD_SPANS, key="dd_span")
+        unit = e.selectbox("Show as", UNITS, key="dd_unit")
     locs = opts[pick]
     data, cur, left_out = entity_months(lm, members, info, locs)
     data = data[data.index <= month]
@@ -801,9 +825,9 @@ def report_deep_dive(df_pnl, df_wm, vl, helpers, bench=None):
     helpers["show_chart"](fig)
 
     # ── Every line by month ──
-    recent = data.tail(12)
-    st.markdown(f'<div class="section-header">Every line by month ({unit})</div>',
-                unsafe_allow_html=True)
+    recent = data.loc[months_shown(list(data.index), span, month)]
+    st.markdown(f'<div class="section-header">Every line by month ({unit}, '
+                f'{span.lower()})</div>', unsafe_allow_html=True)
     table = _in_units(recent, unit, TREND_LINES).T
     table.columns = [pnl.period_name(p) for p in table.columns]
     shown = table.apply(lambda col: col.map(lambda v: _fmt_unit(v, unit)))
@@ -823,58 +847,32 @@ def report_deep_dive(df_pnl, df_wm, vl, helpers, bench=None):
     members_row = pd.DataFrame([[_count(v) for v in recent["Members"]] +
                                 [""] * (shown.shape[1] - len(recent))],
                                index=["Members"], columns=shown.columns)
-    st.dataframe(pd.concat([members_row, shown]), use_container_width=True)
+    full = pd.concat([members_row, shown])
+    full.insert(0, "Line", full.index)
+    st.dataframe(full, hide_index=True, use_container_width=True,
+                 column_config={"Line": st.column_config.TextColumn(
+                     "Line", width="large", pinned=True)})
     if len(data) < 2:
         st.caption("Only one month uploaded so far: trends and month-on-month changes appear "
                    "as more months are added.")
 
-    # ── A line over time against similar centres ──
-    st.markdown('<div class="section-header">A line over time, against similar centres</div>',
-                unsafe_allow_html=True)
-    line = st.selectbox("Line", TREND_LINES[1:], key="dd_line")
-    b_pnl, b_wm = bench if bench is not None else (df_pnl, df_wm)
-    b_lm = pnl.location_months(b_pnl)
-    b_info = location_info(b_pnl, vl)
-    countries = info.loc[info.index.intersection(locs), "Country"].dropna().unique()
-    country = countries[0] if len(countries) == 1 else None
-    per_centre = mem / n_now if mem and not pd.isna(mem) and n_now else None
-    typical = peer_typical_by_month(b_lm, members_by_month(b_wm), b_info, line, country,
-                                    per_centre if len(locs) == 1 else None,
-                                    locs if len(locs) == 1 else None)
-    own = _in_units(data, "% of revenue", [line])[line]
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=[pnl.period_name(p) for p in own.index], y=own.values,
-                             mode="lines+markers", name=pick, line=dict(color="#1f9a9a", width=3),
-                             hovertemplate="%{x}: %{y:.1f}%<extra>" + html.escape(pick) +
-                             "</extra>"))
-    t = typical.reindex(own.index)
-    if t.notna().any():
-        fig.add_trace(go.Scatter(x=[pnl.period_name(p) for p in t.index], y=t.values,
-                                 mode="lines+markers", name="Typical for similar centres",
-                                 line=dict(color="#5d6d73", width=2, dash="dash"),
-                                 hovertemplate="%{x}: %{y:.1f}%<extra>Typical</extra>"))
-    fig.update_layout(**helpers["std_layout"](f"{line} as % of revenue — {pick}",
-                                               "% of revenue", height=380))
-    helpers["show_chart"](fig)
-    st.caption("Typical = the middle value for centres in the same country and members band "
-               "each month (other centres are never named). Shown as % of revenue so centres "
-               "of different sizes and currencies compare fairly.")
-
     # ── Every account ──
-    with st.expander("Every account line by month"):
+    with st.expander(f"Every account line by month ({span.lower()})"):
         d = df_pnl[df_pnl["Location"].isin(locs) & (df_pnl["Period"] <= month)].copy()
         d["Amount"] = d["Amount"].astype(float)
         if len(locs) > 1 and info.loc[info.index.intersection(locs), "Currency"].nunique() > 1:
             d["Amount"] = d["Amount"] * d["Location"].map(info["FX"])
         acc = d.pivot_table(index=["P&L section", "Account"], columns="Period", values="Amount",
                             aggfunc="sum", fill_value=0.0)
-        acc = acc[sorted(acc.columns)[-12:]]
+        acc = acc[[p for p in sorted(acc.columns) if p in set(recent.index)]]
         rev_m = data["Total Revenue"].reindex(acc.columns)
         if unit == "% of revenue":
             acc = acc.div(rev_m.where(rev_m > 0), axis=1) * 100
         elif unit == "$ per member":
             acc = acc.div(data["Members"].reindex(acc.columns).where(lambda m: m > 0), axis=1)
         acc.columns = [pnl.period_name(p) for p in acc.columns]
-        st.dataframe(acc.apply(lambda col: col.map(lambda v: _fmt_unit(v, unit))),
-                     use_container_width=True)
+        acc = acc.apply(lambda col: col.map(lambda v: _fmt_unit(v, unit))).reset_index()
+        st.dataframe(acc, hide_index=True, use_container_width=True,
+                     column_config={"Account": st.column_config.TextColumn(
+                         "Account", width="large", pinned=True)})
         st.caption("Unrelated Expenses (479) are a memo line and aren't in EBITDA or Net Profit.")
