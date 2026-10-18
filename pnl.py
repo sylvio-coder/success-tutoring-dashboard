@@ -649,3 +649,69 @@ def account_table(lines, periods):
     per = d.pivot_table(index=["Location", "Period"], columns="Account", values="Amount",
                         aggfunc="sum", fill_value=0.0)
     return per.groupby(level="Location").mean()
+
+
+# ── Sessions vs students ──────────────────────────────────────────────────────
+SESSION_BAND = 0.10              # ±10% around the average counts as typical
+
+
+def sessions_table(revenue, periods, loc_col):
+    """Weekly averages per centre over the chosen months: active students, sessions and
+    students per session. revenue: the Revenue tab (Date, '# Active Students',
+    'Total Sessions')."""
+    if revenue is None or revenue.empty or "Date" not in revenue:
+        return pd.DataFrame()
+    r = revenue[revenue["Date"].dt.strftime("%Y-%m").isin(periods)]
+    r = r[(r["# Active Students"] > 0) & (r["Total Sessions"] > 0)]
+    if r.empty:
+        return pd.DataFrame()
+    out = r.groupby(loc_col).agg(Students=("# Active Students", "mean"),
+                                 Sessions=("Total Sessions", "mean"))
+    out["Students per session"] = out["Students"] / out["Sessions"]
+    return out
+
+
+def sessions_average(table):
+    """Network students per session (total students ÷ total sessions)."""
+    return table["Students"].sum() / table["Sessions"].sum() if len(table) else None
+
+
+def sessions_status(students_per_session, typical, band=SESSION_BAND):
+    """More sessions than typical for its students (small groups) → 'More sessions';
+    fewer → 'Fewer sessions'; within ±band → 'Typical'."""
+    sessions_ratio = typical / students_per_session      # sessions vs the average line
+    if sessions_ratio > 1 + band:
+        return "More sessions than typical"
+    if sessions_ratio < 1 - band:
+        return "Fewer sessions than typical"
+    return "Typical"
+
+
+def weekly_sessions(revenue, loc_col, end, weeks=12, exclude=()):
+    """Students per session week by week for the `weeks` weeks up to `end`: one column per
+    centre plus 'Network' (total students ÷ total sessions of the centres not excluded,
+    with at least 5 students that week)."""
+    if revenue is None or revenue.empty:
+        return pd.DataFrame()
+    r = revenue[(revenue["Date"] <= end) & (revenue["# Active Students"] > 0) &
+                (revenue["Total Sessions"] > 0)]
+    dates = sorted(r["Date"].unique())[-weeks:]
+    r = r[r["Date"].isin(dates)]
+    per = r.pivot_table(index="Date", columns=loc_col, values="# Active Students",
+                        aggfunc="sum") / \
+        r.pivot_table(index="Date", columns=loc_col, values="Total Sessions", aggfunc="sum")
+    net = r[~r[loc_col].isin(exclude) & (r["# Active Students"] >= 5)].groupby("Date") \
+        .agg(s=("# Active Students", "sum"), n=("Total Sessions", "sum"))
+    per["Network"] = net["s"] / net["n"]
+    return per
+
+
+def trend_word(series, steady=0.03):
+    """'Improving', 'Getting worse' or 'Steady': the last 4 weeks' average students per
+    session against the first 4 weeks' (more students per session = improving)."""
+    s = series.dropna()
+    if len(s) < 6:
+        return None
+    first, last = s.iloc[:4].mean(), s.iloc[-4:].mean()
+    change = last / first - 1
+    return "Improving" if change > steady else "Getting worse" if change < -steady else "Steady"

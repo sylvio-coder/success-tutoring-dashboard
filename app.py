@@ -311,7 +311,9 @@ def report_pnl(df_wm, page=None):
     page(df, apply_gpm_filter(df_wm), load_vlookup(), dict(
         age_group=get_age_group, age_order=AGE_ORDER + ["Unknown"],
         state_of=lambda r: REGION_TO_STATE.get(r, r) if isinstance(r, str) and r.strip() else None,
-        show_chart=show_chart, std_layout=std_layout, report_filters=report_filters),
+        show_chart=show_chart, std_layout=std_layout, report_filters=report_filters,
+        # Sessions for every centre: the charts show others as unnamed grey dots.
+        revenue=load_revenue()),
         bench=(full, load_weekly_membership()))
 
 @st.cache_data(ttl=300)

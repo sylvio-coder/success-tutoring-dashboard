@@ -34,6 +34,12 @@ WM = pd.DataFrame([{LOC: loc, "Date": pd.Timestamp(d), "# Active members": n}
                    for loc, n in [("Success Tutoring - Auburn", 50), ("Success Tutoring - Howick", 30),
                                   ("Success Tutoring - Burwood", 20)]
                    for d in ["2026-07-12", "2026-08-02", "2026-08-09"]])
+REVENUE = pd.DataFrame([{LOC: loc, "Date": pd.Timestamp(d), "# Active Students": st_,
+                         "Total Sessions": se}
+                        for loc, st_, se in [("Success Tutoring - Auburn", 50, 25),
+                                             ("Success Tutoring - Howick", 30, 30),
+                                             ("Success Tutoring - Burwood", 20, 10)]
+                        for d in ["2026-07-12", "2026-08-02", "2026-08-09"]])
 AGE = lambda m: "24+ months" if m and m > 24 else "0–3 months" if m is not None and m <= 3 \
     else "12–24 months"
 
@@ -135,7 +141,7 @@ def run_report(level="admin", allowed=()):
     def script(level, allowed):
         import streamlit as st
         import pnl_reports as pr
-        from test_pnl_reports import PNL, VL, WM, AGE
+        from test_pnl_reports import PNL, VL, WM, AGE, REVENUE
         st.session_state["access_level"] = level
 
         def filters(df, key_prefix="", panel=None, show_label=True, **k):
@@ -145,7 +151,7 @@ def run_report(level="admin", allowed=()):
             age_group=AGE, age_order=["0–3 months", "12–24 months", "24+ months", "Unknown"],
             state_of=lambda r: r, show_chart=st.plotly_chart,
             std_layout=lambda t, y="", height=400: dict(title=t, height=height),
-            report_filters=filters), bench=(PNL, WM))
+            report_filters=filters, revenue=REVENUE), bench=(PNL, WM))
     return AppTest.from_function(script, args=(level, allowed), default_timeout=30).run()
 
 
@@ -175,7 +181,7 @@ def test_report_for_a_gpm_shows_only_their_centres():
     assert not at.exception, at.exception
     html = "".join(m.value for m in at.markdown)
     assert "Howick" in html and "Auburn" not in html
-    bench = at.dataframe[-1].value         # benchmark settings, last on the page
+    bench = next(d.value for d in at.dataframe if "Use %" in d.value)    # benchmark settings
     assert bench["Centres"].sum() == 2     # every centre counts, established only
     text = "".join(m.value for m in at.markdown)
     assert "Developing centres" not in text
@@ -252,12 +258,12 @@ def run_centre(level="admin", allowed=()):
     def script(level, allowed):
         import streamlit as st
         import pnl_reports as pr
-        from test_pnl_reports import PNL, VL, WM, AGE
+        from test_pnl_reports import PNL, VL, WM, AGE, REVENUE
         df = PNL if level == "admin" else PNL[PNL["Location"].isin(allowed)]
         pr.report_centre(df, WM, VL, dict(
             age_group=AGE, age_order=[], state_of=lambda r: r, show_chart=st.plotly_chart,
             std_layout=lambda t, y="", height=400: dict(title=t, height=height),
-            report_filters=None), bench=(PNL, WM))
+            report_filters=None, revenue=REVENUE), bench=(PNL, WM))
     return AppTest.from_function(script, args=(level, allowed), default_timeout=30).run()
 
 
@@ -396,3 +402,75 @@ def test_centre_report_several_months_with_outlier_tiles():
         at.selectbox(key="pc_span").set_value(span).run()
         assert not at.exception, (span, at.exception)
     assert "Average per month" in "".join(m.value for m in at.markdown)
+
+
+def test_sessions_table_average_and_status():
+    t = pnl.sessions_table(REVENUE, ["2026-08"], LOC)
+    assert t.loc["Success Tutoring - Auburn", "Students per session"] == 2
+    typical = pnl.sessions_average(t)
+    assert typical == pytest.approx(100 / 65)
+    assert pnl.sessions_status(2.0, typical) == "Fewer sessions than typical"
+    assert pnl.sessions_status(1.0, typical) == "More sessions than typical"
+    assert pnl.sessions_status(typical * 1.05, typical) == "Typical"
+    assert pnl.sessions_table(REVENUE, ["2025-01"], LOC).empty
+
+
+def test_group_report_shows_sessions_charts_after_settings():
+    at = run_report()
+    assert not at.exception, at.exception
+    text = "".join(m.value for m in at.markdown)
+    assert text.index("Benchmark settings") < text.index("Sessions vs active students") \
+        < text.index("Group size vs tutor cost")
+    assert len(at.get("plotly_chart")) == 2
+
+
+def test_gpm_sees_other_centres_only_as_unnamed_dots():
+    at = run_report("gpm", ["Success Tutoring - Howick"])
+    assert not at.exception, at.exception
+    charts = " ".join(str(c.proto.spec) for c in at.get("plotly_chart"))
+    assert "Howick" in charts and "Auburn" not in charts and "Burwood" not in charts
+
+
+def test_young_centres_left_out_of_sessions_charts():
+    vl = VL.assign(**{"Weeks old": [100, 30, 18]})       # Burwood is 18 weeks old
+    assert pr.young_centres(vl) == {"Success Tutoring - Burwood"}
+    assert pr.young_centres(VL) == set()                 # no Weeks old column
+
+    def script():
+        import streamlit as st
+        import pnl_reports as pr
+        from test_pnl_reports import PNL, VL, WM, AGE, REVENUE
+        vl = VL.assign(**{"Weeks old": [100, 30, 18]})
+        pr.report_group(PNL, WM, vl, dict(
+            age_group=AGE, age_order=[], state_of=lambda r: r, show_chart=st.plotly_chart,
+            std_layout=lambda t, y="", height=400: dict(title=t, height=height),
+            report_filters=lambda df, **k: df, revenue=REVENUE), bench=(PNL, WM))
+    at = AppTest.from_function(script, default_timeout=30).run()
+    at.selectbox(key="pnl_group_view").set_value("Network").run()
+    assert not at.exception, at.exception
+    assert any("Left out (18 weeks old or younger): Burwood" in c.value for c in at.caption)
+    charts = " ".join(str(c.proto.spec) for c in at.get("plotly_chart"))
+    assert "Burwood" not in charts
+
+
+def test_weekly_sessions_and_trend_word():
+    w = pnl.weekly_sessions(REVENUE, LOC, pd.Timestamp("2026-08-31"))
+    assert list(w.columns[-1:]) == ["Network"] and len(w) == 3
+    assert w["Success Tutoring - Auburn"].iloc[-1] == 2
+    assert w["Network"].iloc[-1] == pytest.approx(100 / 65)
+    assert pnl.trend_word(pd.Series([1.5] * 4 + [1.6] * 4 + [1.8] * 4)) == "Improving"
+    assert pnl.trend_word(pd.Series([2.0] * 6 + [1.7] * 6)) == "Getting worse"
+    assert pnl.trend_word(pd.Series([1.8] * 12)) == "Steady"
+    assert pnl.trend_word(pd.Series([1.8] * 3)) is None
+
+
+def test_centre_report_scheduling_efficiency_row():
+    at = run_centre()
+    at.selectbox(key="pc_centre").set_value("Howick").run()      # 1 student per session
+    assert not at.exception, at.exception
+    text = "".join(m.value for m in at.markdown)
+    assert text.index("Accounts costing less than typical") < \
+        text.index("Scheduling Efficiency") < text.index("Where the revenue goes")
+    assert "Students per session" in text and "Last 12 weeks" in text
+    assert "more sessions a week" in text and "a month" in text
+    assert len(at.get("plotly_chart")) == 1                     # no new charts

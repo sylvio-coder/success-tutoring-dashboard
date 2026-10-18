@@ -570,6 +570,8 @@ def report_group(df_pnl, df_wm, vl, helpers, bench=None):
                        ", ".join(x.replace(PREFIX, "") for x in left_out))
     with outliers_slot:
         group_outliers(group, bench_cent, label)
+    sessions_section(group, bench_cent, helpers.get("revenue"), periods, label, helpers,
+                     young_centres(vl))
     with st.expander("How this is worked out"):
         st.markdown(HOW_GROUP + "\n- " + DISCLAIMER)
 
@@ -902,6 +904,10 @@ def report_centre(df_pnl, df_wm, vl, helpers, bench=None):
         side = side.assign(_g=side["Gap $"].abs()).sort_values("_g", ascending=False)
         _outlier_tiles(side, bad, cur)
 
+    # ── Row 4: scheduling efficiency ──
+    scheduling_efficiency(pick, loc, values, peers, bench_cent, helpers.get("revenue"), vl,
+                          sel, cur)
+
     # ── Where the revenue goes ──
     _section("Where the revenue goes")
     _waterfall(now, pick, label, cur, helpers)
@@ -982,3 +988,277 @@ def report_centre(df_pnl, df_wm, vl, helpers, bench=None):
 
     with st.expander("How this is worked out"):
         st.markdown(HOW_CENTRE + "\n- " + DISCLAIMER)
+
+
+# ── Sessions vs students (Group Level) ────────────────────────────────────────
+SESSION_COLOURS = {"More sessions than typical": "#c8322f",
+                   "Fewer sessions than typical": "#2e8540", "Typical": "#5d6d73"}
+CONTEXT_GREY = "#c9d3d6"
+MAX_LABELS = 12          # name every centre in a small group; in a big one, only the outliers
+MIN_STUDENTS = 5         # centres with fewer students a week are left out of these charts
+YOUNG_WEEKS = 18         # centres this many weeks old or younger are left out too
+
+
+def young_centres(vl):
+    """Centres 18 weeks old or younger (Vlookup 'Weeks old'), left out of the sessions
+    charts: their groups are still forming."""
+    if LOC not in vl.columns or "Weeks old" not in vl.columns:
+        return set()
+    w = pd.to_numeric(vl["Weeks old"], errors="coerce")
+    return set(vl.loc[w.notna() & (w <= YOUNG_WEEKS), LOC])
+
+
+def sessions_section(group, bench_cent, revenue, periods, label, helpers, young=()):
+    """Active students vs sessions for every centre around the network average, the
+    group's centres named; then students per session vs tutor wages %."""
+    loc_col = LOC
+    table = pnl.sessions_table(revenue, periods, loc_col)
+    left_young = sorted(set(group.index) & set(young) & set(table.index)) \
+        if not table.empty else []
+    if not table.empty:
+        table = table[table["Students"] >= MIN_STUDENTS]     # tiny centres distort the ratio
+        table = table[~table.index.isin(young)]              # still building their groups
+    _section("Sessions vs active students",
+             f"Weekly averages for {label}. The line is the network average "
+             "(students per session); the shaded band is ±10%. Above the band = more sessions "
+             "than typical for its students (smaller groups, higher tutor cost). This group's "
+             "centres are coloured (named, or only the ones off typical in a large group); "
+             f"other centres are grey and unnamed. Centres under {MIN_STUDENTS} students a week "
+             f"or {YOUNG_WEEKS} weeks old or younger are left out.")
+    if left_young:
+        st.caption(f"Left out ({YOUNG_WEEKS} weeks old or younger): " +
+                   ", ".join(l.replace(PREFIX, "") for l in left_young))
+    if table.empty:
+        st.info("No sessions data in the Revenue tab for these months.")
+        return
+    typical = pnl.sessions_average(table)
+    mine = table[table.index.isin(group.index)].copy()
+    others = table[~table.index.isin(group.index)]
+    mine["Status"] = mine["Students per session"].map(
+        lambda v: pnl.sessions_status(v, typical))
+    name = lambda l: l.replace(PREFIX, "")
+    size = lambda s: (8 + 22 * (s / max(table["Students"].max(), 1)) ** 0.5).tolist()
+
+    top = float(table["Students"].max()) * 1.08
+    xs = [0, top]
+    fig = go.Figure()
+    # ±10% band and the average line (sessions = students ÷ typical students per session)
+    fig.add_trace(go.Scatter(x=xs + xs[::-1],
+                             y=[x / typical * (1 + pnl.SESSION_BAND) for x in xs] +
+                               [x / typical * (1 - pnl.SESSION_BAND) for x in xs[::-1]],
+                             fill="toself", fillcolor="rgba(93,109,115,0.10)", mode="lines",
+                             line=dict(width=0), hoverinfo="skip", name="Typical (±10%)"))
+    fig.add_trace(go.Scatter(x=xs, y=[x / typical for x in xs], mode="lines",
+                             line=dict(color="#5d6d73", width=2, dash="dash"),
+                             name=f"Network average ({typical:.2f} students per session)",
+                             hoverinfo="skip"))
+    if len(others):
+        fig.add_trace(go.Scatter(
+            x=others["Students"], y=others["Sessions"], mode="markers",
+            marker=dict(color=CONTEXT_GREY, size=size(others["Students"]),
+                        line=dict(color="#ffffff", width=1)),
+            name="Other centres", hovertemplate="Another centre<br>%{x:.0f} students, "
+            "%{y:.0f} sessions a week<extra></extra>"))
+    label_all = len(mine) <= MAX_LABELS
+    for status, colour in SESSION_COLOURS.items():
+        g = mine[mine["Status"] == status]
+        if g.empty:
+            continue
+        show = label_all or status != "Typical"
+        fig.add_trace(go.Scatter(
+            x=g["Students"], y=g["Sessions"], mode="markers+text" if show else "markers",
+            text=[name(l) for l in g.index], textposition="top center",
+            textfont=dict(size=11, color="#1c2a30"),
+            marker=dict(color=colour, size=size(g["Students"]),
+                        line=dict(color="#ffffff", width=2)),
+            name=f"{status} ({len(g)})",
+            customdata=g[["Students per session"]].values,
+            hovertemplate="<b>%{text}</b><br>%{x:.0f} students, %{y:.0f} sessions a week"
+                          "<br>%{customdata[0]:.2f} students per session<extra>" + status +
+                          "</extra>"))
+    fig.update_layout(**helpers["std_layout"]("Active students vs sessions (weekly average)",
+                                               "Sessions per week", height=520))
+    fig.update_xaxes(title_text="Active students per week", rangemode="tozero")
+    fig.update_yaxes(rangemode="tozero")
+    helpers["show_chart"](fig)
+
+    if len(mine):
+        far = mine.assign(
+            Typical=typical,
+            Diff=(mine["Students per session"] / typical - 1) * 100)
+        far = far.reindex(far["Diff"].abs().sort_values(ascending=False).index)
+        st.markdown("**Furthest from average in this group**")
+        st.dataframe(pd.DataFrame({
+            "Location": [name(l) for l in far.index],
+            "Active students / week": far["Students"].round(0).values,
+            "Sessions / week": far["Sessions"].round(0).values,
+            "Students per session": far["Students per session"].values,
+            "Typical": far["Typical"].values,
+            "vs typical": far["Diff"].values,
+            "Status": far["Status"].values}),
+            hide_index=True, use_container_width=True, column_config={
+                "Active students / week": st.column_config.NumberColumn(format="%d"),
+                "Sessions / week": st.column_config.NumberColumn(format="%d"),
+                "Students per session": st.column_config.NumberColumn(format="%.2f"),
+                "Typical": st.column_config.NumberColumn(format="%.2f"),
+                "vs typical": st.column_config.NumberColumn(
+                    format="%+.0f%%", help="Students per session vs the network average. "
+                    "Negative = smaller groups than typical.")})
+
+    # ── Students per session vs tutor wages % ──
+    cost = bench_cent[bench_cent["Total Revenue"] >= pnl.LOW_REVENUE]
+    cost = cost.assign(**{"Tutor %": cost["Tutor Wages + Super"] / cost["Total Revenue"] * 100})
+    both = table.join(cost[["Tutor %"]], how="inner")
+    _section("Group size vs tutor cost",
+             "Students per session (across) against tutor wages + super as a % of revenue (up). "
+             "Top-left = small groups and high tutor cost: the centres to look at first. Dashed "
+             "lines are the network middle values.")
+    if len(both) < 2:
+        st.info("Not enough centres with both sessions and P&L figures for these months.")
+        return
+    mx, my = both["Students per session"].median(), both["Tutor %"].median()
+    g_both = both[both.index.isin(group.index)]
+    o_both = both[~both.index.isin(group.index)]
+    fig = go.Figure()
+    if len(o_both):
+        fig.add_trace(go.Scatter(
+            x=o_both["Students per session"], y=o_both["Tutor %"], mode="markers",
+            marker=dict(color=CONTEXT_GREY, size=size(o_both["Students"]),
+                        line=dict(color="#ffffff", width=1)),
+            name="Other centres", hovertemplate="Another centre<br>%{x:.2f} students per "
+            "session, tutor cost %{y:.1f}% of revenue<extra></extra>"))
+    if len(g_both):
+        flag = (g_both["Students per session"] < mx) & (g_both["Tutor %"] > my)
+        labels = [name(l) if (len(g_both) <= MAX_LABELS or f) else ""
+                  for l, f in zip(g_both.index, flag)]
+        fig.add_trace(go.Scatter(
+            x=g_both["Students per session"], y=g_both["Tutor %"], mode="markers+text",
+            text=labels, textposition="top center",
+            hovertext=[name(l) for l in g_both.index],
+            textfont=dict(size=11, color="#1c2a30"),
+            marker=dict(color=["#c8322f" if f else "#1f9a9a" for f in flag],
+                        size=size(g_both["Students"]), line=dict(color="#ffffff", width=2)),
+            name="This group (red = small groups and high tutor cost)",
+            hovertemplate="<b>%{hovertext}</b><br>%{x:.2f} students per session<br>Tutor "
+                          "cost %{y:.1f}% of revenue<extra></extra>"))
+    fig.add_vline(x=mx, line=dict(color="#5d6d73", dash="dash", width=1),
+                  annotation_text=f"Middle {mx:.2f}", annotation_position="top")
+    fig.add_hline(y=my, line=dict(color="#5d6d73", dash="dash", width=1),
+                  annotation_text=f"Middle {my:.0f}%", annotation_position="bottom right")
+    fig.update_layout(**helpers["std_layout"]("Students per session vs tutor wages + super %",
+                                               "Tutor wages + super, % of revenue", height=480))
+    fig.update_xaxes(title_text="Students per session")
+    helpers["show_chart"](fig)
+
+
+# ── Scheduling efficiency (Centre Level) ──────────────────────────────────────
+def _sparkline(centre, network, w=200, h=44):
+    """Tiny inline line: this centre (teal) against the network average (dashed grey)."""
+    vals = [v for v in list(centre) + list(network) if v is not None and not pd.isna(v)]
+    if not vals:
+        return ""
+    lo, hi = min(vals), max(vals)
+    pad = (hi - lo) * 0.15 or 0.1
+    lo, hi = lo - pad, hi + pad
+    n = max(len(centre), 2)
+
+    def path(series):
+        pts = [(i * (w - 4) / (n - 1) + 2, h - 2 - (v - lo) / (hi - lo) * (h - 4))
+               for i, v in enumerate(series) if v is not None and not pd.isna(v)]
+        return " ".join(f"{x:.1f},{y:.1f}" for x, y in pts)
+
+    return (f'<svg width="{w}" height="{h}" viewBox="0 0 {w} {h}" role="img" '
+            f'aria-label="Students per session, last {len(centre)} weeks">'
+            f'<polyline points="{path(network)}" fill="none" stroke="#9fb0b5" '
+            f'stroke-width="1.5" stroke-dasharray="4 3"/>'
+            f'<polyline points="{path(centre)}" fill="none" stroke="#1f9a9a" stroke-width="2"/>'
+            '</svg>')
+
+
+def _tile(title, value, sub="", colour="#1c2a30", extra=""):
+    return (f'<div class="otile" style="--c:{colour}"><div class="t">{html.escape(title)}</div>'
+            f'<div class="v">{value}</div>{extra}<div class="s">{sub}</div></div>')
+
+
+def scheduling_efficiency(pick, loc, values, peers, bench_cent, revenue, vl, sel, cur):
+    _section("Scheduling Efficiency")
+    if loc in young_centres(vl):
+        st.caption(f"Too new to compare: {YOUNG_WEEKS} weeks old or younger, so its groups are "
+                   "still forming.")
+        return
+    table = pnl.sessions_table(revenue, sel, LOC)
+    if table.empty or loc not in table.index:
+        st.caption("No sessions data in the Revenue tab for this period.")
+        return
+    mine = table.loc[loc]
+    network = table[(table["Students"] >= MIN_STUDENTS) & ~table.index.isin(young_centres(vl))]
+    typical = pnl.sessions_average(network)
+    if not typical:
+        st.caption("Not enough centres with sessions data to compare with.")
+        return
+    students, sessions, sps = mine["Students"], mine["Sessions"], mine["Students per session"]
+    status = pnl.sessions_status(sps, typical)
+    diff = (sps / typical - 1) * 100
+    extra = sessions - students / typical                       # sessions a week vs typical
+    tutor = values.get("Tutor Wages + Super") if values is not None else None
+    per_session = tutor / (sessions * pnl.WEEKS_PER_MONTH) if tutor and sessions else None
+    cost = extra * pnl.WEEKS_PER_MONTH * per_session if per_session else None
+
+    colour = {"More sessions than typical": "#c8322f", "Fewer sessions than typical": "#2e8540"
+              }.get(status, "#5d6d73")
+    end = pd.Timestamp(sel[-1] + "-01") + pd.offsets.MonthEnd(0)
+    weekly = pnl.weekly_sessions(revenue, LOC, end, 12, young_centres(vl))
+    spark, trend = "", None
+    if loc in weekly.columns:
+        trend = pnl.trend_word(weekly[loc])
+        spark = _sparkline(weekly[loc].tolist(), weekly["Network"].tolist())
+    t_colour = {"Improving": "#2e8540", "Getting worse": "#c8322f"}.get(trend, "#5d6d73")
+
+    if cost is None:
+        cost_txt, cost_sub = "–", "No tutor wages in the P&L for this period"
+    elif extra >= 0:
+        cost_txt = f"+{extra:.1f}/wk"
+        cost_sub = f"≈ {_money(cost)} {cur} a month in tutor wages"
+    else:
+        cost_txt = f"{extra:.1f}/wk"
+        cost_sub = f"≈ {_money(-cost)} {cur} a month saved"
+    tiles = [
+        _tile("Active students / week", f"{students:,.0f}"),
+        _tile("Sessions / week", f"{sessions:,.0f}"),
+        _tile("Students per session", f"{sps:.2f}",
+              f"vs typical {typical:.2f} ({diff:+.0f}%) · {status.lower()}", colour),
+        _tile("Extra sessions vs typical", cost_txt, cost_sub,
+              "#c8322f" if extra > 0.5 else "#2e8540" if extra < -0.5 else "#5d6d73"),
+        _tile("Last 12 weeks", trend or "–",
+              "Students per session (teal) vs network average (dashed)", t_colour, spark),
+    ]
+    st.markdown(TILE_CSS, unsafe_allow_html=True)
+    for col, t in zip(st.columns(len(tiles)), tiles):
+        col.markdown(t, unsafe_allow_html=True)
+
+    # One sentence pulling it together.
+    rev = values.get("Total Revenue") if values is not None else None
+    tutor_pct = tutor / rev * 100 if tutor and rev and rev > 0 else None
+    typical_pct = None
+    pool = peers if peers is not None and len(peers) else bench_cent
+    if pool is not None and len(pool):
+        p = pool[pool["Total Revenue"] > 0]
+        typical_pct = (p["Tutor Wages + Super"] / p["Total Revenue"] * 100).median()
+    wages = (f" ({tutor_pct:.0f}% of revenue vs {typical_pct:.0f}% typical)"
+             if tutor_pct is not None and typical_pct is not None else "")
+    if abs(extra) < 0.5 or cost is None:
+        text = (f"**{pick}** runs about as many sessions as a typical centre with "
+                f"{students:,.0f} students ({sps:.2f} students per session vs {typical:.2f}).")
+    elif extra > 0:
+        text = (f"**{pick}** runs about **{extra:.0f} more sessions a week** than a typical "
+                f"centre with {students:,.0f} students ({sps:.2f} students per session vs "
+                f"{typical:.2f}). At its tutor cost per session, that's about "
+                f"**{_money(cost)} a month**, which helps explain its tutor wages{wages}.")
+    else:
+        text = (f"**{pick}** runs about **{-extra:.0f} fewer sessions a week** than a typical "
+                f"centre with {students:,.0f} students ({sps:.2f} students per session vs "
+                f"{typical:.2f}), saving about **{_money(-cost)} a month** in tutor wages"
+                f"{wages}.")
+    if trend:
+        text += f" Over the last 12 weeks its group sizes are **{trend.lower()}**."
+    st.markdown(_md(text))
