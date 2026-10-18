@@ -15,6 +15,7 @@ import os
 import html
 import admin_pages
 import pnl_reports
+import membership_trend
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -1243,86 +1244,99 @@ def weekly_location_metrics(df_f, df_rv):
                  column_config={"Week": st.column_config.TextColumn("Week", pinned=True, width=150)})
 
 def centre_performance_index(df_f):
-    """Each centre's active members divided by the average of all trading centres
-    (or of trading centres in the same state), for every week of the chosen year.
-    Rows follow the report filters; averages always use the whole network."""
+    """Rolling 4-week membership trend for each centre against the average trend of all
+    established centres (or those in the same state), grouped into five categories.
+    Rows follow the report filters; the average always uses the whole network."""
     loc_col = "Success Tutoring - Business name"
-    st.markdown('<div class="section-header">Centre Performance Index</div>', unsafe_allow_html=True)
-    st.markdown(f'<div class="report-subtitle">Active members ÷ average active members per trading centre. '
-                f'1.00 = average · 1.28 = 28% above average · 0.80 = 20% below.</div>', unsafe_allow_html=True)
+    W = membership_trend.WINDOW
+    st.markdown('<div class="section-header">Membership trend vs average</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="report-subtitle">Average active members over the last {W} weeks vs the '
+                f'{W} weeks before, compared with the average trend. +3 pts = growing 3 percentage '
+                f'points faster than average.</div>', unsafe_allow_html=True)
 
     full = load_weekly_membership().copy()
-    if "Date - Week/Year" not in full.columns or loc_col not in full.columns:
-        st.info("Week/Year column not found — index unavailable."); return
-    wy = full["Date - Week/Year"].astype(str).str.split("/")
-    full["Week"] = pd.to_numeric(wy.str[0], errors="coerce")
-    full["Year"] = pd.to_numeric(wy.str[1], errors="coerce")
-    full = full.dropna(subset=["Week", "Year"])
-    full["Week"] = full["Week"].astype(int); full["Year"] = full["Year"].astype(int)
+    if loc_col not in full.columns or "Date" not in full.columns:
+        st.info("Weekly Membership has no location or date column — trend unavailable."); return
     full["# Active members"] = pd.to_numeric(full["# Active members"], errors="coerce").fillna(0)
     country = full["Country"] if "Country" in full.columns else pd.Series("", index=full.index)
     region = full["Region"] if "Region" in full.columns else pd.Series("", index=full.index)
-    full["State"] = [("NZ" if c == "New Zealand" else REGION_TO_STATE.get(r, r)) for c, r in zip(country, region)]
+    full["State"] = [("NZ" if c == "New Zealand" else REGION_TO_STATE.get(r, r))
+                     for c, r in zip(country, region)]
 
-    years = sorted(full["Year"].unique().tolist(), reverse=True)
+    weeks = sorted(full["Date"].dropna().unique(), reverse=True)
     i1, i2, _ = st.columns([1, 2, 3])
-    year = i1.selectbox("Year", years, key="r2_cpi_year")
+    as_at = i1.selectbox("As at week", weeks, key="r2_trend_week",
+                         format_func=lambda d: pd.Timestamp(d).strftime("%d %b %Y"))
     basis = i2.radio("Compare against", ["All centres", "State"], horizontal=True, key="r2_cpi_basis")
 
-    wk = (full[full["Year"] == year].groupby([loc_col, "State", "Week"])["# Active members"].sum().reset_index())
-    wk = wk[wk["# Active members"] > 0]          # only centres trading that week
-    if wk.empty:
-        st.info("No active members recorded for that year."); return
-    group = ["Week"] if basis == "All centres" else ["State", "Week"]
-    wk["Average"] = wk.groupby(group)["# Active members"].transform("mean")
-    wk["Index"] = wk["# Active members"] / wk["Average"]
-
-    # State totals: the state's average per trading centre against the same basis (whole network)
-    state_wk = wk.groupby(["State", "Week"]).agg(StateMean=("# Active members", "mean"),
-                                                 Basis=("Average", "first")).reset_index()
-    state_wk["Index"] = state_wk["StateMean"] / state_wk["Basis"]
-    state_totals = state_wk.pivot_table(index="State", columns="Week", values="Index")
-
+    rows, too_new, summary = membership_trend.trend_table(full, pd.Timestamp(as_at), basis)
+    if rows.empty:
+        st.info(f"Need at least {2 * W} weeks of data up to that week to compare trends."); return
     shown = set(df_f[loc_col].dropna().unique())
-    wk = wk[wk[loc_col].isin(shown)]
-    if wk.empty:
-        st.info("No trading centres match the selected filters for that year."); return
-    centres = wk.pivot_table(index=[loc_col, "State"], columns="Week", values="Index")
-    weeks = sorted(set(centres.columns) | set(state_totals.columns))
-    centres = centres.reindex(columns=weeks); state_totals = state_totals.reindex(columns=weeks)
-    latest = max(weeks)
+    rows = rows[rows.index.isin(shown)]
+    too_new = too_new[too_new.index.isin(shown)]
 
-    # States A–Z; centres within a state highest index first; state total after its centres
-    rows, total_rows = [], []
-    for state in sorted(centres.index.get_level_values("State").unique()):
-        grp = centres.xs(state, level="State").sort_values(latest, ascending=False, na_position="last")
-        for loc, vals in grp.iterrows():
-            rows.append({"State": state, "Location": loc.replace("Success Tutoring - ", ""), **vals.to_dict()})
-        total_rows.append(len(rows))
-        rows.append({"State": state, "Location": f"{state} total", **state_totals.loc[state].to_dict()})
-    table = pd.DataFrame(rows)
-    table = table.rename(columns={w: f"Wk {w}" for w in weeks})
+    net = summary.get("network trend")
+    counts = summary["counts"]
+    first, last = summary["window"]
+    st.markdown(
+        f"**Network trend: {net:+.1f}%** over {W} weeks "
+        f"({pd.Timestamp(first).strftime('%d %b')} – {pd.Timestamp(last).strftime('%d %b %Y')}, "
+        f"last {W} weeks vs the {W} before). "
+        f"**{counts[membership_trend.CATEGORY_ORDER[0]]}** "
+        f"{'centre' if counts[membership_trend.CATEGORY_ORDER[0]] == 1 else 'centres'} "
+        f"significantly above average, **{counts[membership_trend.CATEGORY_ORDER[-1]]}** "
+        f"significantly below."
+        if net is not None else "Not enough established centres to work out the network trend.")
+    if rows.empty and too_new.empty:
+        st.info("No centres match the selected filters for that week."); return
 
-    def shade(v):
-        if pd.isna(v): return ""
-        strength = min(abs(v - 1) / 0.5, 1) * 0.55
-        rgb = "46,133,64" if v >= 1 else "200,50,47"
-        return f"background-color: rgba({rgb},{strength:.2f})"
-    def bold_totals(row):
-        style = "font-weight: 700; border-top: 1px solid #b9c7cb"
-        return [style if row.name in total_rows else "" for _ in row]
-    week_cols = [c for c in table.columns if c not in ("State", "Location")]
-    styled = (table.style.map(shade, subset=week_cols).apply(bold_totals, axis=1)
-              .format("{:.2f}", subset=week_cols, na_rep="–"))
-    st.dataframe(styled, use_container_width=True, hide_index=True,
-                 height=min(700, 35 * (len(table) + 1) + 3),
-                 column_config={"State": st.column_config.TextColumn("State", pinned=True, width=70),
-                                "Location": st.column_config.TextColumn("Location", pinned=True, width=170)})
-    avg_note = "all trading centres" if basis == "All centres" else "trading centres in the same state (all of NZ counts as one)"
-    st.caption(f"Averages use {avg_note} across the whole network, whatever filters are applied. "
-               f"State totals compare the state's average per trading centre with that average"
-               f"{' (so they are always 1.00 in State mode)' if basis == 'State' else ''}. "
-               f"Weeks where a centre had no active members show –.")
+    icon = {"Green": "🟢 Green", "Orange": "🟠 Orange", "Red": "🔴 Red"}
+    for cat in membership_trend.CATEGORY_ORDER:
+        grp = rows[rows["Category"] == cat]
+        st.markdown(f"**{cat} ({len(grp)})**")
+        if grp.empty:
+            st.caption("None.")
+            continue
+        grp = grp.sort_values("vs average", ascending=cat in membership_trend.CATEGORY_ORDER[3:])
+        if cat == membership_trend.CATEGORY_ORDER[2]:
+            grp = grp.reindex(grp["vs average"].abs().sort_values(ascending=False).index)
+        table = pd.DataFrame({
+            "Location": [l.replace("Success Tutoring - ", "") +
+                         (" · small centre" if small else "")
+                         for l, small in zip(grp.index, grp["Small centre"])],
+            "% above/below average": grp["vs average"].values,
+            "Status": grp["Status"].map(icon).values,
+            "Members now": grp["Members now"].values,
+            f"Change in members ({W} wks)": grp["Change in members"].values,
+            "Last 12 weeks": grp["Last 12 weeks"].values,
+            "Moved since last week": grp["Moved"].values,
+        })
+        if basis == "State":
+            table.insert(1, "State", grp["State"].values)
+        st.dataframe(table, use_container_width=True, hide_index=True, column_config={
+            "Location": st.column_config.TextColumn("Location", width="medium"),
+            "% above/below average": st.column_config.NumberColumn(format="%+.1f pts"),
+            "Members now": st.column_config.NumberColumn(format="%d"),
+            f"Change in members ({W} wks)": st.column_config.NumberColumn(format="%+d"),
+            "Last 12 weeks": st.column_config.LineChartColumn("Last 12 weeks", y_min=0),
+        })
+    if not too_new.empty:
+        st.markdown(f"**Too new to compare ({len(too_new)})**")
+        st.dataframe(pd.DataFrame({
+            "Location": [l.replace("Success Tutoring - ", "") for l in too_new.index],
+            "Weeks trading": too_new["Weeks trading"].values,
+            "Members now": too_new["Members now"].values}),
+            use_container_width=True, hide_index=True)
+    avg_note = "all established centres" if basis == "All centres" else \
+        "established centres in the same state (all of NZ counts as one)"
+    st.caption(f"Groups: significantly above = more than +5 pts vs average; above = +2 to +5; "
+               f"about average = −2 to +2; below = −5 to −2; significantly below = under −5. "
+               f"The average uses {avg_note} across the whole network, whatever filters are "
+               f"applied. Centres trading fewer than {membership_trend.MIN_WEEKS_TRADING} weeks "
+               f"are listed separately and left out of the average. 'Small centre' = fewer than "
+               f"{membership_trend.SMALL_CENTRE} members, so its % can swing a lot. "
+               f"'Moved' compares with the groups a week earlier.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # REPORT 3 — Membership by Age
