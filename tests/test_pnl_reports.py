@@ -362,3 +362,37 @@ def test_average_months():
                         index=["2026-06", "2026-07", "2026-08"])
     a = pr.average_months(data, ["2026-07", "2026-08", "2026-09"])
     assert a["Total Revenue"] == 250 and a["Members"] == 20
+
+
+# Bench with enough established Australian centres for the tiles to appear.
+PEERS = [f"Success Tutoring - Peer {i}" for i in range(6)]
+PNL_PEERS = pd.concat([PNL] + [pd.DataFrame(
+    lines(loc, p, {**AUBURN, 472: 2000 + 100 * i, 469: 2500, 402: 0, 437: 0, 479: 0}))
+    for i, loc in enumerate(PEERS) for p in ("2026-07", "2026-08")], ignore_index=True)
+VL_PEERS = pd.concat([VL, pd.DataFrame({
+    LOC: PEERS, "Region": "New South Wales", "Stage": "Growth", "GPM": "A",
+    "Country": "Australia", "Age (Months)": 30, "Royalty Min": ""})], ignore_index=True)
+WM_PEERS = pd.concat([WM] + [pd.DataFrame([{LOC: loc, "Date": pd.Timestamp(d),
+                                            "# Active members": 50}
+                                           for d in ["2026-07-12", "2026-08-09"]])
+                             for loc in PEERS], ignore_index=True)
+
+
+def test_centre_report_several_months_with_outlier_tiles():
+    """Regression: Year to date with outlier tiles crashed ('multidimensional key')."""
+    def script():
+        import streamlit as st
+        import pnl_reports as pr
+        from test_pnl_reports import PNL_PEERS, VL_PEERS, WM_PEERS, AGE
+        pr.report_centre(PNL_PEERS, WM_PEERS, VL_PEERS, dict(
+            age_group=AGE, age_order=[], state_of=lambda r: r, show_chart=st.plotly_chart,
+            std_layout=lambda t, y="", height=400: dict(title=t, height=height),
+            report_filters=None), bench=(PNL_PEERS, WM_PEERS))
+    at = AppTest.from_function(script, default_timeout=30).run()
+    at.selectbox(key="pc_centre").set_value("Auburn").run()
+    assert not at.exception, at.exception
+    assert "otile" in "".join(m.value for m in at.markdown)          # tiles are showing
+    for span in pr.DD_SPANS:
+        at.selectbox(key="pc_span").set_value(span).run()
+        assert not at.exception, (span, at.exception)
+    assert "Average per month" in "".join(m.value for m in at.markdown)

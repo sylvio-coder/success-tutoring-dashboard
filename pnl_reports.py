@@ -898,9 +898,9 @@ def report_centre(df_pnl, df_wm, vl, helpers, bench=None):
                        if rev >= pnl.LOW_REVENUE else
                        "Revenue is too low this month for a meaningful comparison.")
             continue
-        sel = tiles[[pnl.is_bad(l, s_) == bad for l, s_ in zip(tiles["Line"], tiles["Status"])]]
-        sel = sel.assign(_g=sel["Gap $"].abs()).sort_values("_g", ascending=False)
-        _outlier_tiles(sel, bad, cur)
+        side = tiles[[pnl.is_bad(l, s_) == bad for l, s_ in zip(tiles["Line"], tiles["Status"])]]
+        side = side.assign(_g=side["Gap $"].abs()).sort_values("_g", ascending=False)
+        _outlier_tiles(side, bad, cur)
 
     # ── Where the revenue goes ──
     _section("Where the revenue goes")
