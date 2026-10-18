@@ -29,7 +29,9 @@ NUMBER_FORMATS = [
       "Student Visits per Session"), "NUMBER", "0.00"),
     (("Date",), "DATE", "d/m/yyyy"),
     (("Location Start", "Start Override"), "DATE", "d-mmm-yyyy"),
-    (("Date - Week/Year",), "TEXT", "@"),
+    (("Date - Week/Year", "Period"), "TEXT", "@"),
+    (("Royalty Min", "Amount"), "NUMBER", "#,##0;-#,##0"),
+    (("FX rate to AUD",), "NUMBER", "0.0000"),
 ]
 INTEGER_HEADERS = ("Total Sessions", "Weeks old", "Months old", "Active Members",
                    "Suspended Members", "Cancelled Members", "New Members", "Year",
@@ -159,6 +161,23 @@ def apply_formatting(spreadsheet):
             bands = "kept its existing alternating rows"
         report.append((title, f"font, header row, {bands}, {formatted} number formats"))
     return report
+
+
+def ensure_last_column(ws, header):
+    """Add a column with this header after the last one, unless it's already there.
+    Added at the end so tabs that look up Vlookup columns by position keep working.
+    Returns True if it was added."""
+    headers = [h.strip() for h in ws.row_values(1)]
+    if header in headers:
+        return False
+    while headers and headers[-1] == "":
+        headers.pop()
+    i = len(headers)
+    if getattr(ws, "col_count", None) and ws.col_count < i + 1:
+        ws.add_cols(i + 1 - ws.col_count)
+    ws.batch_update([{"range": f"{_col_letter(i)}1", "values": [[header]]}],
+                    value_input_option="USER_ENTERED")
+    return True
 
 
 def weeks_old_formula(row, name_col, date_col, active_col, tab="Weekly Membership"):

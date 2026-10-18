@@ -1,12 +1,14 @@
-streamlit
-gspread
-pandas
-matplotlib
-numpy
-scipy
-plotly
-streamlit-echarts
-google-auth
-python-dotenv
-httpx
-openpyxl
+# Pinned to the versions the dashboard was tested with, so a server rebuild can't pick
+# up a new release that behaves differently. Upgrade on purpose, test, then change here.
+streamlit==1.65.0
+gspread==6.2.1
+pandas==3.0.6
+matplotlib==3.11.2
+numpy==2.4.6
+scipy==1.17.1
+plotly==7.1.0
+streamlit-echarts==0.7.0
+google-auth==2.59.1
+python-dotenv==1.2.4
+httpx==0.28.1
+openpyxl==3.1.5
