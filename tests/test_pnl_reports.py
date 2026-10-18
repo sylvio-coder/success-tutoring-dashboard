@@ -474,3 +474,27 @@ def test_centre_report_scheduling_efficiency_row():
     assert "Students per session" in text and "Last 12 weeks" in text
     assert "more sessions a week" in text and "a month" in text
     assert len(at.get("plotly_chart")) == 1                     # no new charts
+
+
+def test_session_chart_names_follow_access():
+    """Admins see every centre's name on hover; a GPM only their own centres'."""
+    def script(level):
+        import streamlit as st
+        import pnl_reports as pr
+        from test_pnl_reports import PNL, VL, WM, AGE, REVENUE
+        allowed = ["Success Tutoring - Howick"]
+        df = PNL if level == "admin" else PNL[PNL["Location"].isin(allowed)]
+        pr.report_group(df, WM, VL, dict(
+            age_group=AGE, age_order=[], state_of=lambda r: r, show_chart=st.plotly_chart,
+            std_layout=lambda t, y="", height=400: dict(title=t, height=height),
+            report_filters=lambda d, **k: d, revenue=REVENUE,
+            can_name=lambda l: level == "admin" or l in allowed), bench=(PNL, WM))
+    at = AppTest.from_function(script, args=("admin",), default_timeout=30).run()
+    at.selectbox(key="pnl_group_view").set_value("Country").run()
+    at.selectbox(key="pnl_group_Country").set_value("New Zealand (1)").run()
+    charts = " ".join(str(c.proto.spec) for c in at.get("plotly_chart"))
+    assert "Auburn" in charts and "Another centre" not in charts     # admin: all names
+    assert "coloraxis" in charts and "Worst" in charts               # best-to-worst scale
+    at = AppTest.from_function(script, args=("gpm",), default_timeout=30).run()
+    charts = " ".join(str(c.proto.spec) for c in at.get("plotly_chart"))
+    assert "Howick" in charts and "Auburn" not in charts and "Another centre" in charts

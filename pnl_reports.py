@@ -991,9 +991,16 @@ def report_centre(df_pnl, df_wm, vl, helpers, bench=None):
 
 
 # ── Sessions vs students (Group Level) ────────────────────────────────────────
-SESSION_COLOURS = {"More sessions than typical": "#c8322f",
-                   "Fewer sessions than typical": "#2e8540", "Typical": "#5d6d73"}
-CONTEXT_GREY = "#c9d3d6"
+
+
+def BEST_WORST_AXIS(limit, title, unit="%"):
+    """Diverging colour scale: red (worst) – grey (typical) – green (best)."""
+    return dict(cmin=-limit, cmax=limit, cmid=0,
+                colorscale=[[0, "#c8322f"], [0.5, "#c9d3d6"], [1, "#2e8540"]],
+                colorbar=dict(title=dict(text=title, side="right"), thickness=12, len=0.8,
+                              tickvals=[-limit, 0, limit],
+                              ticktext=[f"Worst (−{limit}{unit})", "Typical",
+                                        f"Best (+{limit}{unit})"]))
 MAX_LABELS = 12          # name every centre in a small group; in a big one, only the outliers
 MIN_STUDENTS = 5         # centres with fewer students a week are left out of these charts
 YOUNG_WEEKS = 18         # centres this many weeks old or younger are left out too
@@ -1021,10 +1028,11 @@ def sessions_section(group, bench_cent, revenue, periods, label, helpers, young=
     _section("Sessions vs active students",
              f"Weekly averages for {label}. The line is the network average "
              "(students per session); the shaded band is ±10%. Above the band = more sessions "
-             "than typical for its students (smaller groups, higher tutor cost). This group's "
-             "centres are coloured (named, or only the ones off typical in a large group); "
-             f"other centres are grey and unnamed. Centres under {MIN_STUDENTS} students a week "
-             f"or {YOUNG_WEEKS} weeks old or younger are left out.")
+             "than typical for its students (smaller groups, higher tutor cost). Colour runs "
+             "from green (fullest groups, best) to red (smallest groups, worst). This group's "
+             "centres are outlined and labelled; other centres are paler. Hover for names of "
+             f"centres you have access to. Centres under {MIN_STUDENTS} students a week or "
+             f"{YOUNG_WEEKS} weeks old or younger are left out.")
     if left_young:
         st.caption(f"Left out ({YOUNG_WEEKS} weeks old or younger): " +
                    ", ".join(l.replace(PREFIX, "") for l in left_young))
@@ -1037,6 +1045,9 @@ def sessions_section(group, bench_cent, revenue, periods, label, helpers, young=
     mine["Status"] = mine["Students per session"].map(
         lambda v: pnl.sessions_status(v, typical))
     name = lambda l: l.replace(PREFIX, "")
+    # Names on hover for every centre the viewer may see (admins: all; GPMs: their own).
+    can_name = helpers.get("can_name") or (lambda l: l in group.index)
+    who = lambda l: name(l) if can_name(l) else "Another centre"
     size = lambda s: (8 + 22 * (s / max(table["Students"].max(), 1)) ** 0.5).tolist()
 
     top = float(table["Students"].max()) * 1.08
@@ -1052,30 +1063,29 @@ def sessions_section(group, bench_cent, revenue, periods, label, helpers, young=
                              line=dict(color="#5d6d73", width=2, dash="dash"),
                              name=f"Network average ({typical:.2f} students per session)",
                              hoverinfo="skip"))
-    if len(others):
-        fig.add_trace(go.Scatter(
-            x=others["Students"], y=others["Sessions"], mode="markers",
-            marker=dict(color=CONTEXT_GREY, size=size(others["Students"]),
-                        line=dict(color="#ffffff", width=1)),
-            name="Other centres", hovertemplate="Another centre<br>%{x:.0f} students, "
-            "%{y:.0f} sessions a week<extra></extra>"))
+    # Colour best to worst: students per session against the average (fuller groups = best).
+    table["Score"] = (table["Students per session"] / typical - 1) * 100
     label_all = len(mine) <= MAX_LABELS
-    for status, colour in SESSION_COLOURS.items():
-        g = mine[mine["Status"] == status]
-        if g.empty:
+    for part, is_group in ((others, False), (mine, True)):
+        if part.empty:
             continue
-        show = label_all or status != "Typical"
+        g = table.loc[part.index]
+        labels = [name(l) if is_group and (label_all or abs(sc) > pnl.SESSION_BAND * 100)
+                  else "" for l, sc in zip(g.index, g["Score"])]
         fig.add_trace(go.Scatter(
-            x=g["Students"], y=g["Sessions"], mode="markers+text" if show else "markers",
-            text=[name(l) for l in g.index], textposition="top center",
-            textfont=dict(size=11, color="#1c2a30"),
-            marker=dict(color=colour, size=size(g["Students"]),
-                        line=dict(color="#ffffff", width=2)),
-            name=f"{status} ({len(g)})",
-            customdata=g[["Students per session"]].values,
-            hovertemplate="<b>%{text}</b><br>%{x:.0f} students, %{y:.0f} sessions a week"
-                          "<br>%{customdata[0]:.2f} students per session<extra>" + status +
-                          "</extra>"))
+            x=g["Students"], y=g["Sessions"], mode="markers+text", text=labels,
+            textposition="top center", textfont=dict(size=11, color="#1c2a30"),
+            hovertext=[who(l) for l in g.index],
+            customdata=g[["Students per session", "Score"]].values,
+            marker=dict(color=g["Score"], coloraxis="coloraxis", size=size(g["Students"]),
+                        opacity=1 if is_group else 0.5,
+                        line=dict(color="#1c2a30" if is_group else "#ffffff",
+                                  width=1.5 if is_group else 1)),
+            name="This group" if is_group else "Other centres",
+            hovertemplate="<b>%{hovertext}</b><br>%{x:.0f} students, %{y:.0f} sessions a "
+                          "week<br>%{customdata[0]:.2f} students per session "
+                          "(%{customdata[1]:+.0f}% vs average)<extra></extra>"))
+    fig.update_layout(coloraxis=BEST_WORST_AXIS(30, "Students per session vs average"))
     fig.update_layout(**helpers["std_layout"]("Active students vs sessions (weekly average)",
                                                "Sessions per week", height=520))
     fig.update_xaxes(title_text="Active students per week", rangemode="tozero")
@@ -1111,8 +1121,9 @@ def sessions_section(group, bench_cent, revenue, periods, label, helpers, young=
     both = table.join(cost[["Tutor %"]], how="inner")
     _section("Group size vs tutor cost",
              "Students per session (across) against tutor wages + super as a % of revenue (up). "
-             "Top-left = small groups and high tutor cost: the centres to look at first. Dashed "
-             "lines are the network middle values.")
+             "Colour runs from green (lowest tutor cost, best) to red (highest, worst). Top-left "
+             "= small groups and high tutor cost: the centres to look at first. Dashed lines are "
+             "the network middle values.")
     if len(both) < 2:
         st.info("Not enough centres with both sessions and P&L figures for these months.")
         return
@@ -1120,27 +1131,27 @@ def sessions_section(group, bench_cent, revenue, periods, label, helpers, young=
     g_both = both[both.index.isin(group.index)]
     o_both = both[~both.index.isin(group.index)]
     fig = go.Figure()
-    if len(o_both):
+    # Colour best to worst: tutor wages % against the middle value (lower = best).
+    both["Score"] = my - both["Tutor %"]
+    for part, is_group in ((o_both, False), (g_both, True)):
+        if part.empty:
+            continue
+        g = both.loc[part.index]
+        flag = (g["Students per session"] < mx) & (g["Tutor %"] > my)
+        labels = [name(l) if is_group and (len(g_both) <= MAX_LABELS or f) else ""
+                  for l, f in zip(g.index, flag)]
         fig.add_trace(go.Scatter(
-            x=o_both["Students per session"], y=o_both["Tutor %"], mode="markers",
-            marker=dict(color=CONTEXT_GREY, size=size(o_both["Students"]),
-                        line=dict(color="#ffffff", width=1)),
-            name="Other centres", hovertemplate="Another centre<br>%{x:.2f} students per "
-            "session, tutor cost %{y:.1f}% of revenue<extra></extra>"))
-    if len(g_both):
-        flag = (g_both["Students per session"] < mx) & (g_both["Tutor %"] > my)
-        labels = [name(l) if (len(g_both) <= MAX_LABELS or f) else ""
-                  for l, f in zip(g_both.index, flag)]
-        fig.add_trace(go.Scatter(
-            x=g_both["Students per session"], y=g_both["Tutor %"], mode="markers+text",
-            text=labels, textposition="top center",
-            hovertext=[name(l) for l in g_both.index],
-            textfont=dict(size=11, color="#1c2a30"),
-            marker=dict(color=["#c8322f" if f else "#1f9a9a" for f in flag],
-                        size=size(g_both["Students"]), line=dict(color="#ffffff", width=2)),
-            name="This group (red = small groups and high tutor cost)",
+            x=g["Students per session"], y=g["Tutor %"], mode="markers+text", text=labels,
+            textposition="top center", textfont=dict(size=11, color="#1c2a30"),
+            hovertext=[who(l) for l in g.index],
+            marker=dict(color=g["Score"], coloraxis="coloraxis", size=size(g["Students"]),
+                        opacity=1 if is_group else 0.5,
+                        line=dict(color="#1c2a30" if is_group else "#ffffff",
+                                  width=1.5 if is_group else 1)),
+            name="This group" if is_group else "Other centres",
             hovertemplate="<b>%{hovertext}</b><br>%{x:.2f} students per session<br>Tutor "
                           "cost %{y:.1f}% of revenue<extra></extra>"))
+    fig.update_layout(coloraxis=BEST_WORST_AXIS(15, "Tutor wages % vs middle", unit=" pts"))
     fig.add_vline(x=mx, line=dict(color="#5d6d73", dash="dash", width=1),
                   annotation_text=f"Middle {mx:.2f}", annotation_position="top")
     fig.add_hline(y=my, line=dict(color="#5d6d73", dash="dash", width=1),
