@@ -141,7 +141,7 @@ def run_report(level="admin", allowed=()):
         def filters(df, key_prefix="", panel=None, show_label=True, **k):
             return df
         df = PNL if level == "admin" else PNL[PNL["Location"].isin(allowed)]
-        pr.report_pnl(df, WM, VL, dict(
+        pr.report_group(df, WM, VL, dict(
             age_group=AGE, age_order=["0–3 months", "12–24 months", "24+ months", "Unknown"],
             state_of=lambda r: r, show_chart=st.plotly_chart,
             std_layout=lambda t, y="", height=400: dict(title=t, height=height),
@@ -149,19 +149,25 @@ def run_report(level="admin", allowed=()):
     return AppTest.from_function(script, args=(level, allowed), default_timeout=30).run()
 
 
-def test_report_renders_views_and_model():
+def test_group_report_lists_centres_a_to_z_by_group():
     at = run_report()
     assert not at.exception, at.exception
     html = "".join(m.value for m in at.markdown)
-    assert "Auburn" in html and "Howick" in html and "Break-even members" in html
-    at.selectbox(key="pnl_view").set_value("Network").run()
+    assert "L by centre —" in html and "Break-even members" in html
+    assert "Outliers in this group" in html and "Outliers vs similar centres" not in html
+    assert not at.get("download_button")
+    at.selectbox(key="pnl_group_view").set_value("Network").run()
     assert not at.exception, at.exception
-    assert "Network (3)" in "".join(m.value for m in at.markdown)
-    at.selectbox(key="pnl_view").set_value("Centre").run()
-    at.selectbox(key="pnl_model_pick").set_value("Auburn").run()
-    assert not at.exception, at.exception
-    text = "".join(m.value for m in at.markdown)
-    assert "to break even and has" in text
+    html = "".join(m.value for m in at.markdown)
+    table = next(m.value for m in at.markdown if "pnl-wrap" in m.value)
+    assert table.index("Auburn") < table.index("Burwood") < table.index("Howick") \
+        < table.index("Total — Network")                                     # A–Z, then total
+    at.selectbox(key="pnl_group_view").set_value("Country").run()
+    assert at.selectbox(key="pnl_group_Country").options == ["Australia (2)",
+                                                             "New Zealand (1)"]
+    at.selectbox(key="pnl_group_Country").set_value("New Zealand (1)").run()
+    table = next(m.value for m in at.markdown if "pnl-wrap" in m.value)
+    assert "Howick" in table and "Auburn" not in table and "Total —" not in table  # one centre
 
 
 def test_report_for_a_gpm_shows_only_their_centres():
@@ -179,9 +185,10 @@ def test_report_with_no_pnl_yet():
     def script():
         import pandas as pd
         import pnl_reports as pr
-        pr.report_pnl(pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), {})
+        pr.report_group(pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), {})
+        pr.report_centre(pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), {})
     at = AppTest.from_function(script).run()
-    assert any("No P&L figures yet" in i.value for i in at.info)
+    assert sum("No P&L figures yet" in i.value for i in at.info) == 2
 
 
 def bench_frame():
@@ -202,7 +209,7 @@ def test_peers_compare_and_outliers():
     b = bench_frame()
     peers, desc = pnl.peer_set(b, "Australia", 55, "Big")
     assert "Big" not in peers.index and len(peers) >= pnl.MIN_PEERS
-    assert desc.startswith("Australia centres with")
+    assert desc.startswith("Australian centres with")
     cmp = pnl.compare_lines(b.loc["Big"], peers, pnl.BENCH_LINES).set_index("Line")
     assert cmp.at["Tutor Wages + Super", "Status"] == "Very high"
     assert cmp.at["Tutor Wages + Super", "Gap $"] == pytest.approx(6000 - 3850)
@@ -217,21 +224,9 @@ def test_peers_compare_and_outliers():
 def test_peer_set_widens_then_falls_back():
     b = bench_frame()
     _, desc = pnl.peer_set(b, "Australia", 150, None)          # nobody near 150 members
-    assert desc == "all Australia centres"
+    assert desc == "all Australian centres"
     _, desc = pnl.peer_set(b, "New Zealand", 55, None)
     assert desc == "all reporting centres"
-
-
-def test_report_shows_outliers_for_a_centre():
-    at = run_report()
-    assert not at.exception, at.exception
-    heads = "".join(m.value for m in at.markdown)
-    assert "Outliers vs similar centres" in heads and "Outlier list" in heads
-    at.selectbox(key="pnl_view").set_value("GPM").run()
-    assert not at.exception, at.exception
-    at.selectbox(key="pnl_view").set_value("Centre").run()
-    at.toggle(key="pnl_out_detail").set_value(True).run()
-    assert not at.exception, at.exception
 
 
 def test_entity_months_and_groups():
@@ -251,42 +246,50 @@ def test_entity_months_and_groups():
     assert net.loc["2026-07", "Members"] == 50          # only centres that reported
 
 
-def run_deep_dive(level="admin", allowed=()):
+def run_centre(level="admin", allowed=()):
     def script(level, allowed):
         import streamlit as st
         import pnl_reports as pr
         from test_pnl_reports import PNL, VL, WM, AGE
         df = PNL if level == "admin" else PNL[PNL["Location"].isin(allowed)]
-        pr.report_deep_dive(df, WM, VL, dict(
+        pr.report_centre(df, WM, VL, dict(
             age_group=AGE, age_order=[], state_of=lambda r: r, show_chart=st.plotly_chart,
             std_layout=lambda t, y="", height=400: dict(title=t, height=height),
             report_filters=None), bench=(PNL, WM))
     return AppTest.from_function(script, args=(level, allowed), default_timeout=30).run()
 
 
-def test_deep_dive_centre_and_group():
-    at = run_deep_dive()
+def test_centre_report_sections_in_order():
+    at = run_centre()
+    assert not at.exception, at.exception
+    assert at.selectbox(key="pc_centre").options == ["Auburn", "Burwood", "Howick"]
+    assert at.selectbox(key="pc_span").value == "Last 12 months"
+    at.selectbox(key="pc_centre").set_value("Auburn").run()
     assert not at.exception, at.exception
     text = "".join(m.value for m in at.markdown)
-    assert "Where the revenue goes" in text and "Every line by month" in text
-    at.selectbox(key="dd_pick_Centre").set_value("Auburn").run()
-    assert not at.exception, at.exception
-    assert "vs previous month" in "".join(m.value for m in at.markdown)
+    order = ["Headline", "Accounts costing more than typical",
+             "Accounts costing less than typical", "Where the revenue goes",
+             "Outliers vs similar centres", "Break-even"]
+    pos = [text.index(h) for h in order]
+    assert pos == sorted(pos)
+    assert "vs previous month" in text
+    assert any("case by case" in i.value for i in at.info)
+    assert len(at.get("plotly_chart")) == 1          # only where the revenue goes
+    exp = [e.label for e in at.expander]
+    assert exp[0].startswith("Every account line by month") and \
+        exp[1].startswith("Every line by month")
     for unit in pr.UNITS:
-        at.selectbox(key="dd_unit").set_value(unit).run()
+        at.selectbox(key="pc_unit").set_value(unit).run()
         assert not at.exception, at.exception
-    at.selectbox(key="dd_view").set_value("Network").run()
-    assert not at.exception, at.exception
     for span in pr.DD_SPANS:
-        at.selectbox(key="dd_span").set_value(span).run()
+        at.selectbox(key="pc_span").set_value(span).run()
         assert not at.exception, at.exception
-    assert "A line over time" not in "".join(m.value for m in at.markdown)
 
 
-def test_deep_dive_gpm_sees_only_their_centres():
-    at = run_deep_dive("gpm", ["Success Tutoring - Howick"])
+def test_centre_report_gpm_sees_only_their_centres():
+    at = run_centre("gpm", ["Success Tutoring - Howick"])
     assert not at.exception, at.exception
-    assert at.selectbox(key="dd_pick_Centre").options == ["Howick"]
+    assert at.selectbox(key="pc_centre").options == ["Howick"]
 
 
 def test_months_shown():
@@ -294,6 +297,7 @@ def test_months_shown():
     assert pr.months_shown(ps, "Last 3 months", "2026-02") == ["2025-12", "2026-01", "2026-02"]
     assert pr.months_shown(ps, "Year to date", "2026-03") == ["2026-01", "2026-02", "2026-03"]
     assert pr.months_shown(ps, "All months", "2026-01") == ps[:3]
+    assert pr.months_shown(ps, "Latest month", "2026-02") == ["2026-02"]
 
 
 def test_small_samples_and_developing_centres():
@@ -326,11 +330,12 @@ def test_months_reported_and_break_even_flags():
     assert "2 missed a month" in pr.side_by_side_html(net)
 
 
-def test_break_even_model_has_only_actual_and_break_even():
-    at = run_report()
-    at.selectbox(key="pnl_model_pick").set_value("Auburn").run()
-    assert not at.exception, at.exception
-    text = "".join(m.value for m in at.markdown)
-    assert "20 members" not in text and "Break-even" in text
-    assert any("case by case" in i.value for i in at.info)
-    assert not at.get("plotly_chart")
+def test_outlier_tiles_and_plain_status():
+    b = bench_frame()
+    rows = pr.comparison_rows(b.loc["Big"], b.drop(index="Big"), pnl.BENCH_LINES)
+    tutor = rows.set_index("Line").loc["Tutor Wages + Super", "Status"]
+    assert tutor == "🔴 Well above typical"
+    assert pr._describe("established", "all Australian centres") == \
+        "all established Australian centres"
+    assert pr._describe("established", "Australian centres with 40–59 members") == \
+        "established Australian centres with 40–59 members"

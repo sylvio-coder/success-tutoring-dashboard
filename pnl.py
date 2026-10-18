@@ -529,6 +529,14 @@ MANAGER = "Wages - Manager/Admin + Super"
 MIN_PEERS = 5                   # ranges from fewer centres jump around too much
 
 
+COUNTRY_ADJECTIVES = {"Australia": "Australian", "New Zealand": "New Zealand",
+                      "United States": "US", "Canada": "Canadian"}
+
+
+def country_adjective(country):
+    return COUNTRY_ADJECTIVES.get(str(country), str(country))
+
+
 def peer_set(bench, country=None, members=None, exclude=None, min_n=MIN_PEERS):
     """Centres to compare with: same country and members band, widened to nearby bands
     until there are min_n, then the whole country, then every centre. Centres with very
@@ -551,11 +559,12 @@ def peer_set(bench, country=None, members=None, exclude=None, min_n=MIN_PEERS):
                 lo, hi = bands[max(i - w, 0)], bands[min(i + w, len(bands) - 1)]
                 span = lo if lo == hi else f"{lo.split('–')[0]}–{hi.split('–')[-1].rstrip('+')}" \
                     + ("+" if hi.endswith("+") else "")
-                return sel, f"{country + ' c' if country else 'C'}entres with {span} members"
+                return sel, (f"{country_adjective(country)} centres" if country
+                             else "Centres") + f" with {span} members"
             if w >= 2:
                 break
     if country and len(where) >= min_n:
-        return where, f"all {country} centres"
+        return where, f"all {country_adjective(country)} centres"
     return pool, "all reporting centres"
 
 
