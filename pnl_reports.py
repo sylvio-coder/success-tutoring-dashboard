@@ -255,9 +255,9 @@ def side_by_side_html(cols, notes=None, rows=None):
 
 
 def tutor_rate_settings(bench_cent, key):
-    """Editable tutor % by members band from established centres (12 months or older),
-    plus a reference table for developing centres. Returns ({band: %}, {band: centres})."""
-    established, developing = pnl.split_by_age(bench_cent)
+    """Editable tutor % by members band from established centres (12 months or older).
+    Returns ({band: %}, {band: centres})."""
+    established, _ = pnl.split_by_age(bench_cent)
     bench = pnl.tutor_benchmarks(established).rename_axis("Members band").reset_index()
     st.markdown('<div class="section-header">Benchmark settings: Tutor Wages + Super by '
                 'members band</div>', unsafe_allow_html=True)
@@ -274,17 +274,6 @@ def tutor_rate_settings(bench_cent, key):
                 "Benchmark %": st.column_config.NumberColumn(format="%.1f%%"),
                 "Use %": st.column_config.NumberColumn(min_value=0.0, max_value=100.0,
                                                        step=0.5, format="%.1f%%")})
-        dev = pnl.tutor_benchmarks(developing) if len(developing) else None
-        st.markdown("**Developing centres (under 12 months)**: for guidance only; not used in "
-                    "the break-even.")
-        if dev is None or dev["Centres"].sum() == 0:
-            st.caption("No developing centres reported for these months.")
-        else:
-            dev = dev[dev["Centres"] > 0].rename_axis("Members band").reset_index()
-            st.dataframe(dev[["Members band", "Centres", "Benchmark %", "Sample"]],
-                         hide_index=True, use_container_width=True,
-                         column_config={"Benchmark %":
-                                        st.column_config.NumberColumn(format="%.1f%%")})
     rates = dict(zip(edited["Members band"], edited["Use %"].fillna(0).astype(float)))
     return rates, dict(zip(bench["Members band"], bench["Based on"]))
 
@@ -359,7 +348,7 @@ def _peers_for(col, bench, exclude):
 # ── Deep dive ─────────────────────────────────────────────────────────────────
 UNITS = ["$", "% of revenue", "$ per member"]
 DD_SPANS = ["Latest month", "Last 3 months", "Last 12 months", "Year to date", "All months"]
-DEFAULT_SPAN = "Last 12 months"
+DEFAULT_SPAN = "Latest month"
 GROUP_VIEWS = ["State", "Country", "GPM", "Network"]
 
 
@@ -451,13 +440,18 @@ def _fmt_unit(v, unit):
     return _money(v)
 
 
-def _card(label, value, delta=None, delta_text="", good=None):
+def average_months(data, months):
+    """Average per month over these months (amounts and members)."""
+    return data.loc[[m for m in months if m in data.index]].mean(numeric_only=True)
+
+
+def _card(label, value, delta=None, delta_text="", good=None, vs="vs previous month"):
     d = ""
     if delta is not None and not pd.isna(delta):
         arrow = "▲" if delta > 0 else "▼" if delta < 0 else "●"
         colour = "#5d6d73" if good is None or delta == 0 else ("#2e8540" if good else "#c8322f")
         d = (f'<div class="metric-delta" style="color:{colour}">{arrow} {delta_text} '
-             '<span>vs previous month</span></div>')
+             f'<span>{html.escape(vs)}</span></div>')
     return (f'<div class="metric-card"><div class="metric-label">{html.escape(label)}</div>'
             f'<div class="metric-value">{html.escape(value)}</div>{d}</div>')
 
@@ -547,6 +541,9 @@ def report_group(df_pnl, df_wm, vl, helpers, bench=None):
 
     b_pnl, b_wm = bench if bench is not None else (df_pnl, df_wm)
     bench_cent = centre_table(b_pnl, members_by_month(b_wm), vl, periods, helpers["age_group"])
+    # The settings sit at the end of the page but feed the table, so lay out the table and
+    # outliers first (in containers) and fill them once the settings are read.
+    table_slot, outliers_slot = st.container(), st.container()
     rates, samples = tutor_rate_settings(bench_cent, key=f"pnl_rates_{periods[0]}_{periods[-1]}")
     # Centre Level uses these rates too, while they're for the same month.
     st.session_state["pnl_bench_rates"] = {"periods": tuple(periods), "rates": rates,
@@ -558,17 +555,21 @@ def report_group(df_pnl, df_wm, vl, helpers, bench=None):
                                         len(periods))
         name = pick.rsplit(" (", 1)[0]
         cols.append((f"Total — {name}", total[0][1], total[0][2]))
+    else:
+        left_out = []
+
+    with table_slot:
+        _section(f"P&L by centre — {pick}, {label}",
+                 "Each centre in its own currency, A–Z, then the group total (AUD if the group "
+                 "mixes currencies). ⚠ = missed a month, or a break-even based on a small "
+                 "benchmark sample. Break-even uses the benchmark settings at the end of the "
+                 "page.")
+        st.markdown(side_by_side_html(cols), unsafe_allow_html=True)
         if left_out:
             st.warning("Left out of the AUD total (no exchange rate): " +
                        ", ".join(x.replace(PREFIX, "") for x in left_out))
-
-    _section(f"P&L by centre — {pick}, {label}",
-             "Each centre in its own currency, A–Z, then the group total (AUD if the group "
-             "mixes currencies). ⚠ = missed a month, or a break-even based on a small "
-             "benchmark sample.")
-    st.markdown(side_by_side_html(cols), unsafe_allow_html=True)
-
-    group_outliers(group, bench_cent, label)
+    with outliers_slot:
+        group_outliers(group, bench_cent, label)
     with st.expander("How this is worked out"):
         st.markdown(HOW_GROUP + "\n- " + DISCLAIMER)
 
@@ -623,34 +624,34 @@ def group_outliers(cent, bench, label):
 # ── Centre Level ──────────────────────────────────────────────────────────────
 TILE_CSS = """<style>
 .otile{background:#fff;border:1px solid #dde5e6;border-left:4px solid var(--c);border-radius:8px;
- padding:10px 12px;height:100%}
+ padding:10px 12px;height:100%;margin-bottom:10px}
 .otile .t{font-size:12px;color:#5d6d73;font-weight:600}
 .otile .v{font-size:22px;font-weight:700;color:var(--c);margin:2px 0}
 .otile .s{font-size:12px;color:#5d6d73}
 </style>"""
-MAX_TILES = 4
+TILES_PER_ROW = 4
 
 
 def _outlier_tiles(rows, bad, cur):
-    """Up to MAX_TILES account tiles; the rest are counted."""
+    """A tile for every account, 4 to a row, adding rows as needed."""
     if rows.empty:
-        st.caption("None this month.")
+        st.caption("None for this period.")
         return
     colour = "#c8322f" if bad else "#2e8540"
-    shown = rows.head(MAX_TILES)
-    tiles = st.columns(MAX_TILES)
     st.markdown(TILE_CSS, unsafe_allow_html=True)
-    for col, (_, r) in zip(tiles, shown.iterrows()):
-        gap = abs(r["Gap $"])
-        flag = " ⚠" if pnl.small_sample(r["Centres"]) else ""
-        col.markdown(
-            f'<div class="otile" style="--c:{colour}"><div class="t">{html.escape(r["Line"])}'
-            f'</div><div class="v">{"+" if bad else "−"}{_money(gap)}<span style="font-size:'
-            f'12px;font-weight:500"> {html.escape(cur)}/month</span></div><div class="s">'
-            f'{r["Actual %"]:.1f}% of revenue vs typical {r["Typical %"]:.1f}%{flag}</div></div>',
-            unsafe_allow_html=True)
-    if len(rows) > MAX_TILES:
-        st.caption(f"+{len(rows) - MAX_TILES} more in the table below.")
+    items = list(rows.iterrows())
+    for start in range(0, len(items), TILES_PER_ROW):
+        tiles = st.columns(TILES_PER_ROW)
+        for col, (_, r) in zip(tiles, items[start:start + TILES_PER_ROW]):
+            gap = abs(r["Gap $"])
+            flag = " ⚠" if pnl.small_sample(r["Centres"]) else ""
+            col.markdown(
+                f'<div class="otile" style="--c:{colour}"><div class="t">'
+                f'{html.escape(r["Line"])}</div><div class="v">{"+" if bad else "−"}'
+                f'{_money(gap)}<span style="font-size:12px;font-weight:500"> '
+                f'{html.escape(cur)}/month</span></div><div class="s">{r["Actual %"]:.1f}% of '
+                f'revenue vs typical {r["Typical %"]:.1f}%{flag}</div></div>',
+                unsafe_allow_html=True)
 
 
 def _waterfall(now, pick, month, cur, helpers):
@@ -678,8 +679,7 @@ def _waterfall(now, pick, month, cur, helpers):
                            textposition="outside", cliponaxis=False,
                            hovertemplate="%{x}: %{text}<extra></extra>"))
     fig.add_hline(y=0, line=dict(color="#5d6d73", width=1))
-    fig.update_layout(**helpers["std_layout"](f"From revenue to EBITDA — {pick}, "
-                                               f"{pnl.period_name(month)}",
+    fig.update_layout(**helpers["std_layout"](f"From revenue to EBITDA — {pick}, {month}",
                                                f"{cur} per month", height=440))
     fig.update_layout(showlegend=False)
     helpers["show_chart"](fig)
@@ -811,12 +811,25 @@ def report_centre(df_pnl, df_wm, vl, helpers, bench=None):
     if month not in data.index:
         st.warning(f"{pick} has no P&L for {pnl.period_name(month)}.")
         return
-    now = data.loc[month]
-    prev = data.iloc[-2] if len(data) >= 2 else None
-    label = pnl.period_name(month)
+    # The months chosen: one month, or several (shown as the average per month), compared
+    # with the same number of months just before.
+    sel = months_shown(list(data.index), span, month)
+    n_sel = len(sel)
+    earlier = [p for p in data.index if p < sel[0]]
+    prev_sel = earlier[-n_sel:] if len(earlier) >= n_sel else []
+    now = average_months(data, sel)
+    prev = average_months(data, prev_sel) if prev_sel else None
+    label = pnl.period_name(month) if n_sel == 1 else \
+        f"Average per month, {pnl.period_name(sel[0])} – {pnl.period_name(sel[-1])}"
+    vs = "vs previous month" if n_sel == 1 else f"vs previous {n_sel} months"
+    missed = [p for p in select_periods(periods, "All months", month)
+              if sel[0] <= p <= month and p not in sel]
 
     # ── Row 1: headline ──
     _section(f"Headline — {label} ({cur})")
+    if missed:
+        st.caption(f"⚠ No P&L for {', '.join(pnl.period_name(p) for p in missed)}: the average "
+                   "is over the months reported.")
     rev = now["Total Revenue"]
     mem = now.get("Members")
     rpm = rev / mem / pnl.WEEKS_PER_MONTH if mem and not pd.isna(mem) and mem > 0 else None
@@ -850,12 +863,12 @@ def report_centre(df_pnl, df_wm, vl, helpers, bench=None):
     for col, (lbl, value, dlt, fmt) in zip(row, cards):
         ok = dlt is not None and not pd.isna(dlt)
         col.markdown(_card(lbl, value, dlt if ok else None, fmt(abs(dlt)) if ok else "",
-                           dlt > 0 if ok else None), unsafe_allow_html=True)
+                           dlt > 0 if ok else None, vs), unsafe_allow_html=True)
 
     # Comparison with similar centres, for this month.
     b_pnl, b_wm = bench if bench is not None else (df_pnl, df_wm)
-    bench_cent = centre_table(b_pnl, members_by_month(b_wm), vl, [month], helpers["age_group"])
-    mine = centre_table(df_pnl[df_pnl["Location"] == loc], members, vl, [month],
+    bench_cent = centre_table(b_pnl, members_by_month(b_wm), vl, sel, helpers["age_group"])
+    mine = centre_table(df_pnl[df_pnl["Location"] == loc], members, vl, sel,
                         helpers["age_group"])
     values = mine.loc[loc] if loc in mine.index else None
     peers = acct_values = acct_peers = None
@@ -863,7 +876,7 @@ def report_centre(df_pnl, df_wm, vl, helpers, bench=None):
     if values is not None and rev >= pnl.LOW_REVENUE:
         peers, desc = peers_by_age(bench_cent, values.get("Age (Months)"), values.get("Country"),
                                    values.get("Members"), loc)
-        acct = pnl.account_table(b_pnl, [month])
+        acct = pnl.account_table(b_pnl, sel)
         if loc in acct.index and len(peers) >= 2:
             for c in ["Total Revenue", "Members", "Country"]:
                 acct[c] = bench_cent[c].reindex(acct.index)
@@ -891,7 +904,7 @@ def report_centre(df_pnl, df_wm, vl, helpers, bench=None):
 
     # ── Where the revenue goes ──
     _section("Where the revenue goes")
-    _waterfall(now, pick, month, cur, helpers)
+    _waterfall(now, pick, label, cur, helpers)
 
     # ── Outliers vs similar centres ──
     _section("Outliers vs similar centres")
@@ -904,7 +917,7 @@ def report_centre(df_pnl, df_wm, vl, helpers, bench=None):
     # ── Break-even ──
     _section("Break-even")
     stored = st.session_state.get("pnl_bench_rates")
-    if stored and stored["periods"] == (month,):
+    if stored and stored["periods"] == tuple(sel):
         rates, samples = stored["rates"], stored["samples"]
     else:
         est, _ = pnl.split_by_age(bench_cent)
@@ -914,8 +927,10 @@ def report_centre(df_pnl, df_wm, vl, helpers, bench=None):
         _break_even(pick, cur, values, label, rates, samples)
 
     # ── By month ──
-    recent = data.loc[months_shown(list(data.index), span, month)]
-    with st.expander(f"Every account line by month ({unit}, {span.lower()})", expanded=True):
+    table_months = sel if n_sel > 1 else months_shown(list(data.index), "Last 12 months", month)
+    recent = data.loc[table_months]
+    span_label = span.lower() if n_sel > 1 else "last 12 months"
+    with st.expander(f"Every account line by month ({unit}, {span_label})", expanded=True):
         d = df_pnl[(df_pnl["Location"] == loc) & (df_pnl["Period"] <= month)].copy()
         d["Amount"] = d["Amount"].astype(float)
         acc = d.pivot_table(index=["P&L section", "Account code", "Account"], columns="Period",
@@ -939,7 +954,7 @@ def report_centre(df_pnl, df_wm, vl, helpers, bench=None):
                      column_config={"Account": st.column_config.TextColumn(
                          "Account", width="large", pinned=True)})
 
-    with st.expander(f"Every line by month ({unit}, {span.lower()})"):
+    with st.expander(f"Every line by month ({unit}, {span_label})"):
         table = _in_units(recent, unit, TREND_LINES).T
         table.columns = [pnl.period_name(p) for p in table.columns]
         shown = table.apply(lambda col: col.map(lambda v: _fmt_unit(v, unit)))

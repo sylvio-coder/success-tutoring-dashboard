@@ -175,10 +175,12 @@ def test_report_for_a_gpm_shows_only_their_centres():
     assert not at.exception, at.exception
     html = "".join(m.value for m in at.markdown)
     assert "Howick" in html and "Auburn" not in html
-    bench = at.dataframe[0].value          # typical values come from every centre
-    assert bench["Centres"].sum() == 2     # established only: Burwood is 2 months old
-    dev = at.dataframe[1].value            # developing centres get their own benchmark
-    assert dev["Centres"].sum() == 1
+    bench = at.dataframe[-1].value         # benchmark settings, last on the page
+    assert bench["Centres"].sum() == 2     # every centre counts, established only
+    text = "".join(m.value for m in at.markdown)
+    assert "Developing centres" not in text
+    assert text.index("L by centre") < text.index("Outliers in this group") < \
+        text.index("Benchmark settings")
 
 
 def test_report_with_no_pnl_yet():
@@ -263,7 +265,7 @@ def test_centre_report_sections_in_order():
     at = run_centre()
     assert not at.exception, at.exception
     assert at.selectbox(key="pc_centre").options == ["Auburn", "Burwood", "Howick"]
-    assert at.selectbox(key="pc_span").value == "Last 12 months"
+    assert at.selectbox(key="pc_span").value == "Latest month"
     at.selectbox(key="pc_centre").set_value("Auburn").run()
     assert not at.exception, at.exception
     text = "".join(m.value for m in at.markdown)
@@ -339,3 +341,24 @@ def test_outlier_tiles_and_plain_status():
         "all established Australian centres"
     assert pr._describe("established", "Australian centres with 40–59 members") == \
         "established Australian centres with 40–59 members"
+
+
+def test_centre_report_several_months_is_the_average():
+    at = run_centre()
+    at.selectbox(key="pc_centre").set_value("Auburn").run()
+    one = "".join(m.value for m in at.markdown)
+    assert "$12,600" in one and "Headline — August 2026" in one
+    assert any("last 12 months" in e.label for e in at.expander)
+    at.selectbox(key="pc_span").set_value("Last 3 months").run()
+    assert not at.exception, at.exception
+    text = "".join(m.value for m in at.markdown)
+    assert "Average per month, July 2026 – August 2026" in text
+    assert "$12,100" in text                       # (11,600 + 12,600) / 2
+    assert any("last 3 months" in e.label for e in at.expander)
+
+
+def test_average_months():
+    data = pd.DataFrame({"Total Revenue": [100.0, 200.0, 300.0], "Members": [10, 20, None]},
+                        index=["2026-06", "2026-07", "2026-08"])
+    a = pr.average_months(data, ["2026-07", "2026-08", "2026-09"])
+    assert a["Total Revenue"] == 250 and a["Members"] == 20
