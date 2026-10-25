@@ -477,3 +477,54 @@ def test_inhouse_foundation_members_count_as_active():
     mem = res["membership"].set_index("Location")["active"]
     assert mem["Success Tutoring - Belmont WA"] == 24      # not skipped as empty
     assert "Success Tutoring - Epping" not in mem.index
+
+
+# Epping migrating from Hapana to the in-house CRM: both report it this week.
+MIGRATING_MEMBERS = xlsx([
+    ["Location Name", "Active Members", "Suspended Members", "Cancelled Members",
+     "New Members"],
+    ["Success Tutoring - Epping", 30, 2, 1, 5],
+    ["Success Tutoring - Burwood", 56, 11, 3, 1],
+])
+MIGRATING_REVENUE = xlsx([
+    ["Location Name", "Sessions", "Gross Revenue", "Net Revenue (ex tax)"],
+    ["Success Tutoring - Epping", 10, 2200.0, 2000.0],
+    ["Success Tutoring - Burwood", 44, 4863.23, 4429.79],
+])
+
+
+def migrating_exports():
+    return [ingest.read_export("Weekly Membership.xlsx", HAPANA_MEMBERS),
+            ingest.read_export("SA - Revenue Location Summary (16).xlsx", HAPANA_REV_AU),
+            ingest.read_export("members-report-2026-09-14-to-2026-09-20.xlsx",
+                               MIGRATING_MEMBERS),
+            ingest.read_export("revenue-report-2026-09-14-to-2026-09-20.xlsx",
+                               MIGRATING_REVENUE)]
+
+
+def test_migrating_site_adds_both_crms_together():
+    res = ingest.combine(migrating_exports(), MASTER)
+    assert res["clashes"] and any("Epping" in e for e in res["errors"])   # not set up yet
+
+    alias = {ingest.combine_alias("Success Tutoring - Epping"): "Success Tutoring - Epping"}
+    res = ingest.combine(migrating_exports(), MASTER, alias)
+    assert res["errors"] == [] and res["clashes"] == []
+    mem = res["membership"].set_index("Location")
+    e = mem.loc["Success Tutoring - Epping"]
+    assert (e["active"], e["suspended"], e["cancelled"], e["new"]) == (130, 14, 1, 7)
+    assert "Hapana + In-house" in e["source"]
+    rev = res["revenue"].set_index("Location").loc["Success Tutoring - Epping"]
+    assert rev["sessions"] == 23 + 10
+    assert rev["gross"] == pytest.approx(7152 + 2200)
+    assert rev["net"] == pytest.approx(round(7152 / 1.10, 2) + 2000)
+    assert rev["active"] == 130                       # combined members
+    assert any("added together" in i and "Epping" in i for i in res["info"])
+    # Other sites unaffected.
+    assert mem.loc["Success Tutoring - Burwood", "active"] == 56
+    assert mem.loc["Success Tutoring - Epping VIC", "active"] == 46
+
+
+def test_combine_alias_is_not_a_name_mapping():
+    plain, both = ingest.split_combine({ingest.combine_alias("Success Tutoring - Epping"):
+                                        "Success Tutoring - Epping", "Belmont Wa": "X"})
+    assert both == {"Success Tutoring - Epping"} and plain == {"Belmont Wa": "X"}

@@ -113,14 +113,19 @@ def page_weekly_upload(spreadsheet, df_wm, df_rv, clear_cache):
     # Two rows landing on one site: ask which site the in-house row really is.
     if res["clashes"]:
         st.markdown("#### Same name in both CRMs")
-        st.caption("Both CRMs use this name for different sites. Pick the site this row "
-                   "is; the choice applies to that CRM only and is remembered.")
+        st.caption("This site appears in both CRMs. If it's moving from Hapana to the in-house "
+                   "CRM, choose **Migrating** and the two are added together (remembered until "
+                   "you delete its 'Combine CRMs' row in Location Aliases). If they're two "
+                   "different sites with the same name, pick the site this row is; that choice "
+                   "applies to that CRM only and is remembered.")
         all_names = master["Location"].tolist()
         CHOOSE, NEW = "— choose —", "➕ New location (set up on the Locations page)"
+        MIGRATING = "⇄ Migrating: add both CRMs together"
         for c in res["clashes"]:
             scoped = ingest.scoped_alias(c["crm"], c["name"])
             sugg = [n for n in c["suggestions"] if n != c["location"]]
-            opts = [CHOOSE, NEW] + sugg + [n for n in all_names if n not in sugg]
+            opts = [CHOOSE, MIGRATING, NEW] + sugg + \
+                [n for n in all_names if n not in sugg and n != c["location"]]
             c1, c2 = st.columns([2, 3])
             c1.markdown(f"**{c['crm']}: {c['name']}**  \n<span style='font-size:0.8em'>"
                         f"clashes with {c['other']} ({c['location']})</span>",
@@ -132,7 +137,9 @@ def page_weekly_upload(spreadsheet, df_wm, df_rv, clear_cache):
                 _pending()[scoped] = {"week_end": res["week_end"], "sources": [c["crm"]]}
             else:
                 _pending().pop(scoped, None)
-                if choice != CHOOSE:
+                if choice == MIGRATING:
+                    extra_aliases[ingest.combine_alias(c["location"])] = c["location"]
+                elif choice != CHOOSE:
                     extra_aliases[scoped] = choice
 
     if extra_aliases:
