@@ -360,6 +360,25 @@ class LocationMatcher:
         return [self.master[x] for x in keys[:n]]
 
 
+COMBINE_PREFIX = "Combine CRMs: "
+
+
+def combine_alias(location):
+    """Alias row meaning 'this site is migrating between CRMs: add both CRMs' figures'."""
+    return COMBINE_PREFIX + location
+
+
+def split_combine(aliases):
+    """(ordinary aliases, set of locations whose CRM rows are added together)."""
+    plain, both = {}, set()
+    for a, loc in (aliases or {}).items():
+        if str(a).startswith(COMBINE_PREFIX):
+            both.add(str(loc).strip())
+        else:
+            plain[a] = loc
+    return plain, both
+
+
 def scoped_alias(crm, raw):
     """Alias text that applies to one CRM's exports only."""
     return f"{crm}: {raw}"
@@ -391,6 +410,7 @@ def combine(exports, master, aliases=None):
     Returns dict with membership / revenue DataFrames (keyed by master
     location name), unknown names, issues and the detected week.
     """
+    aliases, migrating = split_combine(aliases)
     matcher = LocationMatcher(master["Location"].tolist(), aliases,
                               master["Region"].tolist() if "Region" in master.columns else None)
     country_of = {location_key(r["Location"]): str(r.get("Country", "")).strip()
@@ -442,11 +462,24 @@ def combine(exports, master, aliases=None):
     members, revenue = {}, {}   # location -> record
     seen = {}                   # (table, location) -> (source, crm, raw)
     clashes = {}                # (crm, raw) to remap -> clash details
+    added = set()               # migrating sites whose two CRM rows were added together
+    SUMMED = ("active", "suspended", "cancelled", "new", "sessions", "gross", "net")
 
     def take(table, store, loc, rec, source, raw, crm):
         key = (table, loc)
         if key in seen:
             s0, c0, r0 = seen[key]
+            if loc in migrating and c0 != crm:
+                # Migrating between CRMs: one site, so add the two rows together.
+                old = store[loc]
+                for f in SUMMED:
+                    if f in rec or f in old:
+                        a, b = old.get(f), rec.get(f)
+                        old[f] = None if a is None and b is None else \
+                            float(a or 0) + float(b or 0)
+                old["source"] = "Hapana + In-house (migrating)"
+                added.add(loc)
+                return
             errors.append(f"{loc} appears more than once in the {table} data "
                           f"({s0} '{r0}' and {source} '{raw}'). "
                           "Two different sites have the same name.")
@@ -513,10 +546,14 @@ def combine(exports, master, aliases=None):
                         rec["net"] = round(rec["gross"] / div, 2)
                 take("revenue", revenue, loc, rec, source, raw, crm)
 
-    # In-house revenue has no member count: take it from the members export.
+    # In-house revenue has no member count: take it from the members export. A
+    # migrating site takes its combined member count.
     for loc, rec in revenue.items():
-        if rec["active"] is None or pd.isna(rec["active"]):
-            rec["active"] = members.get(loc, {}).get("active", 0.0)
+        if rec["active"] is None or pd.isna(rec["active"]) or loc in added:
+            rec["active"] = members.get(loc, {}).get("active", rec["active"] or 0.0)
+    if added:
+        info.append("Migrating between CRMs, Hapana and in-house figures added together: "
+                    + ", ".join(sorted(added)))
 
     if excluded:
         info.append("Excluded test account(s): " + ", ".join(sorted(excluded)))

@@ -255,3 +255,30 @@ def test_locations_page_add_option(ss):
     at.button(key="new_opt_add").click().run()
     assert not at.exception, at.exception
     assert at.session_state["extra_options"] == {"Status": {"Closed"}}
+
+
+def test_upload_migrating_site_adds_both_crms(ss):
+    from test_ingest import MIGRATING_MEMBERS, MIGRATING_REVENUE
+    files = [Upload("Weekly Membership.xlsx", HAPANA_MEMBERS),
+             Upload("SA - Revenue Location Summary (16).xlsx", HAPANA_REV_AU),
+             Upload("members-report-2026-09-14-to-2026-09-20.xlsx", MIGRATING_MEMBERS),
+             Upload("revenue-report-2026-09-14-to-2026-09-20.xlsx", MIGRATING_REVENUE)]
+    at = run_page("page_weekly_upload", ss, files)
+    assert not at.exception, at.exception
+    key = next(s.key for s in at.selectbox if s.key and s.key.startswith("clash_"))
+    at.selectbox(key=key).set_value("⇄ Migrating: add both CRMs together").run()
+    assert not at.exception, at.exception
+    assert not any("more than once" in e.value for e in at.error)
+    next(b for b in at.button if b.label.startswith("✅ Confirm")).click().run()
+    assert not at.exception, at.exception
+    assert ss.worksheet("Location Aliases").get_all_records()[-1] == {
+        "Alias": "Combine CRMs: Success Tutoring - Epping",
+        "Location": "Success Tutoring - Epping"}
+    wm = ss.worksheet("Weekly Membership").cells
+    ep = next(r for r in wm if r[0] == "Success Tutoring - Epping" and r[1] == "38/2026")
+    assert ep[3] == 130
+
+    # Next week it's remembered: no question, figures added automatically.
+    at = run_page("page_weekly_upload", ss, files)
+    assert not any(s.key and s.key.startswith("clash_") for s in at.selectbox)
+    assert any("added together" in i.value for i in at.info)
