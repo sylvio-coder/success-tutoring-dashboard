@@ -1,0 +1,4 @@
+# Python and test caches (created automatically when the app or tests run)
+__pycache__/
+*.pyc
+.pytest_cache/
