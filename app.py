@@ -2290,6 +2290,7 @@ REPORTS=[
     "12 · P&L Summary",
     "13 · P&L Deep Dive",
     "14 · P&L Share",
+    "15 · P&L Centre Forecast",
     "11 · AI Outlier Analysis",
 ]
 
@@ -2302,6 +2303,10 @@ def report_allowed(report, allowed_tabs):
     return num in tabs or name.lower() in tabs or report.lower() in tabs
 
 REPORTS = [r for r in REPORTS if report_allowed(r, st.session_state.get("allowed_tabs", []))]
+# Admin-only reports: hidden from everyone else, even with allowed_tabs "all".
+ADMIN_ONLY_REPORTS = {"15 · P&L Centre Forecast"}
+if st.session_state.get("access_level") != "admin":
+    REPORTS = [r for r in REPORTS if r not in ADMIN_ONLY_REPORTS]
 ADMIN_PAGES = ["⚙ Weekly Upload", "⚙ P&L Upload", "⚙ Locations", "⚙ Sheet Setup"] if st.session_state.get("access_level") == "admin" else []
 if not REPORTS:
     st.warning("No reports are assigned to your account. Please contact your administrator."); st.stop()
@@ -2323,6 +2328,7 @@ NAV_GROUPS = [
         ("10 · Revenue",            "Revenue",             ":material/attach_money:"),
         ("12 · P&L Summary",        "P&L – Group Level",   ":material/account_balance:"),
         ("13 · P&L Deep Dive",      "P&L – Centre Level",  ":material/query_stats:"),
+        ("15 · P&L Centre Forecast", "P&L – Centre Forecast", ":material/timeline:"),
         ("14 · P&L Share",          "P&L Share",           ":material/ios_share:"),
     ]),
     ("Insights", [
@@ -2421,6 +2427,7 @@ elif selected_report=="10 · Revenue":                 report_revenue(df_rv)
 elif selected_report=="12 · P&L Summary":            report_pnl(df_wm)
 elif selected_report=="13 · P&L Deep Dive":          report_pnl(df_wm, pnl_reports.report_centre)
 elif selected_report=="14 · P&L Share":              report_pnl(df_wm, pnl_reports.report_share)
+elif selected_report=="15 · P&L Centre Forecast":    report_pnl(df_wm, pnl_reports.report_forecast)
 elif selected_report=="11 · AI Outlier Analysis":     report_outliers_alerts(df_wm, df_rv)
 elif selected_report in ADMIN_PAGES:
     spreadsheet = get_sheets_client().open_by_key(SHEET_ID)

@@ -1,6 +1,7 @@
 """P&L reports: summary in the centres side-by-side layout, and the break-even model."""
 import base64
 import html
+import io
 import os
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -10,6 +11,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 import pnl
+import pnl_forecast as pf
 import pnl_share
 
 LOC = "Success Tutoring - Business name"
@@ -1740,3 +1742,306 @@ def report_share(df_pnl, df_wm, vl, helpers, bench=None):
     with st.container(key="ps_how"):
         with st.expander("How this is worked out"):
             st.markdown(HOW_SHARE)
+
+
+# ── P&L Centre Forecast (admins only) ─────────────────────────────────────────
+FORECAST_VIEWS = ["Financial year", "Next 12 months"]
+GRID_LABELS = {"Tutor Wages + Super": "Tutor wages %", "Rent": "Rent %",
+               "Wages - Manager/Admin + Super": "Manager wages %", "Royalties": "Royalties %",
+               "Marketing - Agency Fees": "Agency fees %", "Marketing": "Marketing %",
+               "OPEX": "OPEX %"}
+BASIS_COLOURS = {pf.ACTUAL: "#1f9a9a", pf.FORECAST: "#8fcfcf", pf.ESTIMATE: "#d5e3e4"}
+FORECAST_ROWS = [r for r in TABLE_ROWS[:13] if r[1] != "Months"] + [
+    (None, None, "gap"),
+    ("Break-even members", "BE members", "count"),
+    ("Members above / below break-even", "BE gap", "count"),
+]
+HOW_FORECAST = f"""
+- **Actual** months are the centre's P&L. Every later month is worked out from the centre's
+  last {pf.RECENT} P&L months (fewer if it has fewer).
+- **Members**: months with Weekly Membership data use it. Later months carry on from the last
+  known month: the usual change for that time of year plus the centre's recent growth, which
+  counts a little less each month (×{pf.DAMP}) and is capped at ±{pf.MAX_TREND:.0%} a month. The time-of-year pattern
+  is the centre's own once it has {pf.OWN_PATTERN_MONTHS} months of membership history, otherwise the network's
+  (centres with {pf.NETWORK_MIN_MEMBERS}+ members).
+- **Revenue** = members × Average Membership Value (average of the last {pf.RECENT} months) × 4.2 weeks.
+- **Tutor wages and marketing**: the average % of revenue over the last {pf.RECENT} months.
+- **Rent, manager wages, agency fees and OPEX** stay at their average $ of the last {pf.RECENT} months,
+  shown as a % of that month's revenue. **Royalties**: the higher of the Royalty minimum or 8%
+  of revenue, or $0 while royalty relief lasts.
+- **Changing a %** sets that line to that % of revenue for that month. Lines left alone keep
+  the behaviour above, so rent stays the same $ if you change members.
+- **Estimate ⚠** = the centre has no P&L for that month of the year yet, so the forecast
+  relies more on the network pattern. Treat these months with more caution.
+- **Break-even members** = members needed that month for EBITDA of 0 at that month's AMV and
+  costs.
+- **Benchmarks**: the forecast months' average % of revenue against similar centres (same
+  country and members band; centres under 12 months old against other developing centres).
+  The normal range is the middle half (25th–75th percentile). ⚠ = fewer than
+  {pnl.SMALL_SAMPLE} centres. Not shown with fewer than {pnl_share.MIN_PEERS} centres.
+- Interest Income (account 270) is counted in revenue, as in the other P&L reports.
+"""
+FORECAST_NOTE = ("A forecast is an estimate from the centre's recent figures and network "
+                 "patterns, not a promise. Check it against what you know about the centre: "
+                 "price changes, staffing, lease and marketing plans.")
+
+
+def _royalty_min(vl, loc):
+    v = vl.set_index(LOC)["Royalty Min"].get(loc) if LOC in vl.columns and \
+        "Royalty Min" in vl.columns else None
+    v = pd.to_numeric(str(v).replace("$", "").replace(",", "").strip(), errors="coerce")
+    return float(v) if not pd.isna(v) else pnl.DEFAULT_ROYALTY_MIN
+
+
+def _forecast_chart(table, pick, cur, helpers):
+    t = table[table["Basis"] != pf.MISSING]
+    x = [pd.Period(p, "M").strftime("%b %y") for p in t.index]
+    fig = go.Figure()
+    for basis, colour in BASIS_COLOURS.items():
+        mask = t["Basis"] == basis
+        if mask.any():
+            fig.add_bar(x=[x_ for x_, m in zip(x, mask) if m], y=t.loc[mask, "Total Revenue"],
+                        name=f"Revenue ({basis.replace(' ⚠', '')})", marker_color=colour,
+                        hovertemplate="%{x}: %{y:$,.0f}<extra>Revenue</extra>")
+    fig.add_scatter(x=x, y=t["EBITDA"], name="EBITDA", mode="lines+markers",
+                    line=dict(color="#1c2a30", width=2),
+                    marker=dict(color=["#c8322f" if v < 0 else "#2e8540" for v in t["EBITDA"]],
+                                size=8),
+                    hovertemplate="%{x}: %{y:$,.0f}<extra>EBITDA</extra>")
+    fig.add_hline(y=0, line=dict(color="#5d6d73", width=1))
+    fig.update_layout(**helpers["std_layout"](f"Revenue and EBITDA by month — {pick}",
+                                               f"{cur} per month", height=420))
+    fig.update_layout(barmode="overlay", legend=dict(orientation="h", y=-0.25),
+                      xaxis=dict(categoryorder="array", categoryarray=x))
+    helpers["show_chart"](fig)
+
+
+def _forecast_benchmarks(values, peers, desc):
+    """Benchmark % for each line, next to the forecast's average %."""
+    if values is None:
+        st.caption("No forecast months shown, so there's nothing to compare.")
+        return
+    if peers is None or len(peers) < pnl_share.MIN_PEERS:
+        st.caption(pnl_share.NOT_ENOUGH + ".")
+        return
+    rows = pnl.compare_lines(values, peers, pnl.BENCH_LINES)
+    rows = rows[rows["Centres"] >= pnl_share.MIN_PEERS] if not rows.empty else rows
+    if rows.empty:
+        st.caption(pnl_share.NOT_ENOUGH + ".")
+        return
+    small = pnl.small_sample(len(peers))
+    out = []
+    for _, r in rows.iterrows():
+        amv = r["Line"] == "Average Membership Value"
+        fmt = (lambda v: "–" if v is None or pd.isna(v) else f"${v:,.2f}") if amv else \
+            (lambda v: "–" if v is None or pd.isna(v) else f"{v:.1f}%")
+        lo, hi = (r.get("Range low $"), r.get("Range high $")) if amv else \
+            (r["Range low %"], r["Range high %"])
+        out.append({"Line": r["Line"],
+                    "Forecast (avg)": fmt(r["Actual $"] if amv else r["Actual %"]),
+                    "Typical": fmt(r.get("Typical $") if amv else r["Typical %"]),
+                    "Normal range": f"{fmt(lo)} – {fmt(hi)}",
+                    "Compared with": f"{int(r['Centres'])} centres" + (" ⚠" if small else ""),
+                    "Forecast vs range": pnl_share.soft_status(r["Line"], r["Status"])})
+    st.caption(f"Compared with {desc}. Use these when changing a line's %.")
+    st.dataframe(pd.DataFrame(out), hide_index=True, use_container_width=True)
+    if small:
+        st.warning(f"⚠ Fewer than {pnl.SMALL_SAMPLE} similar centres: treat these ranges as "
+                   "indicative.")
+
+
+def _forecast_excel(table, grid, settings):
+    """The months, the grid as changed and the settings, as an Excel file."""
+    buf = io.BytesIO()
+    cols = ["Basis", "Members", "AMV"] + pnl.ROW_ORDER + ["EBITDA", "BE members"]
+    out = table.reindex(columns=cols).copy()
+    out.index = [pnl.period_name(p) for p in out.index]
+    with pd.ExcelWriter(buf, engine="openpyxl") as xl:
+        out.rename(columns={"AMV": "AMV $ / week"}).to_excel(xl, sheet_name="Forecast",
+                                                             index_label="Month")
+        if grid is not None and not grid.empty:
+            g = grid.copy()
+            g.index = [pnl.period_name(p) for p in g.index]
+            g.to_excel(xl, sheet_name="Adjustments", index_label="Month")
+        pd.DataFrame(list(settings.items()), columns=["Setting", "Value"]).to_excel(
+            xl, sheet_name="Settings", index=False)
+    return buf.getvalue()
+
+
+def report_forecast(df_pnl, df_wm, vl, helpers, bench=None):
+    """P&L Centre Forecast (admins only): one centre's condensed P&L for a financial year or
+    the next 12 months, worked out from its recent months, with every line adjustable."""
+    st.markdown('<div class="report-title">P&L Centre Forecast</div>', unsafe_allow_html=True)
+    st.markdown('<div class="report-subtitle">One centre\'s P&L forecast month by month, from '
+                'its recent results. Change members, AMV or any line\'s % to test a plan.</div>',
+                unsafe_allow_html=True)
+    if st.session_state.get("access_level") != "admin":
+        st.error("This report is for admins only.")
+        return
+    if df_pnl.empty:
+        st.info("No P&L figures yet. An admin can add a month on the P&L Upload page.")
+        return
+    info = location_info(df_pnl, vl)
+    lm = pnl.location_months(df_pnl)
+    members = members_by_month(df_wm)
+    b_pnl, b_wm = bench if bench is not None else (df_pnl, df_wm)
+    centres = {loc.replace(PREFIX, ""): loc for loc in
+               sorted(info.index, key=lambda l: l.replace(PREFIX, "").lower())}
+
+    with st.container(border=True):
+        st.markdown('<div class="filter-label">Filters</div>', unsafe_allow_html=True)
+        a, b, c = st.columns([2, 1, 1])
+        pick = a.selectbox("Centre", list(centres), key="pf_centre")
+        loc = centres[pick]
+        data, cur, _ = entity_months(lm, members, info, [loc])
+        last = data.index.max()
+        view = b.selectbox("Show", FORECAST_VIEWS, key="pf_view")
+        first_fy = pf.fy_start(pf.add_months(last, 1))
+        fy = c.selectbox("Financial year", [first_fy, first_fy + 1], format_func=pf.fy_label,
+                         key="pf_fy", disabled=view != "Financial year")
+    months = pf.window(last, view, fy)
+    fc_months = [p for p in months if p > last]
+    start = pf.starting_point(data)
+    own_series = members.xs(loc, level=0) if not members.empty and \
+        loc in members.index.get_level_values(0) else pd.Series(dtype=float)
+    if not start["amv"] or own_series.empty:
+        st.warning(f"{pick} has no members data for its recent P&L months, so revenue can't "
+                   "be forecast. Check its Weekly Membership upload.")
+        return
+    own = pf.own_pattern(own_series)
+    pattern = own or pf.network_pattern(members_by_month(b_wm))
+    member_fc = pf.forecast_members(own_series, fc_months, pattern)
+    seen = set(data.index.str[5:7])
+    if len(start["months"]) < pf.RECENT:
+        st.warning(f"⚠ {pick} has only {len(start['months'])} month(s) of P&L, so the starting "
+                   "point is based on fewer months than usual.")
+
+    # ── Settings ──
+    _section("Settings", "These set the starting forecast. Changing one resets the "
+                         "month-by-month changes below.")
+    s1, s2, s3, s4 = st.columns(4)
+    rmin = s1.number_input("Royalty minimum $ / month", min_value=0.0, step=100.0,
+                           value=_royalty_min(vl, loc), key=f"pf_rmin_{loc}")
+    relief_opts = ["None"] + [f"Until {pnl.period_name(p)}" for p in fc_months[:-1]] + \
+        ["Whole forecast"]
+    relief = s2.selectbox("Royalty relief", relief_opts,
+                          index=len(relief_opts) - 1 if start["royalties"] == 0 else 0,
+                          key=f"pf_relief_{loc}",
+                          help="Royalties at $0 now are normal (royalty relief). Choose when "
+                               "the relief ends.")
+    relief_until = None if relief == "None" or not fc_months else \
+        fc_months[-1] if relief == "Whole forecast" else \
+        fc_months[relief_opts.index(relief) - 1]
+    rise_pct = s3.number_input("Price rise %", min_value=-50.0, max_value=100.0, value=0.0,
+                               step=1.0, key=f"pf_rise_{loc}")
+    rise_from = s4.selectbox("Price rise from", fc_months or [None],
+                             format_func=lambda p: pnl.period_name(p) if p else "–",
+                             key=f"pf_rise_from_{loc}", disabled=not rise_pct)
+    base = pf.defaults(fc_months, member_fc, start, rmin, relief_until, rise_from, rise_pct)
+
+    top = st.container()                    # headline and chart, filled in once worked out
+
+    # ── Adjust the forecast ──
+    grid = base
+    if fc_months:
+        resets = st.session_state.setdefault("pf_resets", 0)
+        key = f"pf_grid_{loc}_{view}_{fy}_{rmin}_{relief}_{rise_pct}_{rise_from}_{resets}"
+        shown = base.copy()
+        shown.insert(0, "Basis", [pf.FORECAST if p[5:7] in seen else pf.ESTIMATE
+                                  for p in fc_months])
+        shown.index = [pnl.period_name(p) for p in fc_months]
+        pct_cols = {pf.PCT[l]: st.column_config.NumberColumn(
+            GRID_LABELS[l], format="%.1f%%", min_value=0.0, max_value=200.0, step=0.1)
+            for l in pf.COST_LINES}
+        _section("Adjust the forecast",
+                 "Change members, AMV or any line's % of revenue for any month. Lines you "
+                 "leave alone keep their usual behaviour (see How this is worked out).")
+        edited = st.data_editor(
+            shown, key=key, use_container_width=True,
+            disabled=["Basis"],
+            column_config={"Basis": st.column_config.TextColumn("Basis"),
+                           "Members": st.column_config.NumberColumn(format="%.1f", min_value=0.0),
+                           "AMV $ / week": st.column_config.NumberColumn(format="$%.2f",
+                                                                         min_value=0.0),
+                           **pct_cols})
+        if st.button("Reset to forecast", icon=":material/restart_alt:", key="pf_reset"):
+            st.session_state["pf_resets"] = resets + 1
+            st.rerun()
+        grid = edited.drop(columns="Basis")
+        grid.index = fc_months
+        grid = grid.fillna(base)
+    fc = pf.compute(grid, base, start, rmin, relief_until)
+    table = pf.months_table(data, fc, months, seen, rmin)
+    table["BE gap"] = table["Members"] - table["BE members"] if "BE members" in table else None
+    tot = pf.totals(table)
+
+    # ── Headline ──
+    title = pf.fy_label(fy) if view == "Financial year" else \
+        f"Next 12 months ({pnl.period_name(months[0])} – {pnl.period_name(months[-1])})"
+    with top:
+        _section(f"Headline — {title} ({cur})",
+                 f"{tot['Months'] - tot['Forecast months']} actual and "
+                 f"{tot['Forecast months']} forecast months" +
+                 (f", {tot['Estimate months']} of them estimates ⚠"
+                  if tot["Estimate months"] else "") + ".")
+        cards = [("Revenue", _money(tot["Revenue"])), ("EBITDA", _money_short(tot["EBITDA"])),
+                 ("EBITDA % of revenue",
+                  f"{tot['EBITDA %']:.1f}%" if tot["EBITDA %"] is not None else "–"),
+                 (f"Members in {pnl.period_name(months[-1])}", _count(tot["End members"])),
+                 ("Months below break-even", f"{tot['Months below 0']} of {tot['Months']}")]
+        for col, (lbl, value) in zip(st.columns(len(cards)), cards):
+            col.markdown(_card(lbl, value), unsafe_allow_html=True)
+        missing = table.index[table["Basis"] == pf.MISSING]
+        if len(missing):
+            st.caption(f"⚠ No P&L for {', '.join(pnl.period_name(p) for p in missing)}: left "
+                       "out of the totals.")
+        _forecast_chart(table, pick, cur, helpers)
+
+    # ── Month by month ──
+    _section("Forecast by month",
+             "Actual = the centre's P&L. Forecast / Estimate ⚠ = worked out (see How this is "
+             "worked out).")
+    cols = []
+    for p in months:
+        r = table.loc[p].to_dict()
+        cols.append((pnl.period_name(p), r["Basis"], {k: (None if v is None or
+                     (isinstance(v, float) and pd.isna(v)) else v) for k, v in r.items()}))
+    t = table[table["Basis"] != pf.MISSING]
+    total = t[pnl.ROW_ORDER + ["EBITDA"]].sum().to_dict()
+    total["Members"] = t["Members"].mean()
+    total["AMV"] = total["Total Revenue"] / total["Members"] / pnl.WEEKS_PER_MONTH / len(t) \
+        if total["Members"] and len(t) else None
+    cols.append(("Total", f"{len(t)} months", total))
+    st.markdown(side_by_side_html(cols, rows=FORECAST_ROWS), unsafe_allow_html=True)
+    st.caption("Total: amounts added up over the months; members and AMV are the average "
+               "per month.")
+
+    # ── Benchmarks ──
+    _section("Benchmark % for each line")
+    sel = start["months"]
+    bench_cent = centre_table(b_pnl, members_by_month(b_wm), vl, sel, helpers["age_group"])
+    values = pf.benchmark_values(table, info.at[loc, "Country"]
+                                 if isinstance(info.at[loc, "Country"], str) else None)
+    age = vl.set_index(LOC)["Age (Months)"].get(loc) if LOC in vl.columns and \
+        "Age (Months)" in vl.columns else None
+    peers, desc = None, ""
+    if not bench_cent.empty:
+        country = values.get("Country") if values is not None else None
+        peers, desc = peers_by_age(bench_cent, age, country,
+                                   data["Members"].tail(pf.RECENT).mean(), loc)
+    _forecast_benchmarks(values, peers, desc)
+
+    settings = {"Centre": pick, "Shown": title, "Royalty minimum $ / month": rmin,
+                "Royalty relief": relief, "Price rise %": rise_pct,
+                "Price rise from": pnl.period_name(rise_from) if rise_pct and rise_from else "–",
+                "Starting point": ", ".join(pnl.period_name(p) for p in sel),
+                "Time-of-year pattern": "centre's own" if own else "network",
+                "Made": datetime.now(ZoneInfo("Australia/Sydney")).strftime("%d/%m/%Y %H:%M")}
+    st.download_button("Download as Excel", _forecast_excel(table, grid if fc_months else None,
+                                                            settings),
+                       file_name=f"{datetime.now(ZoneInfo('Australia/Sydney')):%d-%m-%Y}-"
+                                 f"pnl-forecast-{pick.lower().replace(' ', '-')}.xlsx",
+                       icon=":material/download:", key="pf_download")
+    st.info(FORECAST_NOTE)
+    with st.expander("How this is worked out"):
+        st.markdown(_md(HOW_FORECAST))
