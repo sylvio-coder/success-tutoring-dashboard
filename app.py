@@ -315,7 +315,8 @@ def report_pnl(df_wm, page=None):
         # Sessions for every centre; names only for centres this viewer may see.
         revenue=load_revenue(),
         can_name=lambda loc: st.session_state.get("access_level") == "admin"
-        or loc in st.session_state.get("allowed_locations", [])),
+        or loc in st.session_state.get("allowed_locations", []),
+        viewer_name=st.session_state.get("user_name", "")),
         bench=(full, load_weekly_membership()))
 
 @st.cache_data(ttl=300)
@@ -2288,6 +2289,7 @@ REPORTS=[
     "10 · Revenue",
     "12 · P&L Summary",
     "13 · P&L Deep Dive",
+    "14 · P&L Share",
     "11 · AI Outlier Analysis",
 ]
 
@@ -2321,6 +2323,7 @@ NAV_GROUPS = [
         ("10 · Revenue",            "Revenue",             ":material/attach_money:"),
         ("12 · P&L Summary",        "P&L – Group Level",   ":material/account_balance:"),
         ("13 · P&L Deep Dive",      "P&L – Centre Level",  ":material/query_stats:"),
+        ("14 · P&L Share",          "P&L Share",           ":material/ios_share:"),
     ]),
     ("Insights", [
         ("11 · AI Outlier Analysis",            "Outliers & Alerts",    ":material/notification_important:"),
@@ -2417,6 +2420,7 @@ elif selected_report=="9 · Onboarding Progress":      report_onboarding(df_wm)
 elif selected_report=="10 · Revenue":                 report_revenue(df_rv)
 elif selected_report=="12 · P&L Summary":            report_pnl(df_wm)
 elif selected_report=="13 · P&L Deep Dive":          report_pnl(df_wm, pnl_reports.report_centre)
+elif selected_report=="14 · P&L Share":              report_pnl(df_wm, pnl_reports.report_share)
 elif selected_report=="11 · AI Outlier Analysis":     report_outliers_alerts(df_wm, df_rv)
 elif selected_report in ADMIN_PAGES:
     spreadsheet = get_sheets_client().open_by_key(SHEET_ID)
