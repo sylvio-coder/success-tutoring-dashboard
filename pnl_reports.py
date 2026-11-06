@@ -1361,7 +1361,7 @@ HOW_SHARE = f"""
   them (the 25th to 75th percentile), so no single centre's figure is shown.
 - A line is only compared when **most similar centres use that account**; otherwise it shows
   "No benchmark".
-- **Rent, royalties, manager wages and interest** are shown as this centre's own figures
+- **Rent, royalties, manager wages, interest and CRM software** are shown as this centre's own figures
   only. They are never compared and are left out of every total and opportunity.
 - **Cost vs typical** is what the difference from typical is worth each month: positive costs
   money, negative saves it. **Bands** say which quarter of similar centres this centre is in,
@@ -1718,7 +1718,8 @@ def report_share(df_pnl, df_wm, vl, helpers, bench=None):
     st.markdown('<div class="page-break"></div>', unsafe_allow_html=True)
     _section("Outliers vs similar centres",
              (f"{pick} compared with {desc}. " if desc else "") +
-             "Rent, royalties, manager wages and interest are this centre's own figures only. "
+             "Rent, royalties, manager wages, interest and CRM software are this centre's own "
+             "figures only. "
              "'Cost vs typical' is what the difference is worth each month: + costs money, "
              "− saves it.")
     if accounts is None or accounts.empty:

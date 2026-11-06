@@ -11,7 +11,7 @@ LOC = pr.LOC
 NAMES = {200: "Sales", 270: "Interest Income", 472: "Wages - Tutor",
          474: "Superannuation - Tutor", 469: "Rent", 471: "Wages - Manager/ Admin",
          478: "Superannuation - Manager/ Admin", 467: "Royalties", 400: "Marketing",
-         453: "Office Expenses", 446: "Water", 437: "Interest Expense"}
+         453: "Office Expenses", 446: "Water", 437: "Interest Expense", 486: "CRM Software"}
 
 
 def lines(loc, period, amounts, currency="AUD", country="Australia"):
@@ -23,11 +23,11 @@ def lines(loc, period, amounts, currency="AUD", country="Australia"):
 
 PEERS = [f"Success Tutoring - Peer {i}" for i in range(8)]
 BASE = {200: 20000, 270: 0, 472: 6000, 474: 700, 469: 3000, 471: 0, 478: 0, 467: 2200,
-        400: 800, 453: 900, 446: 0, 437: 0}
+        400: 800, 453: 900, 446: 0, 437: 0, 486: 450}
 MONTHS = ["2026-06", "2026-07", "2026-08"]
 # Auburn: high tutor wages and rent, a manager, royalty relief, some interest.
 AUBURN = {**BASE, 472: 9000, 474: 1000, 469: 6000, 471: 2500, 478: 300, 467: 0, 446: 150,
-          437: 1100, 270: 400}
+          437: 1100, 270: 400, 486: 1500}
 PNL = pd.DataFrame(
     [r for p in MONTHS for r in lines("Success Tutoring - Auburn", p, AUBURN)] +
     [r for i, loc in enumerate(PEERS) for p in MONTHS
@@ -75,7 +75,7 @@ ACCTS = ["Wages - Tutor", "Water", "Rent", "Royalties", "Wages - Manager/ Admin"
 def test_sensitive_accounts_found_by_code_and_name():
     names = ps.sensitive_accounts(PNL)
     assert {"Rent", "Royalties", "Wages - Manager/ Admin", "Superannuation - Manager/ Admin",
-            "Interest Expense"} <= names
+            "Interest Expense", "CRM Software"} <= names
     assert "Wages - Tutor" not in names and "Interest Income" not in names
     # Odd account names still match by code...
     odd = PNL.assign(Account=PNL["Account"].replace({"Rent": "Premises lease"}))
@@ -83,6 +83,7 @@ def test_sensitive_accounts_found_by_code_and_name():
     # ...and by name, whatever the code.
     assert ps.is_sensitive("Royalty Fees") and ps.is_sensitive("Rent")
     assert ps.is_sensitive("Wages - Manager/Admin + Super") and ps.is_sensitive("Interest")
+    assert ps.is_sensitive("CRM Software") and ps.is_sensitive("CRM subscription")
     assert not ps.is_sensitive("Current assets") and not ps.is_sensitive("Wages - Tutor")
 
 
@@ -262,7 +263,8 @@ def test_share_page_for_an_admin():
     assert "Ctrl + P" in text
     # Sensitive lines in the table: own figure only.
     table = next(m.value for m in at.markdown if '<table class="share-tbl"' in m.value)
-    for line in ["Rent", "Royalties", "Wages - Manager/ Admin", "Interest Expense"]:
+    for line in ["Rent", "Royalties", "Wages - Manager/ Admin", "Interest Expense",
+                 "CRM Software"]:
         row = table.split(f">{line}</td>")[1].split("</tr>")[0]
         assert "Not benchmarked" in row and "similar centres" not in row
     # Water: only 2 of 8 similar centres use it.
@@ -270,8 +272,10 @@ def test_share_page_for_an_admin():
     assert "No benchmark" in water and "Worth a look" not in water
     tiles = " ".join(m.value for m in at.markdown if "otile" in m.value)
     assert "Wages - Tutor" in tiles and ">Rent<" not in tiles and "Royalties" not in tiles
+    assert "CRM" not in tiles                  # Auburn's CRM is 3x typical, but sensitive
     opps = next(m.value for m in at.markdown if "Top opportunities" in m.value)
     assert "tutor" in opps and "rent" not in opps.lower() and "manager" not in opps.lower()
+    assert "crm" not in opps.lower()
     # Check box: royalty relief is fine; interest income is pointed out.
     check = " ".join(m.value for m in at.markdown if "check-item" in m.value)
     assert "Royalties" not in check and "interest income" in check

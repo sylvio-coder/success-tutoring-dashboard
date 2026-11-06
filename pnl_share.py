@@ -5,7 +5,8 @@ benchmark needs at least MIN_PEERS similar centres, so no single centre's figure
 worked out from what is shown:
 - the normal range is the middle half (25th–75th percentile), never lowest-to-highest;
 - a line is only benchmarked when most similar centres actually use that account;
-- sensitive lines (rent, royalties, manager wages, interest) are never benchmarked.
+- sensitive lines (rent, royalties, manager wages, interest, CRM software) are never
+  benchmarked.
 """
 import re
 
@@ -19,9 +20,10 @@ MOST_PEERS = 0.5                # a line is benchmarked when more than half the 
 YOUNG_WEEKS = 18                # centres this young are left out of the peer groups
 
 # Sensitive lines: shown as the centre's own figure only, never against other centres.
-SENSITIVE_CODES = {467, 469, 471, 478, 437}     # royalties, rent, manager wages + super, interest
+# royalties, rent, manager wages + super, interest, CRM software
+SENSITIVE_CODES = {467, 469, 471, 478, 437, 486}
 SENSITIVE_ROWS = {"Rent", "Royalties", pnl.MANAGER, "Interest"}
-_SENSITIVE_NAME = re.compile(r"royalt|\brent\b|manager|interest\s+expense", re.I)
+_SENSITIVE_NAME = re.compile(r"royalt|\brent\b|manager|interest\s+expense|\bcrm\b", re.I)
 
 NOT_BENCHMARKED = "Not benchmarked"
 NO_BENCHMARK = "No benchmark"
@@ -43,7 +45,7 @@ PLAIN = {"Tutor Wages + Super": "tutor wages and super", "Marketing": "marketing
 # ── Sensitive lines ───────────────────────────────────────────────────────────
 def sensitive_accounts(df_pnl):
     """Account names that are sensitive: by account code in the data, plus any name that
-    looks like rent, royalties, manager wages or interest expense."""
+    looks like rent, royalties, manager wages, interest expense or CRM software."""
     names = set()
     if df_pnl is not None and not df_pnl.empty:
         codes = pd.to_numeric(df_pnl["Account code"], errors="coerce")
