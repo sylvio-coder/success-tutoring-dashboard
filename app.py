@@ -2291,6 +2291,7 @@ REPORTS=[
     "13 · P&L Deep Dive",
     "14 · P&L Share",
     "15 · P&L Centre Forecast",
+    "16 · Franchise Model",
     "11 · AI Outlier Analysis",
 ]
 
@@ -2304,7 +2305,7 @@ def report_allowed(report, allowed_tabs):
 
 REPORTS = [r for r in REPORTS if report_allowed(r, st.session_state.get("allowed_tabs", []))]
 # Admin-only reports: hidden from everyone else, even with allowed_tabs "all".
-ADMIN_ONLY_REPORTS = {"15 · P&L Centre Forecast"}
+ADMIN_ONLY_REPORTS = {"15 · P&L Centre Forecast", "16 · Franchise Model"}
 if st.session_state.get("access_level") != "admin":
     REPORTS = [r for r in REPORTS if r not in ADMIN_ONLY_REPORTS]
 ADMIN_PAGES = ["⚙ Weekly Upload", "⚙ P&L Upload", "⚙ Locations", "⚙ Sheet Setup"] if st.session_state.get("access_level") == "admin" else []
@@ -2330,6 +2331,7 @@ NAV_GROUPS = [
         ("13 · P&L Deep Dive",      "P&L – Centre Level",  ":material/query_stats:"),
         ("15 · P&L Centre Forecast", "P&L – Centre Forecast", ":material/timeline:"),
         ("14 · P&L Share",          "P&L Share",           ":material/ios_share:"),
+        ("16 · Franchise Model",    "Franchise Model",     ":material/savings:"),
     ]),
     ("Insights", [
         ("11 · AI Outlier Analysis",            "Outliers & Alerts",    ":material/notification_important:"),
@@ -2428,6 +2430,7 @@ elif selected_report=="12 · P&L Summary":            report_pnl(df_wm)
 elif selected_report=="13 · P&L Deep Dive":          report_pnl(df_wm, pnl_reports.report_centre)
 elif selected_report=="14 · P&L Share":              report_pnl(df_wm, pnl_reports.report_share)
 elif selected_report=="15 · P&L Centre Forecast":    report_pnl(df_wm, pnl_reports.report_forecast)
+elif selected_report=="16 · Franchise Model":        report_pnl(df_wm, pnl_reports.report_franchise_model)
 elif selected_report=="11 · AI Outlier Analysis":     report_outliers_alerts(df_wm, df_rv)
 elif selected_report in ADMIN_PAGES:
     spreadsheet = get_sheets_client().open_by_key(SHEET_ID)

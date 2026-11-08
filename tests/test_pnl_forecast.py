@@ -293,7 +293,7 @@ def test_menu_key_position_and_admin_only():
     assert 'selected_report=="15 · P&L Centre Forecast"' in src and "report_forecast" in src
     # hidden from non-admins after allowed_tabs (so "all" doesn't let a GPM in)
     allowed = src.index("REPORTS = [r for r in REPORTS if report_allowed(")
-    lock = src.index('ADMIN_ONLY_REPORTS = {"15 · P&L Centre Forecast"}')
+    lock = src.index('ADMIN_ONLY_REPORTS = {"15 · P&L Centre Forecast", "16 · Franchise Model"}')
     assert allowed < lock < src.index("NAV_GROUPS = [")
     block = src[lock:src.index("\n\n", lock)] if "\n\n" in src[lock:] else src[lock:]
     assert 'access_level") != "admin"' in block and "not in ADMIN_ONLY_REPORTS" in block
@@ -311,9 +311,11 @@ def test_admin_only_filter_runs_like_the_app():
     for level, expect in [("gpm", False), ("admin", True)]:
         import types
         st = types.SimpleNamespace(session_state=State(access_level=level, allowed_tabs=["all"]))
-        ns = {"st": st, "REPORTS": ["14 · P&L Share", "15 · P&L Centre Forecast"]}
+        ns = {"st": st, "REPORTS": ["14 · P&L Share", "15 · P&L Centre Forecast",
+                                    "16 · Franchise Model"]}
         exec(code.replace("ADMIN_PAGES = [", "_ = [", 1), ns)
         assert ("15 · P&L Centre Forecast" in ns["REPORTS"]) is expect
+        assert ("16 · Franchise Model" in ns["REPORTS"]) is expect
         assert "14 · P&L Share" in ns["REPORTS"]
 
 
@@ -351,3 +353,113 @@ def test_gpm_sees_no_gross_margin_forecast():
     at = run_forecast("gpm", ["Success Tutoring - Gordon"])
     assert not at.exception, at.exception
     assert "Gross Margin" not in "".join(m.value for m in at.markdown)
+
+
+# ── Franchise Model (report 16) ──────────────────────────────────────────────
+import pnl_model as pm
+
+TYP = {"members": 120.0, "amv": 80.0, "marketing_pct": 0.05, "manager": 3500.0,
+       "fixed": {"Rent": 4000.0, "Marketing - Agency Fees": 0.0, "OPEX": 1500.0},
+       "rates": {"20–39": 40.0, "100–119": 30.0}, "fx": 1.0}
+
+
+def test_model_ramp_relief_and_royalty_minimum():
+    s = dict(pm.DEFAULTS)
+    assert pm.ramp(12 / 4.2 + 0.5, s, 120) == pytest.approx(50)       # 50 members at week 12
+    assert pm.ramp(12 / 4.2 + 1.5, s, 120) == pytest.approx(57)      # +7 a month after
+    assert pm.ramp(60, s, 120) == 120                                  # stops at mature
+    assert pm.ramp(1, {**s, "flat": True}, 120) == 120
+    assert pm.relief_share(4, 18) == 1                                 # weeks 12.6–16.8
+    assert pm.relief_share(5, 18) == pytest.approx(1.2 / 4.2)          # weeks 16.8–21
+    assert pm.relief_share(6, 18) == 0
+    assert pm.royalty_min("2026-11", s) == 2266
+    assert pm.royalty_min("2027-07", s) == pytest.approx(2266 * 1.03)    # +3% each July
+    t = pm.run(s, TYP, "2026-07", 6)
+    assert (t["Royalties"].iloc[:4] == 0).all()
+    assert t["Royalties"].iloc[4] == pytest.approx(
+        (1 - 1.2 / 4.2) * max(2266, 0.08 * t["Total Revenue"].iloc[4]))
+
+
+def test_model_manager_owner_wage_and_payback():
+    s = {**pm.DEFAULTS, "owner_on": True}
+    w = pm.run(s, TYP, "2026-07", 48, manager=True)
+    wo = pm.run(s, TYP, "2026-07", 48, manager=False)
+    hired = w[w["Wages - Manager/Admin + Super"] > 0]
+    assert hired["Members"].iloc[0] >= 80 and w.loc[w.index < hired.index[0], "Members"].max() < 80
+    assert (wo["Wages - Manager/Admin + Super"] == 0).all()
+    assert (w[pm.OWNER] == 5000).all()                                 # 60k / 12, kept
+    stop = pm.run({**s, "owner_stops": True}, TYP, "2026-07", 48)
+    assert (stop.loc[hired.index, pm.OWNER] == 0).all()
+    assert w["Profit"].sum() == pytest.approx((w["EBITDA"] - 5000).sum())
+    assert w["Cumulative"].iloc[-1] == pytest.approx(w["Profit"].sum())
+    pb_w, pb_wo = pm.payback_month(w, 110000), pm.payback_month(wo, 110000)
+    assert pb_wo <= pb_w                                               # manager costs time
+    assert w.loc[w["Model month"] == pb_w, "Cumulative"].iloc[0] >= 110000
+    need = pm.needed(s, TYP, "2026-07", 110000, True, "members")
+    t = pm.run(s, {**TYP, "members": need}, "2026-07", 42)
+    assert pm.payback_month(t, 110000) == 42 or abs(t["Cumulative"].iloc[41] - 110000) < 50
+    assert pm.horizon("2026-07", 42) == 60                             # to end of FY2030–31
+    assert pm.fy_totals(w)["Months"].sum() == 48
+
+
+def test_model_grid_change_overrides_one_month():
+    s = dict(pm.DEFAULTS)
+    base = pm.run(s, TYP, "2026-07", 12)
+    g0 = pm.grid_from(base)
+    g = g0.copy()
+    g.loc["2027-01", "Members"] = 200.0
+    g.loc["2027-02", "Rent %"] = 10.0
+    t = pm.run(s, TYP, "2026-07", 12, True, g, g0)
+    assert t.at["2027-01", "Members"] == 200 and t.at["2027-02", "Members"] == \
+        base.at["2027-02", "Members"]
+    assert t.at["2027-02", "Rent"] == pytest.approx(0.1 * t.at["2027-02", "Total Revenue"])
+    assert t.at["2027-03", "Rent"] == 4000
+
+
+def run_model(level="admin"):
+    def script(level):
+        import streamlit as st
+        import pnl_reports as pr
+        from test_pnl_forecast import PAGE_PNL, PAGE_WM, PAGE_VL
+        st.session_state["access_level"] = level
+        vl = PAGE_VL.assign(**{"Weeks old": [130, 60, 40, 20, 150, 200, 90]})
+        pr.report_franchise_model(PAGE_PNL, PAGE_WM, vl, dict(
+            age_group=lambda m: "24+ months", show_chart=st.plotly_chart,
+            std_layout=lambda t, y="", height=400: dict(title=t, height=height)),
+            bench=(PAGE_PNL, PAGE_WM))
+    return AppTest.from_function(script, args=(level,), default_timeout=60).run()
+
+
+def test_franchise_model_page_for_an_admin():
+    at = run_model()
+    assert not at.exception, at.exception
+    text = "".join(m.value for m in at.markdown)
+    for h in ["Settings", "Payback", "Adjust the model", "L by month", "Benchmark % for each line",
+              "Actual vs model"]:
+        assert h in text, h
+    assert "With manager" in text and "Without manager" in text and "Gross Margin" in text
+    assert len(at.get("plotly_chart")) == 2
+    bench = next(d.value for d in at.dataframe if "Normal range" in d.value)
+    assert "Gross Margin" in list(bench["Line"])                       # 7 centres is enough
+    cmp = next(d.value for d in at.dataframe if "Centre age" in d.value)
+    assert len(cmp) and cmp["Centres"].str.contains("⚠").all()         # fewer than 8
+    at.toggle(key="fm_Australia_owner_on").set_value(True).run()
+    assert not at.exception, at.exception
+    at.radio(key="fm_scenario").set_value("With manager").run()
+    at.number_input(key="fm_Australia_trigger").set_value(60.0).run()
+    assert not at.exception, at.exception
+
+
+def test_gpm_cannot_see_the_franchise_model():
+    at = run_model("gpm")
+    assert any("admins only" in e.value for e in at.error)
+    assert not at.dataframe and not at.get("plotly_chart")
+
+
+def test_model_settings_by_country():
+    au, ph = pm.settings_for("Australia")
+    assert not ph and au["royalty_min"] == 2266 and au["royalty_rise"] == 3.0 \
+        and au["relief_weeks"] == 18 and au["target_aud"] == 110000
+    nz, ph = pm.settings_for("New Zealand")
+    assert ph and nz["royalty_min"] == 2266                    # placeholder until set
+    assert pm.run(nz, TYP, "2026-07", 6)["Royalties"].iloc[5] > 0

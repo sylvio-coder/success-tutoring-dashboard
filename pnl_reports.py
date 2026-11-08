@@ -12,6 +12,7 @@ import streamlit as st
 
 import pnl
 import pnl_forecast as pf
+import pnl_model as pm
 import pnl_share
 
 LOC = "Success Tutoring - Business name"
@@ -1879,16 +1880,16 @@ def _forecast_chart(table, pick, cur, helpers):
     helpers["show_chart"](fig)
 
 
-def _forecast_benchmarks(values, peers, desc):
+def _forecast_benchmarks(values, peers, desc, min_n=pnl_share.MIN_PEERS, label="Forecast"):
     """Benchmark % for each line, next to the forecast's average %."""
     if values is None:
         st.caption("No forecast months shown, so there's nothing to compare.")
         return
-    if peers is None or len(peers) < pnl_share.MIN_PEERS:
+    if peers is None or len(peers) < min_n:
         st.caption(pnl_share.NOT_ENOUGH + ".")
         return
     rows = pnl.compare_lines(values, peers, pnl.BENCH_LINES)
-    rows = rows[rows["Centres"] >= pnl_share.MIN_PEERS] if not rows.empty else rows
+    rows = rows[rows["Centres"] >= min_n] if not rows.empty else rows
     if rows.empty:
         st.caption(pnl_share.NOT_ENOUGH + ".")
         return
@@ -1901,11 +1902,11 @@ def _forecast_benchmarks(values, peers, desc):
         lo, hi = (r.get("Range low $"), r.get("Range high $")) if amv else \
             (r["Range low %"], r["Range high %"])
         out.append({"Line": r["Line"],
-                    "Forecast (avg)": fmt(r["Actual $"] if amv else r["Actual %"]),
+                    f"{label} (avg)": fmt(r["Actual $"] if amv else r["Actual %"]),
                     "Typical": fmt(r.get("Typical $") if amv else r["Typical %"]),
                     "Normal range": f"{fmt(lo)} – {fmt(hi)}",
                     "Compared with": f"{int(r['Centres'])} centres" + (" ⚠" if small else ""),
-                    "Forecast vs range": pnl_share.soft_status(r["Line"], r["Status"])})
+                    f"{label} vs range": pnl_share.soft_status(r["Line"], r["Status"])})
     st.caption(f"Compared with {desc}. Use these when changing a line's %.")
     st.dataframe(pd.DataFrame(out), hide_index=True, use_container_width=True)
     if small:
@@ -2113,3 +2114,297 @@ def report_forecast(df_pnl, df_wm, vl, helpers, bench=None):
     st.info(FORECAST_NOTE)
     with st.expander("How this is worked out"):
         st.markdown(_md(HOW_FORECAST))
+
+
+# ── Franchise Model (admins only) ─────────────────────────────────────────────
+MODEL_TABLE_ROWS = MODEL_ROWS + [
+    (None, None, "gap"),
+    ("Owner's wage", pm.OWNER, "money"),
+    ("Profit for payback", "Profit", "money"),
+    ("Cumulative profit", "Cumulative", "money"),
+]
+MODEL_COLOURS = {pm.WITHOUT: "#1f9a9a", pm.WITH: "#1f3b57"}
+HOW_MODEL = """
+- **A theoretical new centre**, opening in the chosen month. Typical figures come from the
+  country's centres over their last 3 P&L months (established centres, 12 months or older,
+  where there are any): the middle value (median), not the average, so one unusual centre
+  doesn't move it. ⚠ = fewer than 8 centres behind a figure.
+- **Members**: a straight line from 0 to the members at week 12, then the new members a month
+  until the mature members are reached. "Flat members" uses the mature members from month 1.
+- **Revenue** = members × price per member × 4.2 weeks. The price rises by the yearly % each
+  July after opening.
+- **Tutor wages + super**: the typical % of revenue for that many members (members bands, as
+  in the break-even). **Gross Margin** = Total Revenue − Tutor Wages + Super. **Marketing**:
+  the typical % of revenue. **Rent, agency fees and OPEX**: the typical $ a month.
+- **Manager** (with-manager scenario only): hired the first month members reach the trigger
+  and kept after that, at the manager cost a month. The wage rise applies each July.
+- **Royalties**: the higher of the minimum or 8% of revenue, and nothing in the relief weeks
+  (a month partly in relief pays part). The minimum rises by its % each July.
+- **Profit for payback** = EBITDA, less the owner's wage when it is switched on. **Payback** is
+  the first month the profit added up since opening (early losses included) reaches the
+  investment target, converted from AUD at the country's exchange rate.
+- **Needed to pay back on time**: the mature members (or the price per member) at which
+  payback falls within the target months, with everything else as set. These use the
+  settings only, not the changes in the grid.
+- **Changing the grid** sets that month's members or price, or a line to that % of revenue.
+  Lines left alone keep the behaviour above. Changes apply to both scenarios (manager % to
+  the with-manager scenario only).
+- **Actual vs model**: each P&L month of the country's centres, placed by the centre's age
+  then (from Weeks old in Vlookup); centres 18 weeks old or younger are left out. Actual =
+  the typical (median) centre-month; model = the average of those model months.
+"""
+
+
+def _model_chart(tables, target, months, helpers, cur):
+    fig = go.Figure()
+    for name, t in tables.items():
+        fig.add_trace(go.Scatter(
+            x=t["Model month"], y=t["Cumulative"], name=name, mode="lines",
+            line=dict(color=MODEL_COLOURS[name], width=3),
+            customdata=[pnl.period_name(p) for p in t.index],
+            hovertemplate=f"{name}<br>Month %{{x}} (%{{customdata}})<br>"
+                          f"Cumulative %{{y:$,.0f}}<extra></extra>"))
+    fig.add_hline(y=target, line=dict(color="#c8322f", dash="dash"),
+                  annotation_text=f"Investment {_money(target)}")
+    fig.add_vline(x=months, line=dict(color="#5d6d73", dash="dot"),
+                  annotation_text=f"Month {months}")
+    fig.update_layout(**helpers["std_layout"]("Profit added up since opening",
+                                               f"{cur}", height=420))
+    fig.update_xaxes(title="Months since opening")
+    helpers["show_chart"](fig)
+
+
+def _model_actual_chart(actual, model, helpers):
+    fig = go.Figure()
+    if len(actual):
+        fig.add_trace(go.Scatter(
+            x=actual["Model month"], y=actual["Members"], mode="markers", name="Actual centres",
+            marker=dict(color="#8a9a9f", size=6, opacity=0.6),
+            text=actual["Location"].str.replace(PREFIX, "", regex=False),
+            hovertemplate="%{text}<br>Month %{x}: %{y:.0f} members<extra></extra>"))
+    fig.add_trace(go.Scatter(x=model["Model month"], y=model["Members"], mode="lines",
+                             name="Model", line=dict(color="#1f9a9a", width=3)))
+    fig.update_layout(**helpers["std_layout"]("Members by centre age: actual vs model",
+                                               "Members", height=380))
+    fig.update_xaxes(title="Months since opening")
+    helpers["show_chart"](fig)
+
+
+def report_franchise_model(df_pnl, df_wm, vl, helpers, bench=None):
+    """Franchise Model (admins only): a theoretical new centre's P&L from opening, with and
+    without a manager, its payback month, and how actual centres compare by age."""
+    st.markdown('<div class="report-title">Franchise Model</div>', unsafe_allow_html=True)
+    st.markdown('<div class="report-subtitle">A new centre\'s monthly P&L from opening, with and '
+                'without a campus manager, and when it pays back the investment. Built from '
+                'the country\'s typical figures; change any input to test it.</div>',
+                unsafe_allow_html=True)
+    if st.session_state.get("access_level") != "admin":
+        st.error("This report is for admins only.")
+        return
+    if df_pnl.empty:
+        st.info("No P&L figures yet. An admin can add a month on the P&L Upload page.")
+        return
+    b_pnl, b_wm = bench if bench is not None else (df_pnl, df_wm)
+    members = members_by_month(b_wm)
+    periods = sorted(b_pnl["Period"].unique())[-pf.RECENT:]
+    cent = centre_table(b_pnl, members, vl, periods, helpers["age_group"])
+    countries = sorted(cent["Country"].dropna().astype(str).unique())
+    if not countries:
+        st.warning("No centres with a country set.")
+        return
+    this_month = datetime.now(ZoneInfo("Australia/Sydney")).strftime("%Y-%m")
+    openings = [pf.add_months(this_month, i) for i in range(-24, 25)]
+
+    with st.container(border=True):
+        st.markdown('<div class="filter-label">Filters</div>', unsafe_allow_html=True)
+        a, b = st.columns(2)
+        country = a.selectbox("Country", countries, key="fm_country",
+                              index=countries.index("Australia") if "Australia" in countries
+                              else 0)
+        start = b.selectbox("Opening month", openings, index=25, format_func=pnl.period_name,
+                            key="fm_start")
+    typ = pm.country_typical(cent, country)
+    if typ is None:
+        st.warning(f"No {country} centres with revenue in {pnl.period_name(periods[-1])}.")
+        return
+    cur = str(typ["peers"]["Currency"].mode().iloc[0]) if "Currency" in typ["peers"] else ""
+    small = " ⚠" if pnl.small_sample(typ["centres"]) else ""
+    st.caption(f"Typical figures from {typ['centres']} {'established ' if typ['established'] else ''}"
+               f"{country} centre(s){small}, {pnl.period_name(periods[0])} – "
+               f"{pnl.period_name(periods[-1])}.")
+
+    # ── Settings ──
+    _section("Settings", "Changing a setting resets the month-by-month changes below.")
+    d, placeholder = pm.settings_for(country)
+    if placeholder:
+        st.warning(f"⚠ No royalty or investment figures set for {country} yet: using "
+                   "Australia's as a placeholder. Change them below.")
+    k = f"fm_{country}_"
+    c = st.columns(4)
+    s = dict(d)
+    s["target_aud"] = c[0].number_input("Investment to pay back (AUD)", 0.0, value=d["target_aud"],
+                                        step=5000.0, key=k + "target")
+    s["payback_months"] = int(c[1].number_input("Payback target (months)", 1,
+                                                value=d["payback_months"], key=k + "months"))
+    amv = c[2].number_input(f"Price per member $ / week{small}", 0.0, value=round(typ["amv"], 2),
+                            step=1.0, key=k + "amv")
+    mature = c[3].number_input(f"Mature members{small}", 0.0, value=float(round(typ["members"])),
+                               step=5.0, key=k + "mature")
+    c = st.columns(4)
+    s["ramp_members"] = c[0].number_input("Members at week 12", 0.0, value=d["ramp_members"],
+                                          step=5.0, key=k + "ramp")
+    s["growth"] = c[1].number_input("New members a month after that", 0.0, value=d["growth"],
+                                    step=1.0, key=k + "growth")
+    s["manager_trigger"] = c[2].number_input("Hire a manager at (members)", 0.0,
+                                             value=d["manager_trigger"], step=5.0,
+                                             key=k + "trigger")
+    mgr_small = " ⚠" if pnl.small_sample(typ["manager_centres"]) else ""
+    mgr_cost = c[3].number_input(f"Manager cost $ / month{mgr_small}", 0.0,
+                                 value=float(round(typ["manager"])), step=100.0, key=k + "mgr",
+                                 help=f"Typical at the {typ['manager_centres']} centre(s) that "
+                                      "pay a manager.")
+    c = st.columns(4)
+    s["owner_on"] = c[0].toggle("Include an owner's wage", d["owner_on"], key=k + "owner_on")
+    s["owner_wage"] = c[1].number_input("Owner's wage $ / year", 0.0, value=d["owner_wage"],
+                                        step=5000.0, key=k + "owner", disabled=not s["owner_on"])
+    s["owner_stops"] = c[2].toggle("Stop it once a manager is hired", d["owner_stops"],
+                                   key=k + "owner_stops", disabled=not s["owner_on"])
+    s["flat"] = c[3].toggle("Flat members (no ramp-up)", d["flat"], key=k + "flat")
+    c = st.columns(5)
+    s["royalty_min"] = c[0].number_input(f"Royalty minimum $ / month ({pf.fy_label(d['royalty_fy'])[:9]})",
+                                         0.0, value=d["royalty_min"], step=10.0, key=k + "rmin")
+    s["royalty_rise"] = c[1].number_input("Royalty minimum rise % each July", 0.0,
+                                          value=d["royalty_rise"], step=0.5, key=k + "rrise")
+    s["relief_weeks"] = c[2].number_input("Royalty relief (weeks)", 0.0, value=d["relief_weeks"],
+                                          step=1.0, key=k + "relief")
+    s["price_rise"] = c[3].number_input("Price rise % each July", 0.0, value=d["price_rise"],
+                                        step=0.5, key=k + "price_rise")
+    s["wage_rise"] = c[4].number_input("Wage rise % each July", 0.0, value=d["wage_rise"],
+                                       step=0.5, key=k + "wage_rise",
+                                       help="Applies to the manager and owner's wages.")
+    typ = {**typ, "amv": amv, "members": mature, "manager": mgr_cost}
+    target = s["target_aud"] / (typ["fx"] or 1.0)
+    n = pm.horizon(start, s["payback_months"])
+    months = pm.months_from(start, n)
+    fys = sorted({pf.fy_start(p) for p in months})
+
+    # ── Adjust the model (one tab per financial year) ──
+    base = {name: pm.run(s, typ, start, n, name == pm.WITH) for name in (pm.WITH, pm.WITHOUT)}
+    base_grid = pm.grid_from(base[pm.WITH])
+    resets = st.session_state.setdefault("fm_resets", 0)
+    gkey = f"fm_grid_{hash((country, start, tuple(sorted(s.items())), amv, mature, mgr_cost))}_{resets}"
+    top = st.container()
+    _section("Adjust the model",
+             "Change members, price or any line's % of revenue for any month. Lines you leave "
+             "alone keep their usual behaviour (see How this is worked out).")
+    grid = base_grid.copy()
+    pct_cols = {pm.PCT[l]: st.column_config.NumberColumn(
+        GRID_LABELS[l], format="%.1f%%", min_value=0.0, max_value=200.0, step=0.1)
+        for l in pm.LINES}
+    for tab, fy in zip(st.tabs([pf.fy_label(f)[:9] for f in fys]), fys):
+        ms = [p for p in months if pf.fy_start(p) == fy]
+        shown = base_grid.loc[ms].copy()
+        shown.index = [pnl.period_name(p) for p in ms]
+        with tab:
+            edited = st.data_editor(
+                shown, key=f"{gkey}_{fy}", use_container_width=True,
+                column_config={"Members": st.column_config.NumberColumn(format="%.1f",
+                                                                        min_value=0.0),
+                               "AMV $ / week": st.column_config.NumberColumn(
+                                   "Price $ / week", format="$%.2f", min_value=0.0),
+                               **pct_cols})
+        edited.index = ms
+        grid.loc[ms] = edited.fillna(base_grid.loc[ms]).values
+    if st.button("Reset to model", icon=":material/restart_alt:", key="fm_reset"):
+        st.session_state["fm_resets"] = resets + 1
+        st.rerun()
+    tables = {name: pm.run(s, typ, start, n, name == pm.WITH, grid, base_grid)
+              for name in (pm.WITHOUT, pm.WITH)}
+
+    # ── Headline ──
+    with top:
+        _section(f"Payback — investment {_money(target)} {cur} in {s['payback_months']} months",
+                 "Needed to pay back on time: everything else as set (grid changes not "
+                 "included).")
+        for col, (name, t) in zip(st.columns(2), tables.items()):
+            pb = pm.payback_month(t, target)
+            ok = pb is not None and pb <= s["payback_months"]
+            mem_need = pm.needed(s, typ, start, target, name == pm.WITH, "members")
+            amv_need = pm.needed(s, typ, start, target, name == pm.WITH, "amv")
+            when = f"Month {pb} ({pnl.period_name(t.index[pb - 1])})" if pb else \
+                f"Not within {n} months"
+            col.markdown(f'<div class="section-header" style="margin-top:0">{name}</div>',
+                         unsafe_allow_html=True)
+            a_, b_ = col.columns(2)
+            a_.markdown(_card("Payback", ("✅ " if ok else "❌ ") + when), unsafe_allow_html=True)
+            at = t["Cumulative"].iloc[min(s["payback_months"], n) - 1]
+            b_.markdown(_card(f"Profit after {s['payback_months']} months", _money_short(at)),
+                        unsafe_allow_html=True)
+            a_.markdown(_card("Mature members needed",
+                              "–" if mem_need is None else f"{mem_need:,.0f}"),
+                        unsafe_allow_html=True)
+            b_.markdown(_card("Price needed $ / week",
+                              "–" if amv_need is None else f"${amv_need:,.2f}"),
+                        unsafe_allow_html=True)
+        _model_chart(tables, target, s["payback_months"], helpers, cur)
+
+    # ── Monthly P&L for a financial year ──
+    _section("P&L by month")
+    a, b = st.columns(2)
+    fy = a.selectbox("Financial year", fys, format_func=pf.fy_label, key="fm_fy")
+    scen = b.radio("Scenario", [pm.WITHOUT, pm.WITH], horizontal=True, key="fm_scenario")
+    t = tables[scen]
+    ms = [p for p in months if pf.fy_start(p) == fy]
+    cols = [(pnl.period_name(p), f"Month {int(t.at[p, 'Model month'])}", t.loc[p].to_dict())
+            for p in ms]
+    tot = t.loc[ms, pnl.ROW_ORDER + [pnl.GROSS_MARGIN, "EBITDA", pm.OWNER, "Profit"]] \
+        .sum().to_dict()
+    tot.update(Members=t.loc[ms, "Members"].mean(), Cumulative=t.at[ms[-1], "Cumulative"])
+    tot["AMV"] = tot["Total Revenue"] / tot["Members"] / pnl.WEEKS_PER_MONTH / len(ms) \
+        if tot["Members"] else None
+    cols.append(("Total", f"{len(ms)} months", tot))
+    st.markdown(side_by_side_html(cols, rows=MODEL_TABLE_ROWS), unsafe_allow_html=True)
+    st.caption("Total: amounts added up over the year; members and price are the average per "
+               "month; cumulative profit at the end of the year.")
+    years = []
+    for name, tt in tables.items():
+        y = pm.fy_totals(tt)
+        y.insert(0, "Scenario", name)
+        y.insert(1, "Financial year", [pf.fy_label(f)[:9] for f in y.index])
+        years.append(y)
+    st.dataframe(pd.concat(years), hide_index=True, use_container_width=True,
+                 column_config={c_: st.column_config.NumberColumn(format="%,.0f")
+                                for c_ in ["Total Revenue", pnl.GROSS_MARGIN, "EBITDA", pm.OWNER,
+                                           "Profit", "Members (end)", "Cumulative"]})
+
+    # ── Benchmarks ──
+    _section("Benchmark % for each line")
+    values = t.loc[ms, pnl.ROW_ORDER + [pnl.GROSS_MARGIN, "EBITDA", "Members"]].mean()
+    values["Country"] = country
+    _forecast_benchmarks(values, typ["peers"], f"{typ['centres']} {country} centres", min_n=1,
+                         label="Model")
+
+    # ── Actual vs model ──
+    _section("Actual vs model, by centre age",
+             "Typical actual centre-month against the model's average for the same ages.")
+    info = location_info(b_pnl, vl)
+    weeks = pd.to_numeric(vl.set_index(LOC)["Weeks old"], errors="coerce").dropna().to_dict() \
+        if "Weeks old" in vl.columns and LOC in vl.columns else {}
+    actual = pm.actual_by_age(pnl.location_months(b_pnl), members, weeks,
+                              info["Country"].to_dict(), country, pd.Timestamp.now())
+    if actual.empty:
+        st.caption(f"No {country} centres older than 18 weeks with P&L and Weeks old.")
+    else:
+        cmp = pm.compare(actual, t)
+        cmp["Centres"] = [f"{n_}" + (" ⚠" if pnl.small_sample(n_) else "") for n_ in cmp["Centres"]]
+        money = {c_: st.column_config.NumberColumn(format="%,.0f") for c_ in cmp.columns
+                 if c_.startswith(("Members", "Revenue"))}
+        pcts = {c_: st.column_config.NumberColumn(format="%.1f%%") for c_ in cmp.columns
+                if "%" in c_}
+        st.dataframe(cmp, hide_index=True, use_container_width=True,
+                     column_config={**money, **pcts})
+        _model_actual_chart(actual, t, helpers)
+    st.info("A model is an estimate from typical figures, not a promise. Check it against what "
+            "you know: site, rent, staffing and local demand.")
+    with st.expander("How this is worked out"):
+        st.markdown(_md(HOW_MODEL))
