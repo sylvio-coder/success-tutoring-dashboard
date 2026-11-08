@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "success-crm": {
+      "type": "http",
+      "url": "https://us-central1-success-tutoring-test.cloudfunctions.net/mcp"
+    }
+  }
+}
