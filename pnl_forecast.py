@@ -192,6 +192,7 @@ def compute(edited, base, start, royalty_min, relief_until=None):
     out = pd.DataFrame.from_dict(rows, orient="index")
     if out.empty:
         return out
+    out[pnl.GROSS_MARGIN] = out["Total Revenue"] - out[pnl.TUTOR]
     out["EBITDA"] = out["Total Revenue"] - out[COST_LINES].sum(axis=1)
     for p in out.index:
         out.loc[p, "BE members"] = break_even_members(out.loc[p], royalty_min, relief_until, p)
@@ -259,7 +260,7 @@ def benchmark_values(table, country=None):
     f = table[table["Basis"].isin([FORECAST, ESTIMATE])]
     if f.empty:
         return None
-    v = f[pnl.ROW_ORDER + ["EBITDA"]].mean()
+    v = pnl.with_gross_margin(f)[pnl.ROW_ORDER + [pnl.GROSS_MARGIN, "EBITDA"]].mean()
     v["Members"] = f["Members"].mean()
     v["Country"] = country
     return v

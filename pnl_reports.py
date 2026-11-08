@@ -27,6 +27,7 @@ TABLE_ROWS = [
     (None, None, "gap"),
     ("Total Revenue", "Total Revenue", "total"),
     ("Tutor Wages + Super", "Tutor Wages + Super", "line"),
+    ("Gross Margin", pnl.GROSS_MARGIN, "subtotal"),
     ("Rent", "Rent", "line"),
     ("Wages - Manager/Admin + Super", "Wages - Manager/Admin + Super", "line"),
     ("Royalties", "Royalties", "line"),
@@ -41,7 +42,11 @@ TABLE_ROWS = [
     ("Break-even members", "BE members", "count"),
     ("Members above / below break-even", "BE gap", "count"),
 ]
-AMOUNT_KEYS = pnl.ROW_ORDER + ["EBITDA", "Interest", "Net Profit"]
+AMOUNT_KEYS = pnl.ROW_ORDER + [pnl.GROSS_MARGIN, "EBITDA", "Interest", "Net Profit"]
+# Members, AMV and the condensed P&L down to EBITDA (no months reported, interest or net profit)
+MODEL_ROWS = [r for r in TABLE_ROWS[:TABLE_ROWS.index(("EBITDA", "EBITDA", "result")) + 1]
+              if r[1] != "Months"]
+GM_NOTE = "Total Revenue − Tutor Wages + Super"
 
 CSS = """<style>
 .pnl-wrap{overflow-x:auto;border:1px solid #dde5e6;border-radius:6px;background:#fff;margin-bottom:8px}
@@ -54,7 +59,8 @@ CSS = """<style>
 .pnl td.note{text-align:left;color:#5d6d73;font-size:12px}
 .pnl tr.input td{background:#eef1f3}
 .pnl tr.input td.lbl{background:#eef1f3}
-.pnl tr.total td,.pnl tr.result td{font-weight:700}
+.pnl tr.total td,.pnl tr.result td,.pnl tr.subtotal td{font-weight:700}
+.pnl tr.subtotal td,.pnl tr.subtotal td.lbl{background:#f2f8f8;border-top:1px solid #b9d3d6}
 .pnl tr.result td{border-top:1.5px solid #1c2a30;border-bottom:2px solid #1c2a30}
 .pnl tr.gap td{border:none;height:10px}
 .pnl td.neg{color:#c8322f}
@@ -216,6 +222,17 @@ DISCLAIMER = ("Break-even figures are estimates from network benchmarks and this
 
 
 # ── Rendering ─────────────────────────────────────────────────────────────────
+def _gross_margin(c):
+    """A column's Gross Margin (worked out if it isn't there; None if it can't be)."""
+    v = c.get(pnl.GROSS_MARGIN)
+    if v is not None and not pd.isna(v):
+        return v
+    rev, tutor = c.get("Total Revenue"), c.get(pnl.TUTOR)
+    if rev is None or tutor is None or pd.isna(rev) or pd.isna(tutor):
+        return None
+    return rev - tutor
+
+
 def side_by_side_html(cols, notes=None, rows=None):
     rows = rows or TABLE_ROWS
     head = '<tr><th class="lbl">Account</th>' + "".join(
@@ -229,7 +246,7 @@ def side_by_side_html(cols, notes=None, rows=None):
             continue
         cells = []
         for _, _, c in cols:
-            v = c.get(key)
+            v = _gross_margin(c) if key == pnl.GROSS_MARGIN else c.get(key)
             rev = c.get("Total Revenue")
             if key in AMOUNT_KEYS:
                 neg = " neg" if v is not None and not pd.isna(v) and v < -0.5 else ""
@@ -297,6 +314,18 @@ def _md(text):
 
 def _fmt_pct(v):
     return "" if v is None or pd.isna(v) else f"{v:.1f}%"
+
+
+def bold_gross_margin(df, col):
+    """The table styled with its Gross Margin row(s) in bold (for st.dataframe)."""
+    return df.style.apply(lambda r: ["font-weight:700; background-color:#f2f8f8"] * len(r)
+                          if r[col] == pnl.GROSS_MARGIN else [""] * len(r), axis=1)
+
+
+def gross_margin_first(df, col="Line"):
+    """Gross Margin pinned to the top, the other rows in their order."""
+    gm = df[col] == pnl.GROSS_MARGIN
+    return pd.concat([df[gm], df[~gm]])
 
 
 def comparison_rows(values, peers, lines):
@@ -371,7 +400,8 @@ def months_shown(index, span, month):
     if span == "Year to date":
         return [p for p in ps if p >= f"{month[:4]}-01"]
     return ps
-TREND_LINES = pnl.ROW_ORDER + ["EBITDA", "Net Profit"]
+TREND_LINES = [pnl.ROW_ORDER[0], pnl.TUTOR, pnl.GROSS_MARGIN] + \
+    [r for r in pnl.ROW_ORDER[1:] if r != pnl.TUTOR] + ["EBITDA", "Net Profit"]
 
 
 def location_info(df_pnl, vl):
@@ -427,6 +457,7 @@ def entity_months(lm, members, info, locs):
 
 
 def _in_units(df, unit, lines):
+    df = pnl.with_gross_margin(df)
     if unit == "% of revenue":
         rev = df["Total Revenue"].where(df["Total Revenue"] > 0)
         return df[lines].div(rev, axis=0) * 100
@@ -486,6 +517,7 @@ HOW_GROUP = f"""
   settings above); rent, manager wages, marketing and OPEX stay at the centre's own amounts;
   royalties are the higher of the centre's Royalty Min (Vlookup, blank = 2,200) or 8% of
   revenue. ⚠ = the tutor % used comes from fewer than {pnl.SMALL_SAMPLE} centres.
+- **Gross Margin** = Total Revenue − Tutor Wages + Super (accounts 472 and 474), with its % of revenue. Higher is better. It is a subtotal, so it is never added into costs or EBITDA.
 - **Outliers**: each centre is compared with similar centres across the whole network (same
   country and members band; centres under 12 months old with other developing centres).
   Other centres are counted but never named. Centres with under {pnl.LOW_REVENUE:,} revenue
@@ -705,10 +737,12 @@ def _centre_outliers(pick, values, peers, desc, acct_values, acct_peers, label):
         table = comparison_rows(values, peers, pnl.BENCH_LINES)
     st.caption(f"{pick} compared with {desc} ({label}). 'Cost vs typical' is what the "
                "difference is worth each month: positive costs money, negative saves it.")
-    show = table.sort_values("Cost vs typical $/month", ascending=False, key=lambda s: s.fillna(0))
-    st.dataframe(show, hide_index=True, use_container_width=True, column_config={
-        "Cost vs typical $/month": st.column_config.NumberColumn(format="%,.0f")})
-    lines_only = show[~show["Line"].isin(["EBITDA", "↳ vs centres that pay a manager"])]
+    show = gross_margin_first(table.sort_values("Cost vs typical $/month", ascending=False,
+                                                key=lambda s: s.fillna(0)))
+    st.dataframe(bold_gross_margin(show, "Line"), hide_index=True, use_container_width=True,
+                 column_config={"Cost vs typical $/month":
+                                st.column_config.NumberColumn(format="%,.0f")})
+    lines_only = show[~show["Line"].isin(pnl.NOT_COSTS | {"↳ vs centres that pay a manager"})]
     costly = lines_only[lines_only["Cost vs typical $/month"].fillna(0) > 0]
     ebitda = values.get("EBITDA")
     parts = [f"**{pick}** {'made' if ebitda >= 0 else 'lost'} **{_money(abs(ebitda))}** "
@@ -721,6 +755,22 @@ def _centre_outliers(pick, values, peers, desc, acct_values, acct_peers, label):
             parts.append(f"If every line above typical were typical, EBITDA would be about "
                          f"**{_money(ebitda + costly['Cost vs typical $/month'].sum())}**.")
     st.markdown(_md(" ".join(parts)))
+
+
+GM_SECTION = "Revenue − tutor wages + super"
+
+
+def with_gross_margin_row(acc):
+    """Every-account table ($, index P&L section / Account code / Account) with a Gross
+    Margin row after the revenue and cost of sales accounts."""
+    codes = pd.to_numeric(pd.Series(acc.index.get_level_values("Account code")),
+                          errors="coerce").values
+    rev = acc[pd.Series(codes).isin(pnl.REVENUE_CODES).values].sum()
+    tutor = acc[pd.Series(codes).isin(pnl.TUTOR_CODES).values].sum()
+    row = pd.DataFrame([rev - tutor], columns=acc.columns, index=pd.MultiIndex.from_tuples(
+        [(GM_SECTION, -1, pnl.GROSS_MARGIN)], names=acc.index.names))
+    top = acc.index.get_level_values("P&L section").isin(["Revenue", "Cost of Sales"])
+    return pd.concat([acc[top], row, acc[~top]])
 
 
 def _break_even(pick, cur, col, label, rates, samples):
@@ -754,8 +804,8 @@ def _break_even(pick, cur, col, label, rates, samples):
              "Tutor Wages + Super": "Benchmark % for established centres of this size",
              "Royalties": f"Higher of ${rmin:,.0f} or 8% of revenue"}
     notes.update({k: "Centre's own amount (fixed)" for k in pnl.FIXED_ROWS})
-    rows = [r for r in TABLE_ROWS[:13] if r[1] != "Months"]
-    st.markdown(side_by_side_html(model_cols, notes, rows), unsafe_allow_html=True)
+    notes[pnl.GROSS_MARGIN] = GM_NOTE
+    st.markdown(side_by_side_html(model_cols, notes, MODEL_ROWS), unsafe_allow_html=True)
     if be_mem:
         gap = mem - be_mem
         st.markdown(_md(
@@ -784,6 +834,8 @@ HOW_CENTRE = f"""
 - **Break-even**: tutor wages at the benchmark % for established centres of that size (set on
   P&L – Group Level); rent, manager wages, marketing and OPEX at the centre's own amounts;
   royalties the higher of the Royalty Min (blank = 2,200) or 8% of revenue.
+- **Gross Margin** = Total Revenue − Tutor Wages + Super (accounts 472 and 474), with its % of revenue. Higher is better. It is a subtotal, so it is never added into costs or EBITDA. In the outliers table it is pinned to the top and left
+  out of "biggest costs above typical".
 - Unrelated Expenses (479) are a memo line and aren't in EBITDA or Net Profit.
 """
 
@@ -961,6 +1013,7 @@ def report_centre(df_pnl, df_wm, vl, helpers, bench=None):
                  "Interest, Tax & Depreciation": 3}
         acc = acc.sort_index(key=lambda i: i.map(lambda v: order.get(v, 9))
                              if i.name == "P&L section" else i)
+        acc = with_gross_margin_row(acc)
         acc = acc.droplevel("Account code")
         if unit == "% of revenue":
             rev_m = data["Total Revenue"].reindex(acc.columns)
@@ -971,7 +1024,8 @@ def report_centre(df_pnl, df_wm, vl, helpers, bench=None):
         acc = acc.apply(lambda col: col.map(lambda v: _fmt_unit(v, unit))).reset_index()
         acc = acc[["Account", "P&L section"] + [c for c in acc.columns
                                                 if c not in ("Account", "P&L section")]]
-        st.dataframe(acc, hide_index=True, use_container_width=True,
+        st.dataframe(bold_gross_margin(acc, "Account"), hide_index=True,
+                     use_container_width=True,
                      column_config={"Account": st.column_config.TextColumn(
                          "Account", width="large", pinned=True)})
 
@@ -997,7 +1051,7 @@ def report_centre(df_pnl, df_wm, vl, helpers, bench=None):
                                    index=["Members"], columns=shown.columns)
         full = pd.concat([members_row, shown])
         full.insert(0, "Line", full.index)
-        st.dataframe(full, hide_index=True, use_container_width=True,
+        st.dataframe(bold_gross_margin(full, "Line"), hide_index=True, use_container_width=True,
                      column_config={"Line": st.column_config.TextColumn(
                          "Line", width="large", pinned=True)})
 
@@ -1311,6 +1365,7 @@ SHARE_CSS = """<style>
 .share-tbl td{padding:4px 8px;border-bottom:1px solid #eef2f3;text-align:right;color:#1c2a30}
 .share-tbl td.muted{color:#8a9a9f}
 .share-tbl tr.sens td{background:#f6f8f9}
+.share-tbl tr.sub td{font-weight:700;background:#f2f8f8;border-bottom:1px solid #b9d3d6}
 .pill{display:inline-block;border-radius:10px;padding:1px 8px;font-size:11.5px;font-weight:600;
  white-space:nowrap}
 .pill.bad{background:#fbe9e8;color:#c8322f}.pill.good{background:#e7f3ea;color:#2e8540}
@@ -1368,6 +1423,8 @@ HOW_SHARE = f"""
 - **Cost vs typical** is what the difference from typical is worth each month: positive costs
   money, negative saves it. **Bands** say which quarter of similar centres this centre is in,
   never an exact position.
+- **Gross Margin** = Total Revenue − Tutor Wages + Super (accounts 472 and 474), with its % of revenue. Higher is better. It is a subtotal, so it is never added into costs or EBITDA. It is pinned to the top of the table and compared with similar
+  centres like the other lines, but never counted in the opportunities.
 - **Members trend**: average active members over the last 4 weeks against the 4 weeks before,
   compared with the network's established centres.
 - Unrelated Expenses (479) are a memo line and aren't in EBITDA.
@@ -1405,14 +1462,17 @@ def _pill(line, status, note):
     return f'<span class="pill {cls}">{html.escape(word)}</span>'
 
 
-def share_table_html(table):
-    """Every account line, all rows, as a plain table (prints in full, no scroll box)."""
+def share_table_html(table, top=None):
+    """Every account line, all rows, as a plain table (prints in full, no scroll box).
+    top: rows pinned first in bold (the Gross Margin row)."""
     t = table.copy()
     t["_b"] = t["Benchmarked"].astype(bool)
     t["_g"] = t["Gap $"].astype(float).fillna(0)
     t["_a"] = t["Actual $"].astype(float).fillna(0)
     t = pd.concat([t[t["_b"]].sort_values("_g", ascending=False),
                    t[~t["_b"]].sort_values("_a", ascending=False)])
+    if top is not None and len(top):
+        t = pd.concat([top.assign(_sub=True), t.assign(_sub=False)])
     head = ('<tr><th class="l">Line</th><th>Actual</th><th>% of revenue</th><th>Typical</th>'
             '<th>Normal range</th><th>Similar centres</th><th>Cost vs typical / month</th>'
             '<th class="l">Status</th></tr>')
@@ -1432,8 +1492,9 @@ def share_table_html(table):
         comp = (f"{int(r['Centres'])}" + (" ⚠" if pnl.small_sample(r["Centres"]) else "")) \
             if ok else ""
         sens = r["Note"] == pnl_share.NOT_BENCHMARKED
+        cls = "sub" if r.get("_sub") is True else "sens" if sens else ""
         body.append(
-            f'<tr class="{"sens" if sens else ""}"><td class="l">{html.escape(str(r["Line"]))}</td>'
+            f'<tr class="{cls}"><td class="l">{html.escape(str(r["Line"]))}</td>'
             f'<td>{actual}</td><td>{_fmt_pct(r["Actual %"])}</td><td>{typ}</td><td>{rng}</td>'
             f'<td class="muted">{comp}</td><td>{_signed_money(r["Gap $"]) if ok else ""}</td>'
             f'<td class="l">{_pill(r["Line"], r["Status"], r["Note"])}</td></tr>')
@@ -1727,7 +1788,8 @@ def report_share(df_pnl, df_wm, vl, helpers, bench=None):
     if accounts is None or accounts.empty:
         st.caption("No account lines for this period.")
     else:
-        st.markdown(share_table_html(accounts), unsafe_allow_html=True)
+        st.markdown(share_table_html(accounts, grouped[grouped["Line"] == pnl.GROSS_MARGIN]),
+                    unsafe_allow_html=True)
     ebitda = now["EBITDA"]
     parts = [f"**{pick}** {'made' if ebitda >= 0 else 'lost'} **${abs(ebitda):,.0f}** "
              f"({label})."]
@@ -1751,7 +1813,7 @@ GRID_LABELS = {"Tutor Wages + Super": "Tutor wages %", "Rent": "Rent %",
                "Marketing - Agency Fees": "Agency fees %", "Marketing": "Marketing %",
                "OPEX": "OPEX %"}
 BASIS_COLOURS = {pf.ACTUAL: "#1f9a9a", pf.FORECAST: "#8fcfcf", pf.ESTIMATE: "#d5e3e4"}
-FORECAST_ROWS = [r for r in TABLE_ROWS[:13] if r[1] != "Months"] + [
+FORECAST_ROWS = MODEL_ROWS + [
     (None, None, "gap"),
     ("Break-even members", "BE members", "count"),
     ("Members above / below break-even", "BE gap", "count"),
@@ -1779,6 +1841,7 @@ HOW_FORECAST = f"""
   country and members band; centres under 12 months old against other developing centres).
   The normal range is the middle half (25th–75th percentile). ⚠ = fewer than
   {pnl.SMALL_SAMPLE} centres. Not shown with fewer than {pnl_share.MIN_PEERS} centres.
+- **Gross Margin** = Total Revenue − Tutor Wages + Super (accounts 472 and 474), with its % of revenue. Higher is better. It is a subtotal, so it is never added into costs or EBITDA.
 - Interest Income (account 270) is counted in revenue, as in the other P&L reports.
 """
 FORECAST_NOTE = ("A forecast is an estimate from the centre's recent figures and network "
@@ -1853,8 +1916,13 @@ def _forecast_benchmarks(values, peers, desc):
 def _forecast_excel(table, grid, settings):
     """The months, the grid as changed and the settings, as an Excel file."""
     buf = io.BytesIO()
-    cols = ["Basis", "Members", "AMV"] + pnl.ROW_ORDER + ["EBITDA", "BE members"]
-    out = table.reindex(columns=cols).copy()
+    lines = [pnl.ROW_ORDER[0], pnl.TUTOR, pnl.GROSS_MARGIN, "Gross Margin %"] + \
+        [r for r in pnl.ROW_ORDER[1:] if r != pnl.TUTOR]
+    cols = ["Basis", "Members", "AMV"] + lines + ["EBITDA", "BE members"]
+    t = pnl.with_gross_margin(table)
+    t["Gross Margin %"] = [pnl.gross_margin_pct(r, w) for r, w in
+                           zip(t.get("Total Revenue", []), t.get(pnl.TUTOR, []))]
+    out = t.reindex(columns=cols).copy()
     out.index = [pnl.period_name(p) for p in out.index]
     with pd.ExcelWriter(buf, engine="openpyxl") as xl:
         out.rename(columns={"AMV": "AMV $ / week"}).to_excel(xl, sheet_name="Forecast",
@@ -2007,7 +2075,7 @@ def report_forecast(df_pnl, df_wm, vl, helpers, bench=None):
         cols.append((pnl.period_name(p), r["Basis"], {k: (None if v is None or
                      (isinstance(v, float) and pd.isna(v)) else v) for k, v in r.items()}))
     t = table[table["Basis"] != pf.MISSING]
-    total = t[pnl.ROW_ORDER + ["EBITDA"]].sum().to_dict()
+    total = pnl.with_gross_margin(t)[pnl.ROW_ORDER + [pnl.GROSS_MARGIN, "EBITDA"]].sum().to_dict()
     total["Members"] = t["Members"].mean()
     total["AMV"] = total["Total Revenue"] / total["Members"] / pnl.WEEKS_PER_MONTH / len(t) \
         if total["Members"] and len(t) else None

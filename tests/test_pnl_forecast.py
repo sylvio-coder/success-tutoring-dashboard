@@ -315,3 +315,39 @@ def test_admin_only_filter_runs_like_the_app():
         exec(code.replace("ADMIN_PAGES = [", "_ = [", 1), ns)
         assert ("15 · P&L Centre Forecast" in ns["REPORTS"]) is expect
         assert "14 · P&L Share" in ns["REPORTS"]
+
+
+def test_forecast_shows_gross_margin_by_month_benchmark_and_excel():
+    import io
+    at = run_forecast()
+    assert not at.exception, at.exception
+    table = next(m.value for m in at.markdown if "pnl-wrap" in m.value)
+    assert table.index(">Tutor Wages + Super<") < table.index(">Gross Margin<") < \
+        table.index(">Rent<")
+    row = table.split(">Gross Margin</td>")[1].split("</tr>")[0]
+    assert row.count("73.0%") >= 10          # tutor wages are 27% of revenue in every month
+    bench = next(d.value for d in at.dataframe if "Normal range" in d.value)
+    lines = list(bench["Line"])
+    assert lines.index("Tutor Wages + Super") + 1 == lines.index("Gross Margin")
+    assert bench.loc[bench["Line"] == "Gross Margin", "Forecast (avg)"].iloc[0] == "73.0%"
+    grid = next(d.value for d in at.dataframe if "Basis" in d.value)
+    assert not any("Gross" in c for c in grid.columns)      # nothing to type in
+    # Excel: Gross Margin and its % straight after tutor wages.
+    t = pd.DataFrame({"Basis": ["Actual"], "Members": [80.0], "AMV": [85.0],
+                      "Total Revenue": [1000.0], "Tutor Wages + Super": [270.0],
+                      "Rent": [100.0], "Wages - Manager/Admin + Super": [0.0],
+                      "Royalties": [80.0], "Marketing - Agency Fees": [0.0],
+                      "Marketing": [80.0], "OPEX": [50.0], "EBITDA": [420.0],
+                      "BE members": [30.0]}, index=["2026-09"])
+    xl = pd.read_excel(io.BytesIO(pr._forecast_excel(t, None, {"Centre": "X"})), "Forecast")
+    cols = list(xl.columns)
+    assert cols.index("Tutor Wages + Super") + 1 == cols.index("Gross Margin") and \
+        cols.index("Gross Margin") + 1 == cols.index("Gross Margin %")
+    assert xl.at[0, "Gross Margin"] == 730 and xl.at[0, "Gross Margin %"] == 73.0
+    assert "Gross Margin" in pr.HOW_FORECAST
+
+
+def test_gpm_sees_no_gross_margin_forecast():
+    at = run_forecast("gpm", ["Success Tutoring - Gordon"])
+    assert not at.exception, at.exception
+    assert "Gross Margin" not in "".join(m.value for m in at.markdown)

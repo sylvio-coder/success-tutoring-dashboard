@@ -339,3 +339,28 @@ def test_menu_key_and_position():
     assert nav.index('"13 · P&L Deep Dive"') < nav.index('"14 · P&L Share"') < \
         nav.index('("Insights"')
     assert 'selected_report=="14 · P&L Share"' in src and "report_share" in src
+
+
+def test_share_table_pins_gross_margin_first_in_bold():
+    at = run_share()
+    at.selectbox(key="ps_centre").set_value("Auburn").run()
+    assert not at.exception, at.exception
+    table = next(m.value for m in at.markdown if '<table class="share-tbl"' in m.value)
+    first = table.split("</tr>")[1]                         # first row after the header
+    assert first.startswith('<tr class="sub"><td class="l">Gross Margin</td>')
+    # Auburn: 20,400 revenue (incl. 400 interest) − 10,000 tutor = 10,400, 51.0%
+    assert "&#36;10,400" in first and "51.0%" in first
+    assert "8 centres" in first or ">8" in first                     # compared with peers
+    assert "Worth a look" in first and 'pill bad' in first           # well below typical
+    opps = next(m.value for m in at.markdown if "Top opportunities" in m.value)
+    assert "gross margin" not in opps.lower()                        # not a cost to cut
+    assert "Gross Margin" in pr.HOW_SHARE
+
+
+def test_share_table_gross_margin_for_a_gpm():
+    at = run_share("gpm", ["Success Tutoring - Auburn"])
+    assert not at.exception, at.exception
+    table = next(m.value for m in at.markdown if '<table class="share-tbl"' in m.value)
+    assert '<tr class="sub"><td class="l">Gross Margin</td>' in table
+    text = page_text(at)
+    assert "Howick" not in text and "Peer" not in text
