@@ -3,6 +3,10 @@
     "success-crm": {
       "type": "http",
       "url": "https://us-central1-success-tutoring-test.cloudfunctions.net/mcp"
+    },
+    "success-insights": {
+      "type": "http",
+      "url": "https://insights.successtutoringportal.com/api/mcp"
     }
   }
 }
