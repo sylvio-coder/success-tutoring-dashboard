@@ -15,6 +15,8 @@ import os
 import html
 import admin_pages
 import pnl_reports
+import composition_report
+import membership_composition
 import membership_trend
 from dotenv import load_dotenv
 
@@ -298,6 +300,23 @@ def load_pnl():
     except Exception as e:
         st.error(f"Could not load the P&L tab ({e}). Click Refresh data to try again.")
         return pd.DataFrame()
+
+def _load_tab_or_empty(tab):
+    """A tab that may not exist yet: empty if missing. A failed read is not cached."""
+    try:
+        return load_sheet_data(tab)
+    except gspread.exceptions.WorksheetNotFound:
+        return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Could not load the {tab} tab ({e}). Click Refresh data to try again.")
+        return pd.DataFrame()
+
+def report_composition(df_wm):
+    """Membership Composition (admins only for now)."""
+    composition_report.report_composition(
+        _load_tab_or_empty(membership_composition.TAB), df_wm, load_vlookup(),
+        _load_tab_or_empty(membership_composition.RRP_TAB), load_pnl(),
+        dict(age_group=get_age_group, show_chart=show_chart, std_layout=std_layout))
 
 def report_pnl(df_wm, page=None):
     """P&L reports. Admins see every centre; anyone else only their own (none if not set).
@@ -2284,6 +2303,7 @@ REPORTS=[
     "1 · Campus Locations",
     "2 · Membership",
     "3 · Membership by Age",
+    "17 · Membership Composition",
     "8 · Net Growth Rate %",
     "9 · Onboarding Progress",
     "10 · Revenue",
@@ -2305,10 +2325,11 @@ def report_allowed(report, allowed_tabs):
 
 REPORTS = [r for r in REPORTS if report_allowed(r, st.session_state.get("allowed_tabs", []))]
 # Admin-only reports: hidden from everyone else, even with allowed_tabs "all".
-ADMIN_ONLY_REPORTS = {"15 · P&L Centre Forecast", "16 · Franchise Model"}
+ADMIN_ONLY_REPORTS = {"15 · P&L Centre Forecast", "16 · Franchise Model",
+                      "17 · Membership Composition"}
 if st.session_state.get("access_level") != "admin":
     REPORTS = [r for r in REPORTS if r not in ADMIN_ONLY_REPORTS]
-ADMIN_PAGES = ["⚙ Weekly Upload", "⚙ P&L Upload", "⚙ Locations", "⚙ Sheet Setup"] if st.session_state.get("access_level") == "admin" else []
+ADMIN_PAGES = ["⚙ Weekly Upload", "⚙ P&L Upload", "⚙ Composition Upload", "⚙ Locations", "⚙ Sheet Setup"] if st.session_state.get("access_level") == "admin" else []
 if not REPORTS:
     st.warning("No reports are assigned to your account. Please contact your administrator."); st.stop()
 
@@ -2321,6 +2342,7 @@ NAV_GROUPS = [
     ("Membership", [
         ("2 · Membership",          "Membership",          ":material/groups:"),
         ("3 · Membership by Age",   "Membership by Age",   ":material/stacks:"),
+        ("17 · Membership Composition", "Membership Composition", ":material/donut_large:"),
     ]),
     ("Growth", [
         ("8 · Net Growth Rate %",   "Net Growth Rate %",   ":material/trending_up:"),
@@ -2341,6 +2363,7 @@ NAV_GROUPS = [
 ADMIN_NAV = [
     ("⚙ Weekly Upload", "Weekly Upload", ":material/upload_file:"),
     ("⚙ P&L Upload",    "P&L Upload",    ":material/request_quote:"),
+    ("⚙ Composition Upload", "Composition Upload", ":material/upload:"),
     ("⚙ Locations",     "Locations",     ":material/store:"),
     ("⚙ Sheet Setup",   "Sheet Setup",   ":material/table_chart:"),
 ]
@@ -2431,11 +2454,13 @@ elif selected_report=="13 · P&L Deep Dive":          report_pnl(df_wm, pnl_repo
 elif selected_report=="14 · P&L Share":              report_pnl(df_wm, pnl_reports.report_share)
 elif selected_report=="15 · P&L Centre Forecast":    report_pnl(df_wm, pnl_reports.report_forecast)
 elif selected_report=="16 · Franchise Model":        report_pnl(df_wm, pnl_reports.report_franchise_model)
+elif selected_report=="17 · Membership Composition": report_composition(df_wm)
 elif selected_report=="11 · AI Outlier Analysis":     report_outliers_alerts(df_wm, df_rv)
 elif selected_report in ADMIN_PAGES:
     spreadsheet = get_sheets_client().open_by_key(SHEET_ID)
     page = {"⚙ Weekly Upload": admin_pages.page_weekly_upload,
             "⚙ P&L Upload": admin_pages.page_pnl_upload,
+            "⚙ Composition Upload": admin_pages.page_composition_upload,
             "⚙ Locations": admin_pages.page_locations,
             "⚙ Sheet Setup": admin_pages.page_sheet_setup}[selected_report]
     page(spreadsheet, df_wm, df_rv, st.cache_data.clear)

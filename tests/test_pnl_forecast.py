@@ -293,7 +293,7 @@ def test_menu_key_position_and_admin_only():
     assert 'selected_report=="15 · P&L Centre Forecast"' in src and "report_forecast" in src
     # hidden from non-admins after allowed_tabs (so "all" doesn't let a GPM in)
     allowed = src.index("REPORTS = [r for r in REPORTS if report_allowed(")
-    lock = src.index('ADMIN_ONLY_REPORTS = {"15 · P&L Centre Forecast", "16 · Franchise Model"}')
+    lock = src.index('ADMIN_ONLY_REPORTS = {"15 · P&L Centre Forecast", "16 · Franchise Model",')
     assert allowed < lock < src.index("NAV_GROUPS = [")
     block = src[lock:src.index("\n\n", lock)] if "\n\n" in src[lock:] else src[lock:]
     assert 'access_level") != "admin"' in block and "not in ADMIN_ONLY_REPORTS" in block

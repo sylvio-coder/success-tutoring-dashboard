@@ -282,3 +282,62 @@ def test_upload_migrating_site_adds_both_crms(ss):
     at = run_page("page_weekly_upload", ss, files)
     assert not any(s.key and s.key.startswith("clash_") for s in at.selectbox)
     assert any("added together" in i.value for i in at.info)
+
+
+# ── Membership Composition upload ─────────────────────────────────────────────
+COMP_CSV = b"""Date,Centre,Country,Row,Type,No. members,Sessions/week,Membership price,Total value
+2026-11-08,Success Tutoring - Auburn,AU,Plan,Group,3,1,40.00,120.00
+2026-11-08,Success Tutoring - Auburn,AU,Plan,Group,9,2,75.00,675.00
+2026-11-08,Success Tutoring - Auburn,AU,Plan,Group,1,2,4.97,4.97
+2026-11-08,Success Tutoring - Auburn,AU,Total,,13,,,799.97
+2026-11-08,Success Tutoring \xe2\x80\x93 Howick,NZ,Plan,Group,5,2,60.00,300.00
+2026-11-08,Success Tutoring - Torquay,AU,Plan,Group,2,2,70.00,140.00
+"""
+
+
+def test_composition_upload_maps_unknown_then_writes(ss):
+    files = Upload("membership-composition-all-centres-2026-11-08.csv", COMP_CSV)
+    at = run_page("page_composition_upload", ss, files)
+    assert not at.exception, at.exception
+    confirm = next(b for b in at.button if b.label.startswith("✅ Confirm"))
+    assert "08/11/2026" in confirm.label and confirm.disabled          # Torquay unknown
+    assert any("Torquay" in w.value for w in at.warning)
+    preview = at.dataframe[0].value
+    assert set(preview["Location"]) == {"Auburn", "Howick"}
+    assert preview.set_index("Location").loc["Auburn", "Under $10"] == 1
+
+    at.selectbox(key="comp_map_Success Tutoring - Torquay").set_value(
+        "Success Tutoring - Landsdale").run()
+    confirm = next(b for b in at.button if b.label.startswith("✅ Confirm"))
+    assert not confirm.disabled
+    confirm.click().run()
+    assert not at.exception, at.exception
+    assert any("written: 5 plan rows for 3 centres" in s.value for s in at.success)
+    rows = ss.worksheet("Membership Composition").get_all_records()
+    assert len(rows) == 5 and rows[0]["Week ending"] == "2026-11-08"
+    assert {r["Location"] for r in rows} == {"Success Tutoring - Auburn",
+                                             "Success Tutoring - Howick",
+                                             "Success Tutoring - Landsdale"}
+    assert ss.worksheet("Location Aliases").get_all_records()[-1] == {
+        "Alias": "Composition: Success Tutoring - Torquay",
+        "Location": "Success Tutoring - Landsdale"}
+    rrp = ss.worksheet("RRP").get_all_records()
+    assert rrp[0]["Country"] == "AU" and len(rrp) == 13
+
+
+def test_composition_upload_replaces_the_same_week(ss):
+    files = Upload("x.csv", COMP_CSV)
+    for _ in range(2):
+        at = run_page("page_composition_upload", ss, files)
+        at.selectbox(key="comp_map_Success Tutoring - Torquay").set_value(
+            "Leave out this week").run()
+        next(b for b in at.button if b.label.startswith("✅ Confirm")).click().run()
+        assert not at.exception, at.exception
+    assert len(ss.worksheet("Membership Composition").get_all_records()) == 4
+    assert any("4 earlier rows for this week replaced" in s.value for s in at.success)
+
+
+def test_composition_upload_rejects_other_files(ss):
+    at = run_page("page_composition_upload", ss, Upload("x.csv", b"a,b\n1,2\n"))
+    assert any("Membership Composition export" in e.value for e in at.error)
+    assert not [b for b in at.button if b.label.startswith("✅ Confirm")]

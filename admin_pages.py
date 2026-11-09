@@ -5,6 +5,7 @@ import pandas as pd
 import streamlit as st
 
 import ingest
+import membership_composition as mc
 import pnl
 import sheet_setup
 import sheet_writer as sw
@@ -767,3 +768,138 @@ def page_sheet_setup(spreadsheet, df_wm, df_rv, clear_cache):
                 st.success("Done. No broken formulas found in any tab.")
         except Exception as e:
             st.error(f"The change failed: {e}")
+
+
+# ── Membership Composition upload ─────────────────────────────────────────────
+def ensure_rrp_tab(spreadsheet):
+    """Create the RRP tab with HQ's default prices if it doesn't exist. True if created."""
+    import gspread
+    try:
+        spreadsheet.worksheet(mc.RRP_TAB)
+        return False
+    except gspread.WorksheetNotFound:
+        ws = spreadsheet.add_worksheet(mc.RRP_TAB, rows=50, cols=len(mc.RRP_HEADERS))
+        ws.update([mc.RRP_HEADERS], "A1")
+        ws.append_rows([[r[h] for h in mc.RRP_HEADERS] for r in mc.DEFAULT_RRP],
+                       value_input_option="RAW")
+        return True
+
+
+def page_composition_upload(spreadsheet, df_wm, df_rv, clear_cache):
+    st.markdown('<div class="report-title">Membership Composition Upload</div>',
+                unsafe_allow_html=True)
+    _subtitle("Drop in the portal's Membership Composition export (CSV, all centres) each "
+              "week. Each centre's plans are saved to the 'Membership Composition' tab.")
+
+    f = st.file_uploader("Membership Composition CSV", type=["csv"], key="comp_file")
+    if not f:
+        st.info("Upload the week's export to see a preview. Nothing is written to the Sheet "
+                "until you confirm.")
+        return
+    try:
+        data = mc.read_export(f.getvalue())
+    except mc.CompositionError as e:
+        st.error(str(e))
+        return
+    try:
+        _, _, master = _load_master(spreadsheet)
+        aliases = sw.read_aliases(spreadsheet)
+    except Exception as e:
+        st.error(f"Could not read the master location list: {e}")
+        return
+
+    week = st.date_input("Week ending", value=data["week_end"] or date.today(),
+                         format="DD/MM/YYYY", key="comp_week")
+    if not data["week_end"]:
+        st.warning("The file has no date. Check the week ending above.")
+    rows = data["rows"]
+    names = sorted(rows["Centre"].unique())
+    st.caption(f"{len(names)} centres with members"
+               + (f"; {len(data['empty'])} listed with none" if data["empty"] else "") + ".")
+
+    found, sugg = mc.match_centres(names, master, aliases)
+    extra_aliases, left_out = {}, set()
+    if sugg:
+        st.markdown("#### Centres not in the master list")
+        st.caption("Pick the location each name refers to, or leave it out. A mapping you "
+                   "choose is remembered for future uploads.")
+        all_names = master["Location"].tolist()
+        SKIP, CHOOSE = "Leave out this week", "— choose —"
+        for n, s in sugg.items():
+            opts = [CHOOSE] + s + [SKIP] + [x for x in all_names if x not in s]
+            c1, c2 = st.columns([2, 3])
+            c1.markdown(f"**{n}**")
+            choice = c2.selectbox("Maps to", opts, key=f"comp_map_{n}",
+                                  label_visibility="collapsed")
+            if choice == SKIP:
+                left_out.add(n)
+            elif choice != CHOOSE:
+                extra_aliases[ingest.scoped_alias(mc.CRM, n)] = choice
+                found[n] = choice
+    unresolved = [n for n, loc in found.items() if not loc and n not in left_out]
+
+    by_loc = {}
+    for n, loc in found.items():
+        if loc:
+            by_loc.setdefault(loc, []).append(n)
+    clash = {loc: ns for loc, ns in by_loc.items() if len(ns) > 1}
+    for loc, ns in clash.items():
+        st.error(f"{' and '.join(ns)} both map to {loc}. Map one of them to another location.")
+
+    st.markdown("#### Preview")
+    prev = mc.prepare(pd.DataFrame(mc.records(rows, found, week)))
+    if not prev.empty:
+        view = []
+        for loc, g in prev.groupby("Location"):
+            m = mc.centre_metrics(g, None)
+            view.append({"Location": loc.removeprefix(ingest.PREFIX), "Members": m["Members"],
+                         "% 1×": m["% 1×"], "% 2×": m["% 2×"], "% 3×": m["% 3×"],
+                         "4+×": m["n 4+×"], "1:1": m["n 1:1"],
+                         "Under $10": m["Freeze"], "ARPM": m["ARPM"]})
+        st.dataframe(pd.DataFrame(view), hide_index=True, width="stretch",
+                     column_config={**{c: st.column_config.NumberColumn(c, format="%.0f%%")
+                                       for c in ["% 1×", "% 2×", "% 3×"]},
+                                    "ARPM": st.column_config.NumberColumn(format="%.2f")})
+        st.caption("Weekly prices in each centre's own currency (US monthly prices ÷ 4). "
+                   f"'Under ${mc.FREEZE_BELOW}' = freeze fee or discretionary amount: counted "
+                   "in the mix, left out of prices.")
+        odd = prev[prev["Freeze"]]
+        if not odd.empty:
+            with st.expander(f"Prices under ${mc.FREEZE_BELOW} to check ({len(odd)})"):
+                st.dataframe(odd[["Location", "Type", "Sessions/week", "Members",
+                                  "Weekly price"]], hide_index=True, width="stretch")
+
+    label = week.isoformat()
+    try:
+        headers, existing = sw.read_tab(spreadsheet.worksheet(mc.TAB))
+        wi = headers.index("Week ending")
+        if any(len(r) > wi and r[wi].strip().lstrip("'") == label for r in existing):
+            st.info(f"The Sheet already has {week:%d/%m/%Y}. Centres in this upload will be "
+                    "replaced, not duplicated.")
+    except Exception:
+        pass
+
+    if unresolved:
+        st.warning("Choose what these names map to: " + ", ".join(unresolved))
+    recs = mc.records(rows, found, week)
+    blocked = bool(unresolved) or bool(clash) or not recs
+    if st.button(f"✅ Confirm and write week ending {week:%d/%m/%Y} to the Sheet",
+                 type="primary", disabled=blocked):
+        try:
+            with st.spinner("Writing to the Sheet..."):
+                if extra_aliases:
+                    sw.add_aliases(spreadsheet, list(extra_aliases.items()))
+                ws = sw.get_or_add_tab(spreadsheet, mc.TAB, mc.HEADERS)
+                deleted, added = sw.replace_week(ws, recs, "Location", label,
+                                                 key_header="Week ending")
+                rrp_added = ensure_rrp_tab(spreadsheet)
+            clear_cache()
+            st.success(f"Week ending {week:%d/%m/%Y} written: {added} plan rows for "
+                       f"{len(by_loc)} centres ({deleted} earlier rows for this week replaced).")
+            if rrp_added:
+                st.info("Added an 'RRP' tab with HQ's prices from 1 July 2026. Edit it there "
+                        "when prices change.")
+        except Exception as e:
+            st.error(f"Writing to the Sheet failed: {e}\n\n{WRITE_HINT}")
+    elif blocked:
+        st.caption("Resolve the items above to enable writing.")
