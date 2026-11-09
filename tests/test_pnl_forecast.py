@@ -365,10 +365,11 @@ TYP = {"members": 120.0, "amv": 80.0, "marketing_pct": 0.05, "manager": 3500.0,
 
 def test_model_ramp_relief_and_royalty_minimum():
     s = dict(pm.DEFAULTS)
-    assert pm.ramp(12 / 4.2 + 0.5, s, 120) == pytest.approx(50)       # 50 members at week 12
-    assert pm.ramp(12 / 4.2 + 1.5, s, 120) == pytest.approx(57)      # +7 a month after
-    assert pm.ramp(60, s, 120) == 120                                  # stops at mature
-    assert pm.ramp(1, {**s, "flat": True}, 120) == 120
+    t = pm.run(s, TYP, "2026-07", 60)
+    ends = [17.5, 35.0, 50.0, 57.0, 64.0]                       # end of each month
+    assert list(t["Members"].iloc[:5]) == pytest.approx(
+        [(a + b) / 2 for a, b in zip([0] + ends, ends)])        # the month's average
+    assert t["Members"].iloc[-1] > 400                          # +7 a month, no limit
     assert pm.relief_share(4, 18) == 1                                 # weeks 12.6–16.8
     assert pm.relief_share(5, 18) == pytest.approx(1.2 / 4.2)          # weeks 16.8–21
     assert pm.relief_share(6, 18) == 0
@@ -395,8 +396,8 @@ def test_model_manager_owner_wage_and_payback():
     pb_w, pb_wo = pm.payback_month(w, 110000), pm.payback_month(wo, 110000)
     assert pb_wo <= pb_w                                               # manager costs time
     assert w.loc[w["Model month"] == pb_w, "Cumulative"].iloc[0] >= 110000
-    need = pm.needed(s, TYP, "2026-07", 110000, True, "members")
-    t = pm.run(s, {**TYP, "members": need}, "2026-07", 42)
+    need = pm.needed(s, TYP, "2026-07", 110000, True, "growth")
+    t = pm.run({**s, "growth": need}, TYP, "2026-07", 42)
     assert pm.payback_month(t, 110000) == 42 or abs(t["Cumulative"].iloc[41] - 110000) < 50
     assert pm.horizon("2026-07", 42) == 60                             # to end of FY2030–31
     assert pm.fy_totals(w)["Months"].sum() == 48
@@ -410,8 +411,8 @@ def test_model_grid_change_overrides_one_month():
     g.loc["2027-01", "Members"] = 200.0
     g.loc["2027-02", "Rent %"] = 10.0
     t = pm.run(s, TYP, "2026-07", 12, True, g, g0)
-    assert t.at["2027-01", "Members"] == 200 and t.at["2027-02", "Members"] == \
-        base.at["2027-02", "Members"]
+    assert t.at["2027-01", "Members"] == 200
+    assert t.at["2027-02", "Members"] == (200 + 207) / 2        # carries on from 200
     assert t.at["2027-02", "Rent"] == pytest.approx(0.1 * t.at["2027-02", "Total Revenue"])
     assert t.at["2027-03", "Rent"] == 4000
 
@@ -463,3 +464,25 @@ def test_model_settings_by_country():
     nz, ph = pm.settings_for("New Zealand")
     assert ph and nz["royalty_min"] == 2266                    # placeholder until set
     assert pm.run(nz, TYP, "2026-07", 6)["Royalties"].iloc[5] > 0
+
+
+def test_holiday_months_dip_instead_of_growing():
+    s = {**pm.DEFAULTS, "holiday": {"12": -5.0, "01": -8.0}}
+    t = pm.run(s, TYP, "2026-09", 8)            # opens Sep: 17.5, 35, 50, Dec −5%, Jan −8%
+    end = [17.5, 35.0, 50.0, 50 * 0.95, 50 * 0.95 * 0.92, 50 * 0.95 * 0.92 + 7]
+    assert t.at["2026-12", "Members"] == pytest.approx((end[2] + end[3]) / 2)
+    assert t.at["2027-02", "Members"] == pytest.approx((end[4] + end[5]) / 2)   # +7, not +17.5
+    late = pm.run(s, TYP, "2026-11", 6)          # opens Nov: the dips slow the way to 50
+    assert late.at["2027-01", "Members"] < 35                    # dips slow the way to 50
+    assert late["Members"].iloc[:5].max() < 50                 # 50 in March, not January
+    hols = pd.DataFrame({"State": ["NSW", "NSW", "VIC", "NZ"], "Year": [2026] * 4,
+                         "Start_Week": [51, 15, 51, 28], "End_Week": [5, 16, 4, 29]})
+    months, fallback = pm.holiday_months(hols, "Australia")
+    assert not fallback and months == ["01", "12"]                # Apr: NSW only (1 of 2)
+    assert pm.holiday_months(hols, "Canada") == (pm.FALLBACK_HOLIDAYS, True)
+    members = pd.Series({("A", p): v for p, v in [("2025-11", 100), ("2025-12", 95),
+                                                   ("2026-01", 90), ("2026-02", 100)]})
+    members = pd.concat([members] * 1)
+    many = pd.concat({f"C{i}": members.droplevel(0) for i in range(5)})
+    ch, n = pm.holiday_changes(many, {f"C{i}" for i in range(5)}, ["12", "01"])
+    assert n == 5 and ch["12"] == pytest.approx(-5.0) and ch["01"] == pytest.approx(-100 / 19)

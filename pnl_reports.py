@@ -2129,8 +2129,13 @@ HOW_MODEL = """
   country's centres over their last 3 P&L months (established centres, 12 months or older,
   where there are any): the middle value (median), not the average, so one unusual centre
   doesn't move it. ⚠ = fewer than 8 centres behind a figure.
-- **Members**: a straight line from 0 to the members at week 12, then the new members a month
-  until the mature members are reached. "Flat members" uses the mature members from month 1.
+- **Members**: worked out month by month from opening. About 17.5 a month (the members at
+  week 12 spread over 12 weeks) until that number, then the new members a month, with no
+  limit. In a **term-holiday month** (from the School Holidays tab: a month most states'
+  years have a holiday week in) members change by that month's holiday % instead, so a centre
+  opening before the holidays takes longer to reach 50. The starting holiday % is the typical
+  change in that month at the country's established centres (all centres if there isn't
+  enough history). Members shown are the month's average.
 - **Revenue** = members × price per member × 4.2 weeks. The price rises by the yearly % each
   July after opening.
 - **Tutor wages + super**: the typical % of revenue for that many members (members bands, as
@@ -2143,7 +2148,7 @@ HOW_MODEL = """
 - **Profit for payback** = EBITDA, less the owner's wage when it is switched on. **Payback** is
   the first month the profit added up since opening (early losses included) reaches the
   investment target, converted from AUD at the country's exchange rate.
-- **Needed to pay back on time**: the mature members (or the price per member) at which
+- **Needed to pay back on time**: the new members a month (or the price per member) at which
   payback falls within the target months, with everything else as set. These use the
   settings only, not the changes in the grid.
 - **Changing the grid** sets that month's members or price, or a line to that % of revenue.
@@ -2240,7 +2245,7 @@ def report_franchise_model(df_pnl, df_wm, vl, helpers, bench=None):
         st.warning(f"⚠ No royalty or investment figures set for {country} yet: using "
                    "Australia's as a placeholder. Change them below.")
     k = f"fm_{country}_"
-    c = st.columns(4)
+    c = st.columns(3)
     s = dict(d)
     s["target_aud"] = c[0].number_input("Investment to pay back (AUD)", 0.0, value=d["target_aud"],
                                         step=5000.0, key=k + "target")
@@ -2248,8 +2253,6 @@ def report_franchise_model(df_pnl, df_wm, vl, helpers, bench=None):
                                                 value=d["payback_months"], key=k + "months"))
     amv = c[2].number_input(f"Price per member $ / week{small}", 0.0, value=round(typ["amv"], 2),
                             step=1.0, key=k + "amv")
-    mature = c[3].number_input(f"Mature members{small}", 0.0, value=float(round(typ["members"])),
-                               step=5.0, key=k + "mature")
     c = st.columns(4)
     s["ramp_members"] = c[0].number_input("Members at week 12", 0.0, value=d["ramp_members"],
                                           step=5.0, key=k + "ramp")
@@ -2269,7 +2272,6 @@ def report_franchise_model(df_pnl, df_wm, vl, helpers, bench=None):
                                         step=5000.0, key=k + "owner", disabled=not s["owner_on"])
     s["owner_stops"] = c[2].toggle("Stop it once a manager is hired", d["owner_stops"],
                                    key=k + "owner_stops", disabled=not s["owner_on"])
-    s["flat"] = c[3].toggle("Flat members (no ramp-up)", d["flat"], key=k + "flat")
     c = st.columns(5)
     s["royalty_min"] = c[0].number_input(f"Royalty minimum $ / month ({pf.fy_label(d['royalty_fy'])[:9]})",
                                          0.0, value=d["royalty_min"], step=10.0, key=k + "rmin")
@@ -2282,7 +2284,30 @@ def report_franchise_model(df_pnl, df_wm, vl, helpers, bench=None):
     s["wage_rise"] = c[4].number_input("Wage rise % each July", 0.0, value=d["wage_rise"],
                                        step=0.5, key=k + "wage_rise",
                                        help="Applies to the manager and owner's wages.")
-    typ = {**typ, "amv": amv, "members": mature, "manager": mgr_cost}
+    # Term-holiday months: members change by the holiday % instead of growing that month.
+    hol_months, fallback = pm.holiday_months(helpers.get("holidays"), country)
+    info_c = location_info(b_pnl, vl)["Country"]
+    ages = vl.set_index(LOC)["Age (Months)"] if LOC in vl.columns and \
+        "Age (Months)" in vl.columns else pd.Series(dtype=float)
+    in_country = [l for l, c_ in info_c.items() if c_ == country]
+    est = [l for l in in_country if pd.notna(ages.get(l)) and not pnl.is_developing(ages.get(l))]
+    changes, n_used = pm.holiday_changes(members, est or in_country, hol_months)
+    if len(changes) < len(hol_months):                     # not enough history: all centres
+        changes, n_used = pm.holiday_changes(members, set(members.index.get_level_values(0))
+                                             if len(members) else set(), hol_months)
+    st.markdown('<div class="filter-label">Holiday change % (members change by this instead of '
+                'growing that month; 0 = grow as normal)</div>', unsafe_allow_html=True)
+    st.caption(("⚠ No term holidays found in the School Holidays tab for this country: using "
+                "Jan, Apr, Jul, Oct and Dec. " if fallback else "") +
+               f"Starting values: the typical change in those months at {n_used} centre(s)" +
+               (" ⚠" if pnl.small_sample(n_used) else "") + ".")
+    s["holiday"] = {}
+    for row in (pm.MONTHS[:6], pm.MONTHS[6:]):
+        for col, m in zip(st.columns(6), row):
+            v = round(changes.get(m, 0.0), 1) if m in hol_months else 0.0
+            s["holiday"][m] = col.number_input(pm.MONTH_NAMES[int(m) - 1] + " %", -100.0, 100.0,
+                                               value=v, step=0.5, key=k + f"hol_{m}")
+    typ = {**typ, "amv": amv, "manager": mgr_cost}
     target = s["target_aud"] / (typ["fx"] or 1.0)
     n = pm.horizon(start, s["payback_months"])
     months = pm.months_from(start, n)
@@ -2292,7 +2317,7 @@ def report_franchise_model(df_pnl, df_wm, vl, helpers, bench=None):
     base = {name: pm.run(s, typ, start, n, name == pm.WITH) for name in (pm.WITH, pm.WITHOUT)}
     base_grid = pm.grid_from(base[pm.WITH])
     resets = st.session_state.setdefault("fm_resets", 0)
-    gkey = f"fm_grid_{hash((country, start, tuple(sorted(s.items())), amv, mature, mgr_cost))}_{resets}"
+    gkey = f"fm_grid_{hash((country, start, repr(sorted(s.items())), amv, mgr_cost))}_{resets}"
     top = st.container()
     _section("Adjust the model",
              "Change members, price or any line's % of revenue for any month. Lines you leave "
@@ -2329,7 +2354,7 @@ def report_franchise_model(df_pnl, df_wm, vl, helpers, bench=None):
         for col, (name, t) in zip(st.columns(2), tables.items()):
             pb = pm.payback_month(t, target)
             ok = pb is not None and pb <= s["payback_months"]
-            mem_need = pm.needed(s, typ, start, target, name == pm.WITH, "members")
+            mem_need = pm.needed(s, typ, start, target, name == pm.WITH, "growth")
             amv_need = pm.needed(s, typ, start, target, name == pm.WITH, "amv")
             when = f"Month {pb} ({pnl.period_name(t.index[pb - 1])})" if pb else \
                 f"Not within {n} months"
@@ -2340,8 +2365,8 @@ def report_franchise_model(df_pnl, df_wm, vl, helpers, bench=None):
             at = t["Cumulative"].iloc[min(s["payback_months"], n) - 1]
             b_.markdown(_card(f"Profit after {s['payback_months']} months", _money_short(at)),
                         unsafe_allow_html=True)
-            a_.markdown(_card("Mature members needed",
-                              "–" if mem_need is None else f"{mem_need:,.0f}"),
+            a_.markdown(_card("New members a month needed",
+                              "–" if mem_need is None else f"{mem_need:,.1f}"),
                         unsafe_allow_html=True)
             b_.markdown(_card("Price needed $ / week",
                               "–" if amv_need is None else f"${amv_need:,.2f}"),

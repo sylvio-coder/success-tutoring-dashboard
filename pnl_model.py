@@ -1,8 +1,9 @@
 """Franchise Model (admins only): a theoretical new centre's monthly P&L from opening, with and
 without a campus manager, and the month its profit pays back the investment.
 
-Members ramp from 0 to RAMP_MEMBERS at RAMP_WEEKS, then grow by GROWTH a month up to a ceiling
-(or stay flat at the ceiling). Revenue = members x price per member x 4.2 weeks. Tutor wages
+Members are worked out month by month from opening: about 17.5 a month (50 members over 12
+weeks) until 50, then +7 a month with no limit. In a term-holiday month members change by that
+month's holiday % instead. Revenue = members x price per member x 4.2 weeks. Tutor wages
 use the % for that many members (members bands); marketing is a % of revenue; rent, agency
 fees and OPEX are fixed $. Royalties are the higher of the minimum or 8% of revenue, nothing
 during the first relief weeks. The manager is hired the first month members reach the
@@ -24,7 +25,11 @@ WITH, WITHOUT = "With manager", "Without manager"
 DEFAULTS = dict(target_aud=110000.0, payback_months=42, ramp_members=50.0, ramp_weeks=12.0,
                 growth=7.0, manager_trigger=80.0, owner_on=False, owner_wage=60000.0,
                 owner_stops=False, relief_weeks=18.0, royalty_min=2266.0, royalty_rise=3.0,
-                royalty_fy=2026, price_rise=0.0, wage_rise=0.0, flat=False)
+                royalty_fy=2026, price_rise=0.0, wage_rise=0.0)
+MONTHS = ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"]
+MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+FALLBACK_HOLIDAYS = ["01", "04", "07", "10", "12"]   # when the School Holidays tab has none
+HOLIDAY_STATES = {"Australia": ["NSW", "VIC", "QLD", "WA", "SA"], "New Zealand": ["NZ"]}
 
 # Each country's royalties and investment target. royalty_min is in the country's own
 # currency for the financial year starting in July of royalty_fy; target_aud is in AUD.
@@ -83,16 +88,64 @@ def horizon(start, payback_months):
     return n
 
 
-def ramp(month, s, ceiling):
-    """Members in model month 1, 2, … (middle of the month)."""
-    if s["flat"]:
-        return ceiling
-    weeks = (month - 0.5) * pnl.WEEKS_PER_MONTH
-    if weeks <= s["ramp_weeks"]:
-        m = s["ramp_members"] * weeks / s["ramp_weeks"]
-    else:
-        m = s["ramp_members"] + s["growth"] * (weeks - s["ramp_weeks"]) / pnl.WEEKS_PER_MONTH
-    return min(m, max(ceiling, s["ramp_members"])) if ceiling else m
+def next_members(end, period, s, reached=False):
+    """Members at the end of `period`, from `end` at the end of the month before. reached:
+    the members at week 12 have been reached before (from then on it's +growth a month)."""
+    pct = s.get("holiday", {}).get(period[5:7], 0.0)
+    if pct:
+        return max(end * (1 + pct / 100), 0.0)
+    if not reached and end < s["ramp_members"]:
+        step = s["ramp_members"] * pnl.WEEKS_PER_MONTH / s["ramp_weeks"]
+        return min(end + step, s["ramp_members"])
+    return end + s["growth"]
+
+
+# ── Term-holiday months and their typical change ─────────────────────────────
+def holiday_months(holidays, country):
+    """Calendar months ("01".."12") with term holidays for the country: a month counts when
+    most of the country's state-years in the School Holidays tab have a holiday week in it.
+    Returns (months, True when the fallback list was used)."""
+    states = HOLIDAY_STATES.get(country, [])
+    if holidays is None or holidays.empty or not states or "State" not in holidays:
+        return FALLBACK_HOLIDAYS, True
+    h = holidays[holidays["State"].isin(states)]
+    seen = {}
+    for _, r in h.iterrows():
+        y, a, b = int(r["Year"]), int(r["Start_Week"]), int(r["End_Week"])
+        weeks = [(y, w) for w in range(a, b + 1)] if b >= a else \
+            [(y, w) for w in range(a, 53)] + [(y + 1, w) for w in range(1, b + 1)]
+        for yy, w in weeks:
+            try:
+                m = pd.Timestamp.fromisocalendar(yy, w, 4).strftime("%m")
+            except ValueError:
+                continue
+            seen.setdefault((r["State"], y), set()).add(m)
+    if not seen:
+        return FALLBACK_HOLIDAYS, True
+    return [m for m in MONTHS if sum(m in v for v in seen.values()) / len(seen) > 0.5], False
+
+
+def holiday_changes(members, locations, months, min_members=pf.NETWORK_MIN_MEMBERS):
+    """{month: typical (median) % change in members} for these calendar months, from these
+    centres' history (centres with fewer than min_members the month before left out), and
+    the number of centres behind it. members: (Location, Period) series."""
+    parts, used = [], set()
+    for loc, ser in members.groupby(level=0):
+        if loc not in locations:
+            continue
+        ser = ser.droplevel(0)
+        ch = pf._changes(ser)
+        prev = ser.reindex([pf.add_months(p, -1) for p in ch.index]).values
+        ch = ch[(prev >= min_members) & (ch.abs() <= 0.5)]
+        if len(ch):
+            parts.append(ch)
+            used.add(loc)
+    if not parts:
+        return {}, 0
+    allc = pd.concat(parts)
+    by = allc.groupby(allc.index.str[5:7])
+    return {m: float(by.get_group(m).median() * 100) for m in months
+            if m in by.groups and len(by.get_group(m)) >= pf.NETWORK_MIN_OBS}, len(used)
 
 
 def _rises(period, start, pct):
@@ -114,13 +167,17 @@ def relief_share(month, weeks):
 def run(s, typ, start, n, manager=True, grid=None, base=None):
     """Monthly P&L for n months from `start`. grid/base: the adjustment grid as changed and
     before changes (any cell that differs overrides the model for that month)."""
-    rows, hired, cum = [], False, 0.0
+    rows, hired, cum, end, reached = [], False, 0.0, 0.0, False
     for i, p in enumerate(months_from(start, n), start=1):
         def changed(col):
             return grid is not None and p in grid.index and \
                 abs(float(grid.at[p, col]) - float(base.at[p, col])) > 1e-6
-        mem = float(grid.at[p, "Members"]) if changed("Members") else \
-            ramp(i, s, typ["members"])
+        if changed("Members"):
+            mem = end = float(grid.at[p, "Members"])
+        else:
+            new = next_members(end, p, s, reached)
+            mem, end = (end + new) / 2, new           # the month's average
+        reached = reached or end >= s["ramp_members"]
         amv = float(grid.at[p, "AMV $ / week"]) if changed("AMV $ / week") else \
             typ["amv"] * _rises(p, start, s["price_rise"])
         rev = mem * amv * pnl.WEEKS_PER_MONTH
@@ -165,12 +222,13 @@ def payback_month(table, target):
 
 
 def needed(s, typ, start, target, manager, what):
-    """Members ceiling ('members') or price per member ('amv') needed to pay back within
-    s['payback_months'], everything else as set. None if not reachable (or not needed)."""
+    """New members a month ('growth') or price per member ('amv') needed to pay back within
+    s['payback_months'], everything else as set. None if not reachable."""
     def ok(v):
-        t = run(s, {**typ, what: v}, start, s["payback_months"], manager)
+        s2, t2 = ({**s, what: v}, typ) if what in s else (s, {**typ, what: v})
+        t = run(s2, t2, start, s["payback_months"], manager)
         return payback_month(t, target) is not None
-    lo, hi = 0.0, max(typ[what], 1.0)
+    lo, hi = 0.0, max(s[what] if what in s else typ[what], 1.0)
     while not ok(hi):
         hi *= 2
         if hi > 1e5:

@@ -313,7 +313,7 @@ def report_pnl(df_wm, page=None):
         state_of=lambda r: REGION_TO_STATE.get(r, r) if isinstance(r, str) and r.strip() else None,
         show_chart=show_chart, std_layout=std_layout, report_filters=report_filters,
         # Sessions for every centre; names only for centres this viewer may see.
-        revenue=load_revenue(),
+        revenue=load_revenue(), holidays=load_school_holidays(),
         can_name=lambda loc: st.session_state.get("access_level") == "admin"
         or loc in st.session_state.get("allowed_locations", []),
         viewer_name=st.session_state.get("user_name", "")),
