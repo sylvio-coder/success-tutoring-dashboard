@@ -1,5 +1,5 @@
-"""Membership Composition: reading the export, RRP, mix and gaps, flags, pathway and
-the rule-based commentary. Made-up centres and prices only."""
+"""Membership Composition calculations: reading the export, national RRP, the current
+composition table, the ideal composition and the group overview. Made-up data only."""
 from datetime import date
 
 import pandas as pd
@@ -7,40 +7,47 @@ import pytest
 
 import membership_composition as mc
 
-LOC = mc.LOC
 P = "Success Tutoring - "
 
 CSV = """Date,Centre,Country,Row,Type,No. members,Sessions/week,Membership price,Total value
-2026-11-08,Success Tutoring - Alpha,AU,Plan,Group,4,1,40.00,160.00
-2026-11-08,Success Tutoring - Alpha,AU,Plan,Group,10,2,81.00,810.00
-2026-11-08,Success Tutoring - Alpha,AU,Plan,Group,2,4,100.00,200.00
-2026-11-08,Success Tutoring - Alpha,AU,Plan,1:1,1,1,90.00,90.00
-2026-11-08,Success Tutoring - Alpha,AU,Plan,Group,1,2,4.97,4.97
-2026-11-08,Success Tutoring - Alpha,AU,Total,,18,,,1264.97
-2026-11-08,Success Tutoring - Alpha,AU,ARPM,,,,,70.28
-2026-11-08,Success Tutoring – Kiwi,NZ,Plan,Group,6,2,60.00,360.00
-2026-11-08,Success Tutoring – Kiwi,NZ,Total,,6,,,360.00
+2026-11-08,Success Tutoring - Alpha,AU,Plan,Group,1,1,40.00,40.00
+2026-11-08,Success Tutoring - Alpha,AU,Plan,Group,1,2,40.00,40.00
+2026-11-08,Success Tutoring - Alpha,AU,Plan,Group,6,2,80.00,480.00
+2026-11-08,Success Tutoring - Alpha,AU,Plan,Group,1,4,80.00,80.00
+2026-11-08,Success Tutoring - Alpha,AU,Plan,Group,1,4,160.00,160.00
+2026-11-08,Success Tutoring - Alpha,AU,Plan,1:1,2,1,300.00,600.00
+2026-11-08,Success Tutoring - Alpha,AU,Total,,12,,,1400.00
+2026-11-08,Success Tutoring - Beta,AU,Plan,Group,4,2,60.00,240.00
+2026-11-08,Success Tutoring - Beta,AU,Plan,Group,1,2,4.97,4.97
+2026-11-08,Success Tutoring – Kiwi,NZ,Plan,Group,18,1,40.00,720.00
+2026-11-08,Success Tutoring – Kiwi,NZ,Plan,Group,6,2,70.00,420.00
+2026-11-08,Success Tutoring – Kiwi,NZ,Plan,Group,1,2,4.97,4.97
 2026-11-08,Success Tutoring Tex,US,Plan,Group,2,2,280.00,560.00
-2026-11-08,Success Tutoring Tex,US,Total,,2,,,560.00
 2026-11-08,Success Tutoring - Empty,AU,Total,,0,,,0.00
 """
 
 
-def comp_from(csv=CSV, week=None):
+def week_from(csv=CSV):
     x = mc.read_export(csv.encode())
     locs = {n: P + n.replace("Success Tutoring", "").strip(" -–") for n in x["rows"]["Centre"]}
-    return mc.prepare(pd.DataFrame(mc.records(x["rows"], locs, week or x["week_end"])))
+    return mc.prepare(pd.DataFrame(mc.records(x["rows"], locs, x["week_end"])))
+
+
+W = week_from()
+AU = mc.rrp_for(mc.rrp_table(), "AU")
+
+
+def plans(name):
+    return W[W["Location"] == P + name]
 
 
 # ── Reading the export ────────────────────────────────────────────────────────
 def test_read_export_plans_only_and_us_monthly_to_weekly():
     x = mc.read_export(CSV.encode())
-    assert x["week_end"] == date(2026, 11, 8)
-    rows = x["rows"]
-    assert len(rows) == 7 and x["empty"] == ["Success Tutoring - Empty"]
-    tex = rows[rows["Centre"] == "Success Tutoring Tex"].iloc[0]
-    assert tex["Weekly price"] == 70.0                          # US$280 a month / 4
-    assert set(rows["Type"]) == {"Group", "1:1"}
+    assert x["week_end"] == date(2026, 11, 8) and x["empty"] == ["Success Tutoring - Empty"]
+    assert len(x["rows"]) == 12
+    tex = x["rows"][x["rows"]["Centre"] == "Success Tutoring Tex"].iloc[0]
+    assert tex["Weekly price"] == 70.0                           # US$280 a month / 4
 
 
 def test_read_export_rejects_other_files():
@@ -51,17 +58,8 @@ def test_read_export_rejects_other_files():
 def test_records_keep_week_as_text_and_skip_unmatched():
     x = mc.read_export(CSV.encode())
     recs = mc.records(x["rows"], {"Success Tutoring - Alpha": P + "Alpha"}, x["week_end"])
-    assert len(recs) == 5 and all(r["Location"] == P + "Alpha" for r in recs)
-    assert recs[0]["Week ending"] == "'2026-11-08"
+    assert len(recs) == 6 and recs[0]["Week ending"] == "'2026-11-08"
     assert list(recs[0]) == mc.HEADERS
-
-
-def test_prepare_mix_and_freeze():
-    comp = comp_from()
-    a = comp[comp["Location"] == P + "Alpha"]
-    assert sorted(a["Mix"].unique()) == ["1:1", "1×", "2×", "4+×"]
-    assert a.loc[a["Freeze"], "Weekly price"].tolist() == [4.97]
-    assert mc.prepare(pd.DataFrame()).empty
 
 
 def test_composition_scope_alias():
@@ -73,142 +71,90 @@ def test_composition_scope_alias():
 
 
 # ── RRP ───────────────────────────────────────────────────────────────────────
-def test_rrp_by_state_country_and_fallback():
+def test_national_rrp_except_us_regions():
     t = mc.rrp_table()
-    assert mc.rrp_for(t, "Australia", "New South Wales")["mkt"] == (46, 81, 110)
-    assert mc.rrp_for(t, "AU", "WA")["mkt"] == (44, 77, 104)            # abbreviation
-    assert mc.rrp_for(t, "AU", "")["mkt"] == (42, 74, 100)              # national
-    assert mc.rrp_for(t, "New Zealand", "Auckland (N)")["mkt"] == (47, 82, 110)
+    assert mc.rrp_for(t, "Australia", "New South Wales")["mkt"] == (42, 74, 100)
+    assert mc.rrp_for(t, "NZ", "Auckland (N)")["mkt"] == (47, 82, 110)
+    assert mc.rrp_for(t, "CA", "British Columbia")["mkt"] == (51, 89, 121)
     assert mc.rrp_for(t, "US", "Texas")["mkt"] == (49, 85, 115)
     assert mc.rrp_for(t, "US", "Ohio")["mkt"] == (47, 82, 110)
-    assert mc.rrp_for(t, "GB", "") is None
+    assert mc.rrp_for(t, "GB") is None
 
 
-def test_rrp_tab_overrides_defaults():
-    tab = pd.DataFrame([mc._rrp("AU", "All", (50, 90, 120), (40, 80, 100), 95)])
-    assert mc.rrp_for(mc.rrp_table(tab), "AU", "Victoria")["mkt"] == (50, 90, 120)
+def test_state_rows_in_the_rrp_tab_are_ignored_for_australia():
+    tab = pd.DataFrame([mc._rrp("AU", "All", (42, 74, 100), (36, 63, 85), 90),
+                        mc._rrp("AU", "New South Wales", (46, 81, 110), (39, 69, 93), 99)])
+    assert mc.rrp_for(mc.rrp_table(tab), "AU", "New South Wales")["mkt"] == (42, 74, 100)
 
 
 def test_rrp_price_rules():
-    r = mc.rrp_for(mc.rrp_table(), "AU", "New South Wales")
-    assert mc.rrp_price(r, "Group", 2) == 81
-    assert mc.rrp_price(r, "Group", 2, foundational=True) == 69
-    assert mc.rrp_price(r, "Group", 4) == pytest.approx(110 / 3 * 4)    # 3x rate per session
-    assert mc.rrp_price(r, "1:1", 2) == 198                             # per session
+    assert mc.rrp_price(AU, "Group", 2) == 74
+    assert mc.rrp_price(AU, "Group", 4) == pytest.approx(100 / 3 * 4)
+    assert mc.rrp_price(AU, "1:1", 2) == 180
 
 
-# ── Metrics ───────────────────────────────────────────────────────────────────
-def test_centre_metrics_mix_prices_and_gap():
-    comp = comp_from()
-    r = mc.rrp_for(mc.rrp_table(), "AU", "New South Wales")
-    m = mc.centre_metrics(comp[comp["Location"] == P + "Alpha"], r)
-    assert m["Members"] == 18 and m["n 2×"] == 11 and m["% 2×"] == pytest.approx(11 / 18 * 100)
-    assert m["Freeze"] == 1 and m["Avg 2×"] == 81                        # $4.97 left out
-    # Below RRP: 4 on 1x ($6 each), 2 on 4x (146.67-100 each), 1:1 ($99-90)
-    assert m["Below RRP"] == 7
-    assert m["RRP gap"] == pytest.approx(4 * 6 + 2 * (110 / 3 * 4 - 100) + 9)
-    assert m["Below foundational"] == 2                                 # 4x below 4 x 31
-    assert m["ARPM"] == pytest.approx((160 + 810 + 200 + 90) / 17)
+# ── Table 1 ───────────────────────────────────────────────────────────────────
+def test_current_table_rows_totals_and_variances():
+    t = mc.current_table(plans("Alpha"), AU, mc.plan_medians(W))
+    rows = t["rows"]
+    assert list(rows["Type"]) == ["Group"] * 5 + ["1:1"]            # every visit count shown
+    assert list(rows["Sessions/week"]) == [1, 2, 2, 4, 4, 1]
+    two = rows.iloc[2]
+    assert two["Revenue per session"] == 40 and two["RRP variance"] == 6
+    assert two["RRP variance %"] == pytest.approx(8.1, abs=0.1)
+    # AU 2x prices: Alpha 1 x $40 + 6 x $80, Beta 4 x $60 -> median of 11 = $80
+    assert two["Median"] == 80 and two["Median variance"] == 0
+    assert rows.iloc[1]["Median variance"] == -40
+    assert rows.iloc[3]["RRP variance"] == pytest.approx(80 - 400 / 3)
+    assert pd.isna(rows.iloc[0]["Median"])                           # only Alpha has AU 1x
+    assert t["members"] == 12 and t["total"] == 1400 and t["arpm"] == pytest.approx(116.67, 0.01)
+    assert t["per_session"] == pytest.approx(1400 / 25)
+    comp = t["composition"].set_index("Plan")
+    assert comp.loc["Group 2×", "Members"] == 7
+    assert comp.loc["Group 4×", "% of members"] == pytest.approx(2 / 12 * 100)
+    assert list(t["composition"]["Plan"]) == ["Group 1×", "Group 2×", "Group 4×", "1:1"]
 
 
-def test_summary_benchmarks_flags_and_fx():
-    comp = comp_from()
-    vl = pd.DataFrame({LOC: [P + "Alpha", P + "Kiwi", P + "Tex"],
-                       "Region": ["New South Wales", "Auckland (N)", "Texas"],
-                       "Weeks old": [40, 30, 10], "Age (Months)": [9, 7, 2]})
-    s = mc.summary(comp, vl, mc.rrp_table(), age_group=lambda m: "6–12 months",
-                   fx={"NZD": 0.9})
-    kiwi = s[s["Centre"] == "Kiwi"].iloc[0]
-    assert kiwi["RRP gap"] == pytest.approx(6 * 22)
-    assert kiwi["RRP gap AUD"] == pytest.approx(6 * 22 * 0.9)
-    assert pd.isna(s[s["Centre"] == "Tex"].iloc[0]["RRP gap AUD"])      # no USD rate
-    assert bool(s[s["Centre"] == "Tex"].iloc[0]["Young"])
-    b = mc.benchmarks(s)
-    assert b["6–12 months"]["n"] == 2                                   # young one left out
-    f = mc.flags(s)
-    assert "#1 biggest RRP gap" in f[P + "Alpha"]
+def test_under_10_left_out_of_rows_but_in_totals():
+    t = mc.current_table(plans("Beta"), AU, mc.plan_medians(W))
+    assert len(t["rows"]) == 1 and t["members"] == 5
+    assert t["total"] == pytest.approx(244.97) and t["freeze_members"] == 1
+    assert t["composition"].set_index("Plan").loc["Group 2×", "Members"] == 5
 
 
-def test_two_sd_outlier_flag():
-    rows = [{"Location": f"L{i}", "Young": False, "% of RRP": 90.0 + i % 3, "% 2×": 70.0,
-             "% 1×": 20.0, "% below RRP": 50.0, "RRP gap AUD": 10.0} for i in range(10)]
-    rows.append({"Location": "Low", "Young": False, "% of RRP": 60.0, "% 2×": 70.0,
-                 "% 1×": 20.0, "% below RRP": 50.0, "RRP gap AUD": 0.0})
-    f = mc.flags(pd.DataFrame(rows))
-    assert any("% of RRP 60%" in x for x in f["Low"])
-    assert sum("biggest RRP gap" in x for v in f.values() for x in v) == 5
+# ── Table 2 ───────────────────────────────────────────────────────────────────
+def test_ideal_table_target_mix_and_own_higher_price():
+    t = mc.ideal_table(plans("Alpha"), AU)
+    rows = t["rows"].set_index("Plan")
+    assert list(rows.index) == ["1×", "2×", "3+", "1:1"]
+    assert rows.loc["2×", "Members"] == pytest.approx(9.6)
+    assert rows.loc["1×", "Membership price"] == 42                 # own $40 < RRP
+    assert rows.loc["2×", "Membership price"] == pytest.approx(520 / 14 * 2)  # own > $74
+    assert rows.loc["3+", "Membership price"] == 100                # 4x at $30/session < RRP
+    assert rows.loc["1:1", "Membership price"] == 300 and rows.loc["1:1", "Own price used"]
+    assert t["total"] == pytest.approx(1.8 * 42 + 9.6 * 520 / 7 + 0.12 * 100 + 0.48 * 300)
+    assert t["vs_today"] == pytest.approx(t["total"] - 1400)
+    comp = t["composition"].set_index("Plan")
+    assert comp.loc["Group 3+", "Current %"] == pytest.approx(2 / 12 * 100)
+    assert comp.loc["1:1", "Variance"] == pytest.approx(2 / 12 * 100 - 4)   # current - ideal
 
 
-def test_history_by_week():
-    a = comp_from()
-    b = comp_from(CSV.replace("2026-11-08", "2026-11-15"))
-    h = mc.history(pd.concat([a, b]), P + "Kiwi", mc.rrp_for(mc.rrp_table(), "NZ", ""))
-    assert len(h) == 2 and list(h["% 2×"]) == [100.0, 100.0]
+def test_ideal_variance_is_current_minus_ideal():
+    comp = mc.ideal_table(plans("Kiwi"), mc.rrp_for(mc.rrp_table(), "NZ"))["composition"]
+    one = comp.set_index("Plan").loc["Group 1×"]
+    assert one["Current %"] == pytest.approx(72) and one["Variance"] == pytest.approx(57)
 
 
-# ── Pathway ───────────────────────────────────────────────────────────────────
-def test_pathway_july_reviews_capped_and_1to1_4plus_untouched():
-    comp = comp_from()
-    r = mc.rrp_for(mc.rrp_table(), "AU", "New South Wales")
-    p = mc.pathway(comp[comp["Location"] == P + "Alpha"], r, age_months=20,
-                   today=date(2026, 11, 9))
-    steps = [s["Step"] for s in p["steps"]]
-    assert steps[0] == "Price every new member at RRP"
-    assert "End foundational pricing" not in steps                     # over 12 months
-    reviews = [s for s in p["steps"] if s["Step"].startswith("July")]
-    assert reviews[0]["When"] == "Jul 2027"
-    assert reviews[0]["Weekly gain"] == pytest.approx(4 * 40 * 0.05)    # 1x: $40 -> $42
-    assert reviews[-1]["When"] == "Jul 2029"                           # 42 -> 44.1 -> 46
-    assert p["not_moved"] == 3 and p["still_below"] == 0               # 1:1 and 4+ stay
-
-
-def test_pathway_foundational_end_and_new_2x():
-    comp = comp_from()
-    r = mc.rrp_for(mc.rrp_table(), "NZ", "")
-    p = mc.pathway(comp[comp["Location"] == P + "Kiwi"], r, age_months=4,
-                   new_per_week=2, target_2x=50, today=date(2026, 11, 9))
-    f = next(s for s in p["steps"] if s["Step"] == "End foundational pricing")
-    assert f["When"] == "Jul 2027" and f["Weekly gain"] == pytest.approx(6 * 22)
-    assert p["projection"][-1]["% of RRP"] == pytest.approx(100)
-    assert p["new_2x"] == 0                                             # already 100% on 2x
-
-    alpha = comp[comp["Location"] == P + "Alpha"]
-    p = mc.pathway(alpha, mc.rrp_for(mc.rrp_table(), "AU", "NSW"), age_months=20,
-                   new_per_week=2, target_2x=80, today=date(2026, 11, 9))
-    # 11 of 18 on 2x; (11 + x) / (18 + x) >= 0.8 -> x = 17
-    assert p["new_2x"] == 17 and p["weeks_to_2x"] == 9
-
-
-def test_next_july():
-    assert mc.next_july(date(2026, 11, 9)) == date(2027, 7, 1)
-    assert mc.next_july(date(2027, 3, 1)) == date(2027, 7, 1)
-
-
-# ── Commentary ────────────────────────────────────────────────────────────────
-def test_commentary_sentences():
-    row = {"Currency": "NZD", "Age group": "3–6 months", "% 2×": 34.0, "% 1×": 62.0,
-           "% of RRP": 80.0, "Below RRP": 28, "RRP gap": 300.0, "Below foundational": 3,
-           "Avg 1×": 40.0, "n 1×": 18, "RRP 1×": 47, "Avg 2×": 65.0, "n 2×": 10,
-           "RRP 2×": 82, "n 4+×": 1, "Freeze": 1}
-    text = " ".join(mc.commentary(row, {"3–6 months": {"% 2×": 70.0, "% 1×": 20.0}}))
-    assert "34% of members are on 2× a week, 36 points below" in text
-    assert "1× share (62%) is high" in text
-    assert "$300 NZD a week ($15,600 NZD a year)" in text
-    assert "biggest single gap is the 2× plan" in text                 # 17 x 10 > 7 x 18
-    assert "phased out" in text and "freeze fee" in text
-    assert "foundational" in text
-
-
-def test_commentary_at_rrp():
-    text = " ".join(mc.commentary({"% of RRP": 105.0, "Currency": "AUD"}, {}))
-    assert "at or above RRP" in text
-
-
-def test_new_members_coverage_and_fx():
-    wm = pd.DataFrame({LOC: ["A"] * 10, "Date": pd.date_range("2026-09-06", periods=10, freq="W"),
-                       "# New members": [0, 0] + [2] * 8, "# Active members": range(10)})
-    assert mc.new_members_per_week(wm, "A") == 2
-    assert mc.active_members(wm, "A") == 9
-    pnl = pd.DataFrame({"Period": ["2026-08", "2026-09"], "Currency": ["NZD", "NZD"],
-                        "FX rate to AUD": [0.9, 0.91]})
-    assert mc.latest_fx(pnl) == {"NZD": 0.91}
+# ── Group overview ────────────────────────────────────────────────────────────
+def test_group_table_sorted_and_single_country_median_blank():
+    vl = pd.DataFrame({mc.LOC: [P + "Tex"], "Region": ["Texas"]})
+    g = mc.group_table(W, vl, mc.rrp_table())
+    assert list(g["% of RRP"]) == sorted(g["% of RRP"])
+    tex = g[g["Centre"] == "Tex"].iloc[0]
+    assert tex["RRP used"] == "US · Texas" and tex["% of RRP"] == pytest.approx(70 / 85 * 100)
+    assert pd.isna(tex["ARPM vs country median"])
+    au = g[g["Country"] == "AU"].set_index("Centre")
+    assert au.loc["Alpha", "ARPM vs country median"] == pytest.approx(
+        1400 / 12 - (1400 / 12 + 244.97 / 5) / 2)
+    beta = au.loc["Beta"]
+    assert beta["% of RRP"] == pytest.approx(240 / 296 * 100)          # $4.97 left out

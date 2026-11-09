@@ -849,20 +849,17 @@ def page_composition_upload(spreadsheet, df_wm, df_rv, clear_cache):
     st.markdown("#### Preview")
     prev = mc.prepare(pd.DataFrame(mc.records(rows, found, week)))
     if not prev.empty:
-        view = []
-        for loc, g in prev.groupby("Location"):
-            m = mc.centre_metrics(g, None)
-            view.append({"Location": loc.removeprefix(ingest.PREFIX), "Members": m["Members"],
-                         "% 1×": m["% 1×"], "% 2×": m["% 2×"], "% 3×": m["% 3×"],
-                         "4+×": m["n 4+×"], "1:1": m["n 1:1"],
-                         "Under $10": m["Freeze"], "ARPM": m["ARPM"]})
-        st.dataframe(pd.DataFrame(view), hide_index=True, width="stretch",
-                     column_config={**{c: st.column_config.NumberColumn(c, format="%.0f%%")
-                                       for c in ["% 1×", "% 2×", "% 3×"]},
-                                    "ARPM": st.column_config.NumberColumn(format="%.2f")})
+        view = mc.group_table(prev, None, mc.rrp_table())
+        frozen = prev[prev["Freeze"]].groupby("Location")["Members"].sum()
+        view["Under $10"] = view["Location"].map(frozen).fillna(0).astype(int)
+        st.dataframe(view[["Centre", "Country", "Members", "ARPM", "Revenue per session",
+                           "Under $10"]].sort_values("Centre"), hide_index=True,
+                     width="stretch",
+                     column_config={c: st.column_config.NumberColumn(c, format="%.2f")
+                                    for c in ["ARPM", "Revenue per session"]})
         st.caption("Weekly prices in each centre's own currency (US monthly prices ÷ 4). "
-                   f"'Under ${mc.FREEZE_BELOW}' = freeze fee or discretionary amount: counted "
-                   "in the mix, left out of prices.")
+                   f"'Under ${mc.FREEZE_BELOW}' = freeze fee or discretionary amount: kept in "
+                   "totals, left out of the plan rows.")
         odd = prev[prev["Freeze"]]
         if not odd.empty:
             with st.expander(f"Prices under ${mc.FREEZE_BELOW} to check ({len(odd)})"):

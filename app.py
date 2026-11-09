@@ -311,12 +311,11 @@ def _load_tab_or_empty(tab):
         st.error(f"Could not load the {tab} tab ({e}). Click Refresh data to try again.")
         return pd.DataFrame()
 
-def report_composition(df_wm):
+def report_composition():
     """Membership Composition (admins only for now)."""
     composition_report.report_composition(
-        _load_tab_or_empty(membership_composition.TAB), df_wm, load_vlookup(),
-        _load_tab_or_empty(membership_composition.RRP_TAB), load_pnl(),
-        dict(age_group=get_age_group, show_chart=show_chart, std_layout=std_layout))
+        _load_tab_or_empty(membership_composition.TAB), load_vlookup(),
+        _load_tab_or_empty(membership_composition.RRP_TAB))
 
 def report_pnl(df_wm, page=None):
     """P&L reports. Admins see every centre; anyone else only their own (none if not set).
@@ -2454,7 +2453,7 @@ elif selected_report=="13 · P&L Deep Dive":          report_pnl(df_wm, pnl_repo
 elif selected_report=="14 · P&L Share":              report_pnl(df_wm, pnl_reports.report_share)
 elif selected_report=="15 · P&L Centre Forecast":    report_pnl(df_wm, pnl_reports.report_forecast)
 elif selected_report=="16 · Franchise Model":        report_pnl(df_wm, pnl_reports.report_franchise_model)
-elif selected_report=="17 · Membership Composition": report_composition(df_wm)
+elif selected_report=="17 · Membership Composition": report_composition()
 elif selected_report=="11 · AI Outlier Analysis":     report_outliers_alerts(df_wm, df_rv)
 elif selected_report in ADMIN_PAGES:
     spreadsheet = get_sheets_client().open_by_key(SHEET_ID)

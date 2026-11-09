@@ -303,8 +303,8 @@ def test_composition_upload_maps_unknown_then_writes(ss):
     assert "08/11/2026" in confirm.label and confirm.disabled          # Torquay unknown
     assert any("Torquay" in w.value for w in at.warning)
     preview = at.dataframe[0].value
-    assert set(preview["Location"]) == {"Auburn", "Howick"}
-    assert preview.set_index("Location").loc["Auburn", "Under $10"] == 1
+    assert set(preview["Centre"]) == {"Auburn", "Howick"}
+    assert preview.set_index("Centre").loc["Auburn", "Under $10"] == 1
 
     at.selectbox(key="comp_map_Success Tutoring - Torquay").set_value(
         "Success Tutoring - Landsdale").run()
@@ -322,7 +322,7 @@ def test_composition_upload_maps_unknown_then_writes(ss):
         "Alias": "Composition: Success Tutoring - Torquay",
         "Location": "Success Tutoring - Landsdale"}
     rrp = ss.worksheet("RRP").get_all_records()
-    assert rrp[0]["Country"] == "AU" and len(rrp) == 13
+    assert rrp[0]["Country"] == "AU" and len(rrp) == 5
 
 
 def test_composition_upload_replaces_the_same_week(ss):
