@@ -375,3 +375,7 @@ def test_last_12_months_shows_gross_margin_not_ebitda():
     assert not at.exception, at.exception
     titles = " ".join(str(c.proto.spec) for c in at.get("plotly_chart"))
     assert "Gross margin % of revenue" in titles and "EBITDA % of revenue" not in titles
+    assert titles.index("Gross margin % of revenue") < titles.index("OPEX % of revenue")
+    # OPEX = every other operating cost: office 700–1,050 + CRM 450 (+ water 120 at two)
+    peer_opex = [(700 + 50 * i + 450 + (120 if i < 2 else 0)) / 20000 * 100 for i in range(8)]
+    assert t.loc["2026-08", "OPEX %"] == pytest.approx(pd.Series(peer_opex).median())

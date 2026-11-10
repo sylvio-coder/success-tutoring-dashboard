@@ -1528,9 +1528,12 @@ def _trend_charts(data, months, typical, unit, cur, helpers):
         title, fmt = "Revenue", "$%{y:,.0f}"
     gm = (d["Total Revenue"] - d[pnl.TUTOR]) / d["Total Revenue"].where(d["Total Revenue"] > 0) * 100
     tgm = typical["Gross margin %"] if len(typical) else None
+    opex = d["OPEX"] / d["Total Revenue"].where(d["Total Revenue"] > 0) * 100
+    topex = typical["OPEX %"] if len(typical) else None
     for name, ys, tys, yfmt, ytitle in [
             (title, y, ty, fmt, f"{cur} per member a week" if per_member else f"{cur} a month"),
-            ("Gross margin % of revenue", gm, tgm, "%{y:.1f}%", "% of revenue")]:
+            ("Gross margin % of revenue", gm, tgm, "%{y:.1f}%", "% of revenue"),
+            ("OPEX % of revenue", opex, topex, "%{y:.1f}%", "% of revenue")]:
         fig = go.Figure()
         if tys is not None and pd.Series(tys).notna().any():
             fig.add_trace(go.Scatter(

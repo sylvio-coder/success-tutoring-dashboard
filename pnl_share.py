@@ -228,7 +228,7 @@ def centre_bands(values, peers, min_n=MIN_PEERS):
 def typical_by_month(lm, members, peer_locs, periods, country=None, country_of=None,
                      min_n=MIN_PEERS):
     """Typical (median) similar centre each month: revenue ($, same country only),
-    revenue per member, EBITDA % and gross margin %. A month with fewer than min_n of these centres
+    revenue per member, EBITDA %, gross margin % and OPEX %. A month with fewer than min_n of these centres
     reporting is left blank. lm: pnl.location_months; members: (Location, Period) series;
     country_of: {location: country}."""
     rows = []
@@ -237,11 +237,12 @@ def typical_by_month(lm, members, peer_locs, periods, country=None, country_of=N
         m = sub[sub.index.get_level_values("Period") == p].droplevel("Period")
         m = m[m["Total Revenue"] > 0]
         row = {"Period": p, "Revenue": None, "Revenue per member": None, "EBITDA %": None,
-               "Gross margin %": None, "Centres": len(m)}
+               "Gross margin %": None, "OPEX %": None, "Centres": len(m)}
         if len(m) >= min_n:
             row["EBITDA %"] = float((m["EBITDA"] / m["Total Revenue"] * 100).median())
             gm = m["Total Revenue"] - m[pnl.TUTOR]
             row["Gross margin %"] = float((gm / m["Total Revenue"] * 100).median())
+            row["OPEX %"] = float((m["OPEX"] / m["Total Revenue"] * 100).median())
         if country is not None and country_of is not None:
             m = m[[str(country_of.get(l, "")) == str(country) for l in m.index]]
         if len(m) >= min_n:
