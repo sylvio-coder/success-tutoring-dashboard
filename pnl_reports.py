@@ -1526,11 +1526,11 @@ def _trend_charts(data, months, typical, unit, cur, helpers):
         y = d["Total Revenue"]
         ty = typical["Revenue"] if len(typical) else None
         title, fmt = "Revenue", "$%{y:,.0f}"
-    eb = d["EBITDA"] / d["Total Revenue"].where(d["Total Revenue"] > 0) * 100
-    tey = typical["EBITDA %"] if len(typical) else None
+    gm = (d["Total Revenue"] - d[pnl.TUTOR]) / d["Total Revenue"].where(d["Total Revenue"] > 0) * 100
+    tgm = typical["Gross margin %"] if len(typical) else None
     for name, ys, tys, yfmt, ytitle in [
             (title, y, ty, fmt, f"{cur} per member a week" if per_member else f"{cur} a month"),
-            ("EBITDA % of revenue", eb, tey, "%{y:.1f}%", "% of revenue")]:
+            ("Gross margin % of revenue", gm, tgm, "%{y:.1f}%", "% of revenue")]:
         fig = go.Figure()
         if tys is not None and pd.Series(tys).notna().any():
             fig.add_trace(go.Scatter(
@@ -1541,8 +1541,6 @@ def _trend_charts(data, months, typical, unit, cur, helpers):
             x=x, y=list(ys), mode="lines+markers", name="This centre",
             line=dict(color="#1f9a9a", width=3), marker=dict(size=7),
             hovertemplate=f"%{{x}}<br>This centre: {yfmt}<extra></extra>"))
-        if name.startswith("EBITDA"):
-            fig.add_hline(y=0, line=dict(color="#c9d3d6", width=1))
         fig.update_layout(**helpers["std_layout"](name, ytitle, height=250))
         # A fixed width that fits an A4 page: charts don't resize when printed.
         fig.update_layout(width=CHART_WIDTH, legend=dict(orientation="h", x=1, xanchor="right",

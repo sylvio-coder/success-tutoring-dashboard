@@ -364,3 +364,14 @@ def test_share_table_gross_margin_for_a_gpm():
     assert '<tr class="sub"><td class="l">Gross Margin</td>' in table
     text = page_text(at)
     assert "Howick" not in text and "Peer" not in text
+
+
+def test_last_12_months_shows_gross_margin_not_ebitda():
+    lm = pnl.location_months(PNL)
+    t = ps.typical_by_month(lm, None, PEERS, MONTHS)
+    peer_gm = [(20000 - (5600 + 100 * i) - 700) / 20000 * 100 for i in range(8)]
+    assert t.loc["2026-08", "Gross margin %"] == pytest.approx(pd.Series(peer_gm).median())
+    at = run_share()
+    assert not at.exception, at.exception
+    titles = " ".join(str(c.proto.spec) for c in at.get("plotly_chart"))
+    assert "Gross margin % of revenue" in titles and "EBITDA % of revenue" not in titles
