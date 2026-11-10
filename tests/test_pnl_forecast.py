@@ -517,11 +517,13 @@ def test_presale_no_revenue_before_billing_week_and_presale_marketing():
     assert t["Marketing"].iloc[0] == pytest.approx(100 * 7 * 4.2)
     # month 3 = weeks 8.4–12.6: presale ends at week 12 (3.6 of 4.2 weeks)
     share = 3.6 / 4.2
-    assert t["Marketing - Agency Fees"].iloc[2] == pytest.approx(1200 * share)
-    assert t["Marketing"].iloc[2] == pytest.approx(
-        0.05 * t["Total Revenue"].iloc[2] + 100 * 7 * 3.6)
-    assert t["Marketing"].iloc[3] == pytest.approx(0.05 * t["Total Revenue"].iloc[3])
-    assert t["Marketing - Agency Fees"].iloc[3] == 0              # typical agency fee
+    assert t["Marketing - Agency Fees"].iloc[2] == pytest.approx(1200 * share + 250 * (1 - share))
+    assert t["Marketing"].iloc[2] == pytest.approx(100 * 7 * 3.6 + 30 * 7 * 0.6)
+    assert t["Marketing"].iloc[3] == pytest.approx(30 * 7 * 4.2)   # flat, not % of revenue
+    assert t["Marketing - Agency Fees"].iloc[3] == 250              # typical 0 -> minimum
+    big = pm.run(s, {**TYP, "fixed": {**TYP["fixed"], "Marketing - Agency Fees": 400.0}},
+                 "2026-07", 6)
+    assert big["Marketing - Agency Fees"].iloc[4] == 400            # typical above minimum
     late = pm.run({**s, "billing_week": 13}, TYP, "2026-07", 4)
     assert (late["Total Revenue"].iloc[:2] == 0).all()
     assert late["Total Revenue"].iloc[2] == pytest.approx(late["Members"].iloc[2] * 80 * 0.6)
