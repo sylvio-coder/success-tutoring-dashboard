@@ -369,6 +369,8 @@ def test_model_ramp_relief_and_royalty_minimum():
     ends = [17.5, 35.0, 50.0, 57.0, 64.0]                       # end of each month
     assert list(t["Members"].iloc[:5]) == pytest.approx(
         [(a + b) / 2 for a, b in zip([0] + ends, ends)])        # the month's average
+    assert list(t["Members end"].iloc[:3]) == [17.5, 35.0, 50.0]   # 50 at week 12 (month 3)
+    assert list(pm.grid_from(t)["Members"].iloc[:3]) == [17.5, 35.0, 50.0]
     assert t["Members"].iloc[-1] > 400                          # +7 a month, no limit
     assert pm.relief_share(4, 18) == 1                                 # weeks 12.6–16.8
     assert pm.relief_share(5, 18) == pytest.approx(1.2 / 4.2)          # weeks 16.8–21
@@ -411,8 +413,9 @@ def test_model_grid_change_overrides_one_month():
     g.loc["2027-01", "Members"] = 200.0
     g.loc["2027-02", "Rent %"] = 10.0
     t = pm.run(s, TYP, "2026-07", 12, True, g, g0)
-    assert t.at["2027-01", "Members"] == 200
-    assert t.at["2027-02", "Members"] == (200 + 207) / 2        # carries on from 200
+    assert t.at["2027-01", "Members end"] == 200                 # end of month, as typed
+    assert t.at["2027-01", "Members"] == (base.at["2026-12", "Members end"] + 200) / 2
+    assert t.at["2027-02", "Members end"] == 207                 # carries on from 200
     assert t.at["2027-02", "Rent"] == pytest.approx(0.1 * t.at["2027-02", "Total Revenue"])
     assert t.at["2027-03", "Rent"] == 4000
 
@@ -486,3 +489,17 @@ def test_holiday_months_dip_instead_of_growing():
     many = pd.concat({f"C{i}": members.droplevel(0) for i in range(5)})
     ch, n = pm.holiday_changes(many, {f"C{i}" for i in range(5)}, ["12", "01"])
     assert n == 5 and ch["12"] == pytest.approx(-5.0) and ch["01"] == pytest.approx(-100 / 19)
+
+
+def test_payback_card_status_progress_and_needs():
+    import pnl_reports as pr
+    s = dict(pm.DEFAULTS)
+    t = pm.run(s, TYP, "2026-07", 60, manager=True)
+    pb = pm.payback_month(t, 110000)
+    on = pr._payback_card(pm.WITH, t, 110000, 42, 60, 6.5, 7.0, 70.0, 80.0)
+    assert f"Month {pb}" in on and "On target" in on and "#2e8540" in on
+    assert "now 7.0" in on and "&#36;80.00" in on and "$" not in on
+    late = pr._payback_card(pm.WITH, t, 10 ** 7, 42, 60, None, 7.0, None, 80.0)
+    assert "Not paid back" in late and "#c8322f" in late
+    slow = pr._payback_card(pm.WITH, t, 110000, pb - 2, 60, 9.0, 7.0, 90.0, 80.0)
+    assert "2 months late" in slow and 'width:' in slow

@@ -2149,7 +2149,8 @@ def report_forecast(df_pnl, df_wm, vl, helpers, bench=None):
 
 
 # ── Franchise Model (admins only) ─────────────────────────────────────────────
-MODEL_TABLE_ROWS = MODEL_ROWS + [
+MODEL_TABLE_ROWS = [("Members (end of month)", "Members end", "input") if r[1] == "Members"
+                    else r for r in MODEL_ROWS] + [
     (None, None, "gap"),
     ("Owner's wage", pm.OWNER, "money"),
     ("Profit for payback", "Profit", "money"),
@@ -2167,7 +2168,8 @@ HOW_MODEL = """
   years have a holiday week in) members change by that month's holiday % instead, so a centre
   opening before the holidays takes longer to reach 50. The starting holiday % is the typical
   change in that month at the country's established centres (all centres if there isn't
-  enough history). Members shown are the month's average.
+  enough history). Members shown (and typed into the grid) are at the end of each month;
+  revenue uses the month's average (halfway between the start and end of the month).
 - **Revenue** = members × price per member × 4.2 weeks. The price rises by the yearly % each
   July after opening.
 - **Tutor wages + super**: the typical % of revenue for that many members (members bands, as
@@ -2190,6 +2192,59 @@ HOW_MODEL = """
   then (from Weeks old in Vlookup); centres 18 weeks old or younger are left out. Actual =
   the typical (median) centre-month; model = the average of those model months.
 """
+
+
+PAYBACK_CSS = """<style>
+.pb{background:#fff;border:1px solid #dde5e6;border-top:4px solid var(--c);border-radius:10px;
+ padding:16px 18px 14px;margin-bottom:12px}
+.pb .hd{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.pb .nm{font-size:13px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#5d6d73}
+.pb .tag{font-size:12px;font-weight:700;border-radius:12px;padding:3px 10px;color:var(--c);
+ background:var(--bg)}
+.pb .big{font-size:30px;font-weight:700;color:#1c2a30;line-height:1.15}
+.pb .sub{font-size:13px;color:#5d6d73;margin-top:2px}
+.pb .bar{height:8px;background:#eef1f3;border-radius:4px;margin:12px 0 4px;overflow:hidden}
+.pb .bar span{display:block;height:100%;background:var(--c);border-radius:4px}
+.pb .barl{font-size:12px;color:#5d6d73}
+.pb .stats{display:flex;gap:10px;margin-top:14px;padding-top:12px;border-top:1px solid #eef1f3}
+.pb .st{flex:1;min-width:0}
+.pb .st .l{font-size:11.5px;color:#5d6d73;line-height:1.25}
+.pb .st .v{font-size:19px;font-weight:700;color:#1c2a30;margin-top:3px}
+.pb .st .n{font-size:11.5px;color:#8a9a9f}
+</style>"""
+
+
+def _payback_card(name, t, target, months, n, mem_need, growth, amv_need, amv):
+    """One scenario's payback: status, month, progress to the target by the target month and
+    what it would take to pay back on time (against today's settings)."""
+    pb = pm.payback_month(t, target)
+    ok = pb is not None and pb <= months
+    colour, bg = ("#2e8540", "#e7f3ea") if ok else ("#c8322f", "#fbe9e8")
+    if pb is None:
+        tag, big, sub = "Not paid back", f"Not within {n} months", f"Target: month {months}"
+    else:
+        late = pb - months
+        tag = "On target" if late <= 0 else f"{late} month{'s' if late != 1 else ''} late"
+        big = f"Month {pb}"
+        sub = f"{pnl.period_name(t.index[pb - 1])} · target month {months}"
+    at = float(t["Cumulative"].iloc[min(months, n) - 1])
+    share = max(0.0, min(at / target, 1.0)) if target else 0.0
+    stats = [(f"Profit after {months} months", _money_short(at),
+              f"{share * 100:.0f}% of {_money_short(target)}"),
+             ("New members a month needed", "–" if mem_need is None else f"{mem_need:,.1f}",
+              f"now {growth:,.1f}"),
+             ("Price needed / week", "–" if amv_need is None else f"${amv_need:,.2f}",
+              f"now ${amv:,.2f}")]
+    cells = "".join(f'<div class="st"><div class="l">{html.escape(l)}</div>'
+                    f'<div class="v">{html.escape(v)}</div><div class="n">{html.escape(m)}</div>'
+                    f'</div>' for l, v, m in stats)
+    return (f'<div class="pb" style="--c:{colour};--bg:{bg}"><div class="hd">'
+            f'<span class="nm">{html.escape(name)}</span><span class="tag">{html.escape(tag)}'
+            f'</span></div><div class="big">{html.escape(big)}</div>'
+            f'<div class="sub">{html.escape(sub)}</div>'
+            f'<div class="bar"><span style="width:{share * 100:.1f}%"></span></div>'
+            f'<div class="barl">Investment recovered by month {months}</div>'
+            f'<div class="stats">{cells}</div></div>').replace("$", "&#36;")
 
 
 def _model_chart(tables, target, months, helpers, cur):
@@ -2383,26 +2438,13 @@ def report_franchise_model(df_pnl, df_wm, vl, helpers, bench=None):
         _section(f"Payback — investment {_money(target)} {cur} in {s['payback_months']} months",
                  "Needed to pay back on time: everything else as set (grid changes not "
                  "included).")
+        st.markdown(PAYBACK_CSS, unsafe_allow_html=True)
         for col, (name, t) in zip(st.columns(2), tables.items()):
-            pb = pm.payback_month(t, target)
-            ok = pb is not None and pb <= s["payback_months"]
-            mem_need = pm.needed(s, typ, start, target, name == pm.WITH, "growth")
-            amv_need = pm.needed(s, typ, start, target, name == pm.WITH, "amv")
-            when = f"Month {pb} ({pnl.period_name(t.index[pb - 1])})" if pb else \
-                f"Not within {n} months"
-            col.markdown(f'<div class="section-header" style="margin-top:0">{name}</div>',
-                         unsafe_allow_html=True)
-            a_, b_ = col.columns(2)
-            a_.markdown(_card("Payback", ("✅ " if ok else "❌ ") + when), unsafe_allow_html=True)
-            at = t["Cumulative"].iloc[min(s["payback_months"], n) - 1]
-            b_.markdown(_card(f"Profit after {s['payback_months']} months", _money_short(at)),
-                        unsafe_allow_html=True)
-            a_.markdown(_card("New members a month needed",
-                              "–" if mem_need is None else f"{mem_need:,.1f}"),
-                        unsafe_allow_html=True)
-            b_.markdown(_card("Price needed $ / week",
-                              "–" if amv_need is None else f"${amv_need:,.2f}"),
-                        unsafe_allow_html=True)
+            col.markdown(_payback_card(
+                name, t, target, s["payback_months"], n,
+                pm.needed(s, typ, start, target, name == pm.WITH, "growth"), s["growth"],
+                pm.needed(s, typ, start, target, name == pm.WITH, "amv"), typ["amv"]),
+                unsafe_allow_html=True)
         _model_chart(tables, target, s["payback_months"], helpers, cur)
 
     # ── Monthly P&L for a financial year ──
@@ -2417,12 +2459,14 @@ def report_franchise_model(df_pnl, df_wm, vl, helpers, bench=None):
     tot = t.loc[ms, pnl.ROW_ORDER + [pnl.GROSS_MARGIN, "EBITDA", pm.OWNER, "Profit"]] \
         .sum().to_dict()
     tot.update(Members=t.loc[ms, "Members"].mean(), Cumulative=t.at[ms[-1], "Cumulative"])
+    tot["Members end"] = t.at[ms[-1], "Members end"]
     tot["AMV"] = tot["Total Revenue"] / tot["Members"] / pnl.WEEKS_PER_MONTH / len(ms) \
         if tot["Members"] else None
     cols.append(("Total", f"{len(ms)} months", tot))
     st.markdown(side_by_side_html(cols, rows=MODEL_TABLE_ROWS), unsafe_allow_html=True)
-    st.caption("Total: amounts added up over the year; members and price are the average per "
-               "month; cumulative profit at the end of the year.")
+    st.caption("Members are at the end of each month (revenue uses the month's average). Total: "
+               "amounts added up over the year; members and cumulative profit at the end of the "
+               "year; price is the average per month.")
     years = []
     for name, tt in tables.items():
         y = pm.fy_totals(tt)

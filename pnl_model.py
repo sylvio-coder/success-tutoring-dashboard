@@ -172,18 +172,17 @@ def run(s, typ, start, n, manager=True, grid=None, base=None):
         def changed(col):
             return grid is not None and p in grid.index and \
                 abs(float(grid.at[p, col]) - float(base.at[p, col])) > 1e-6
-        if changed("Members"):
-            mem = end = float(grid.at[p, "Members"])
-        else:
-            new = next_members(end, p, s, reached)
-            mem, end = (end + new) / 2, new           # the month's average
+        new = float(grid.at[p, "Members"]) if changed("Members") else \
+            next_members(end, p, s, reached)            # members at the end of the month
+        mem, end = (end + new) / 2, new                 # revenue uses the month's average
         reached = reached or end >= s["ramp_members"]
         amv = float(grid.at[p, "AMV $ / week"]) if changed("AMV $ / week") else \
             typ["amv"] * _rises(p, start, s["price_rise"])
         rev = mem * amv * pnl.WEEKS_PER_MONTH
         wage = _rises(p, start, s["wage_rise"])
         hired = manager and (hired or mem >= s["manager_trigger"])
-        r = {"Month": p, "Model month": i, "Members": mem, "AMV": amv, "Total Revenue": rev,
+        r = {"Month": p, "Model month": i, "Members": mem, "Members end": end, "AMV": amv,
+             "Total Revenue": rev,
              pnl.TUTOR: pnl.rate_for(mem, typ["rates"]) * rev,
              "Marketing": typ["marketing_pct"] * rev,
              MANAGER: typ["manager"] * wage if hired else 0.0,
@@ -207,7 +206,7 @@ def run(s, typ, start, n, manager=True, grid=None, base=None):
 def grid_from(table):
     """The adjustment grid (members, price and each line's % of revenue) for these months."""
     g = pd.DataFrame(index=table.index)
-    g["Members"] = table["Members"]
+    g["Members"] = table["Members end"]              # end of month, as in the table
     g["AMV $ / week"] = table["AMV"]
     rev = table["Total Revenue"].where(table["Total Revenue"] > 0)
     for l in LINES:
@@ -245,7 +244,7 @@ def fy_totals(table):
     amounts = ["Total Revenue", pnl.GROSS_MARGIN, "EBITDA", OWNER, "Profit"]
     out = t.groupby("FY")[amounts].sum()
     out["Months"] = t.groupby("FY").size()
-    out["Members (end)"] = t.groupby("FY")["Members"].last()
+    out["Members (end)"] = t.groupby("FY")["Members end"].last()
     out["Cumulative"] = t.groupby("FY")["Cumulative"].last()
     return out
 
