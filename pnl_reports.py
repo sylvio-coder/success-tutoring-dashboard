@@ -2170,8 +2170,14 @@ HOW_MODEL = """
   change in that month at the country's established centres (all centres if there isn't
   enough history). Members shown (and typed into the grid) are at the end of each month;
   revenue uses the month's average (halfway between the start and end of the month).
-- **Revenue** = members × price per member × 4.2 weeks. The price rises by the yearly % each
-  July after opening.
+- **Revenue** = members × price per member × 4.2 weeks, from the week billing starts (week 9:
+  sessions start then). Before that it is a presale: members sign up but nothing is billed, so
+  there are no tutor wages either. A month that billing starts part-way through bills only those
+  weeks. The price rises by the yearly % each July after opening.
+- **Presale campaign** (first 12 weeks): the presale agency fee a month (instead of the usual
+  agency fee) and advertising at the daily amount (7 days a week), on top of the usual
+  marketing. A month the campaign ends part-way through pays for those weeks only. Rent and
+  OPEX are paid in full from opening.
 - **Tutor wages + super**: the typical % of revenue for that many members (members bands, as
   in the break-even). **Gross Margin** = Total Revenue − Tutor Wages + Super. **Marketing**:
   the typical % of revenue. **Rent, agency fees and OPEX**: the typical $ a month.
@@ -2371,6 +2377,17 @@ def report_franchise_model(df_pnl, df_wm, vl, helpers, bench=None):
     s["wage_rise"] = c[4].number_input("Wage rise % each July", 0.0, value=d["wage_rise"],
                                        step=0.5, key=k + "wage_rise",
                                        help="Applies to the manager and owner's wages.")
+    c = st.columns(4)
+    s["billing_week"] = c[0].number_input("Billing starts in week", 1.0, value=d["billing_week"],
+                                          step=1.0, key=k + "billing")
+    s["presale_weeks"] = c[1].number_input("Presale campaign (weeks)", 0.0,
+                                           value=d["presale_weeks"], step=1.0, key=k + "presale")
+    s["presale_agency"] = c[2].number_input("Presale agency fee $ / month", 0.0,
+                                            value=d["presale_agency"], step=100.0,
+                                            key=k + "pre_agency")
+    s["presale_ads_day"] = c[3].number_input("Presale advertising $ / day", 0.0,
+                                             value=d["presale_ads_day"], step=10.0,
+                                             key=k + "pre_ads")
     # Term-holiday months: members change by the holiday % instead of growing that month.
     hol_months, fallback = pm.holiday_months(helpers.get("holidays"), country)
     info_c = location_info(b_pnl, vl)["Country"]

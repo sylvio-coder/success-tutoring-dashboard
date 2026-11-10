@@ -3,7 +3,8 @@ without a campus manager, and the month its profit pays back the investment.
 
 Members are worked out month by month from opening: about 17.5 a month (50 members over 12
 weeks) until 50, then +7 a month with no limit. In a term-holiday month members change by that
-month's holiday % instead. Revenue = members x price per member x 4.2 weeks. Tutor wages
+month's holiday % instead. Revenue = members x price per member x 4.2 weeks, billed from the billing week; the presale
+campaign (first presale weeks) adds an agency fee and daily advertising. Tutor wages
 use the % for that many members (members bands); marketing is a % of revenue; rent, agency
 fees and OPEX are fixed $. Royalties are the higher of the minimum or 8% of revenue, nothing
 during the first relief weeks. The manager is hired the first month members reach the
@@ -25,7 +26,8 @@ WITH, WITHOUT = "With manager", "Without manager"
 DEFAULTS = dict(target_aud=110000.0, payback_months=42, ramp_members=50.0, ramp_weeks=12.0,
                 growth=7.0, manager_trigger=80.0, owner_on=False, owner_wage=60000.0,
                 owner_stops=False, relief_weeks=18.0, royalty_min=2266.0, royalty_rise=3.0,
-                royalty_fy=2026, price_rise=0.0, wage_rise=0.0)
+                royalty_fy=2026, price_rise=0.0, wage_rise=0.0, billing_week=9.0,
+                presale_weeks=12.0, presale_agency=1200.0, presale_ads_day=100.0)
 MONTHS = ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"]
 MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 FALLBACK_HOLIDAYS = ["01", "04", "07", "10", "12"]   # when the School Holidays tab has none
@@ -158,6 +160,22 @@ def royalty_min(period, s):
                                                                s["royalty_fy"])
 
 
+def weeks_share(month, start_week, end_week):
+    """Share of model month `month` (weeks (month-1)*4.2 to month*4.2 since opening) that falls
+    between start_week and end_week weeks since opening."""
+    lo, hi = (month - 1) * pnl.WEEKS_PER_MONTH, month * pnl.WEEKS_PER_MONTH
+    return max(0.0, min(hi, end_week) - max(lo, start_week)) / pnl.WEEKS_PER_MONTH
+
+
+def billed_share(month, s):
+    """Share of the month billed: billing starts at the beginning of billing week."""
+    return weeks_share(month, s["billing_week"] - 1, float("inf"))
+
+
+def presale_share(month, s):
+    return weeks_share(month, 0.0, s["presale_weeks"])
+
+
 def relief_share(month, weeks):
     """Share of model month `month` inside the first `weeks` weeks (royalty relief)."""
     done = (month - 1) * pnl.WEEKS_PER_MONTH
@@ -178,17 +196,21 @@ def run(s, typ, start, n, manager=True, grid=None, base=None):
         reached = reached or end >= s["ramp_members"]
         amv = float(grid.at[p, "AMV $ / week"]) if changed("AMV $ / week") else \
             typ["amv"] * _rises(p, start, s["price_rise"])
-        rev = mem * amv * pnl.WEEKS_PER_MONTH
+        rev = mem * amv * pnl.WEEKS_PER_MONTH * billed_share(i, s)  # billed from billing week
+        pre = presale_share(i, s)
         wage = _rises(p, start, s["wage_rise"])
         hired = manager and (hired or mem >= s["manager_trigger"])
         r = {"Month": p, "Model month": i, "Members": mem, "Members end": end, "AMV": amv,
              "Total Revenue": rev,
              pnl.TUTOR: pnl.rate_for(mem, typ["rates"]) * rev,
-             "Marketing": typ["marketing_pct"] * rev,
+             "Marketing": typ["marketing_pct"] * rev +                  # + presale advertising
+             s["presale_ads_day"] * 7 * pnl.WEEKS_PER_MONTH * pre,
              MANAGER: typ["manager"] * wage if hired else 0.0,
              "Royalties": (1 - relief_share(i, s["relief_weeks"])) *
              pnl.royalty(rev, royalty_min(p, s))}
         r.update({l: typ["fixed"][l] for l in FIXED})
+        r["Marketing - Agency Fees"] = s["presale_agency"] * pre + \
+            typ["fixed"]["Marketing - Agency Fees"] * (1 - pre)       # presale agency fee
         for l in LINES:
             if changed(PCT[l]) and (l != MANAGER or manager):
                 r[l] = float(grid.at[p, PCT[l]]) / 100 * rev

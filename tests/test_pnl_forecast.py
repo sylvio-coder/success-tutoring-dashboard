@@ -503,3 +503,25 @@ def test_payback_card_status_progress_and_needs():
     assert "Not paid back" in late and "#c8322f" in late
     slow = pr._payback_card(pm.WITH, t, 110000, pb - 2, 60, 9.0, 7.0, 90.0, 80.0)
     assert "2 months late" in slow and 'width:' in slow
+
+
+def test_presale_no_revenue_before_billing_week_and_presale_marketing():
+    s = dict(pm.DEFAULTS)
+    t = pm.run(s, TYP, "2026-07", 6)
+    assert t["Total Revenue"].iloc[0] == 0                         # weeks 0–4.2: presale
+    assert t["Total Revenue"].iloc[1] == pytest.approx(           # weeks 8–8.4 billed
+        t["Members"].iloc[1] * 80 * 0.4)
+    assert t["Total Revenue"].iloc[2] == pytest.approx(t["Members"].iloc[2] * 80 * 4.2)
+    assert t["Tutor Wages + Super"].iloc[0] == 0 and t["Rent"].iloc[0] == 4000
+    assert t["Marketing - Agency Fees"].iloc[0] == pytest.approx(1200)
+    assert t["Marketing"].iloc[0] == pytest.approx(100 * 7 * 4.2)
+    # month 3 = weeks 8.4–12.6: presale ends at week 12 (3.6 of 4.2 weeks)
+    share = 3.6 / 4.2
+    assert t["Marketing - Agency Fees"].iloc[2] == pytest.approx(1200 * share)
+    assert t["Marketing"].iloc[2] == pytest.approx(
+        0.05 * t["Total Revenue"].iloc[2] + 100 * 7 * 3.6)
+    assert t["Marketing"].iloc[3] == pytest.approx(0.05 * t["Total Revenue"].iloc[3])
+    assert t["Marketing - Agency Fees"].iloc[3] == 0              # typical agency fee
+    late = pm.run({**s, "billing_week": 13}, TYP, "2026-07", 4)
+    assert (late["Total Revenue"].iloc[:2] == 0).all()
+    assert late["Total Revenue"].iloc[2] == pytest.approx(late["Members"].iloc[2] * 80 * 0.6)
