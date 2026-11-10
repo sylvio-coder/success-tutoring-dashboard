@@ -1517,7 +1517,7 @@ def _md_html(text):
 NO_DATA = "Data Not Available"
 
 
-def _trend_chart(name, x, months, ys, tys, yfmt, ytitle, helpers, width):
+def _trend_chart(name, x, months, ys, tys, yfmt, ytitle, helpers):
     """One small trend chart: this centre (teal) against the typical similar centre (dashed).
     With nothing for this centre, the chart says Data Not Available."""
     fig = go.Figure()
@@ -1536,11 +1536,11 @@ def _trend_chart(name, x, months, ys, tys, yfmt, ytitle, helpers, width):
                            showarrow=False, font=dict(size=15, color="#8a9a9f"))
         fig.update_yaxes(showticklabels=False)
     fig.update_layout(**helpers["std_layout"](name, ytitle, height=260))
-    # A fixed width that fits half an A4 page: charts don't resize when printed.
-    fig.update_layout(width=width, margin=dict(l=55, r=10, t=40, b=60),
+    # Fills its column; the key (legend) sits under the chart so it never covers the title.
+    fig.update_layout(margin=dict(l=55, r=10, t=40, b=60),
                       legend=dict(orientation="h", x=0, y=-0.22, yanchor="top"))
     fig.update_xaxes(type="category")
-    helpers["show_chart"](fig, use_container_width=False)
+    helpers["show_chart"](fig, use_container_width=True)
 
 
 def _trend_charts(data, months, typical, unit, cur, helpers, comp=None, comp_typical=None):
@@ -1570,12 +1570,11 @@ def _trend_charts(data, months, typical, unit, cur, helpers, comp=None, comp_typ
               "$%{y:,.2f}", f"{cur} a week"),
              ("Revenue per session", c["Revenue per session"],
               ct["Revenue per session"] if ct is not None else None, "$%{y:,.2f}", f"{cur}")]
-    width = CHART_WIDTH // 2 - 6
     for l_, r_ in zip(left, right):
         a, b = st.columns(2)
         for col, (name, ys, tys, yfmt, ytitle) in ((a, l_), (b, r_)):
             with col:
-                _trend_chart(name, x, months, ys, tys, yfmt, ytitle, helpers, width)
+                _trend_chart(name, x, months, ys, tys, yfmt, ytitle, helpers)
 
 
 def _members_section(trend, cur_members):
