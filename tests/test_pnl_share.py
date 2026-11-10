@@ -379,3 +379,62 @@ def test_last_12_months_shows_gross_margin_not_ebitda():
     # OPEX = every other operating cost: office 700–1,050 + CRM 450 (+ water 120 at two)
     peer_opex = [(700 + 50 * i + 450 + (120 if i < 2 else 0)) / 20000 * 100 for i in range(8)]
     assert t.loc["2026-08", "OPEX %"] == pytest.approx(pd.Series(peer_opex).median())
+
+
+def _comp(rows):
+    """Prepared Membership Composition rows: (location, week ending, sessions, members, price)."""
+    return pd.DataFrame([{"Week ending": pd.Timestamp(w), "Location": l, "Country": "AU",
+                          "Type": "Group", "Sessions/week": s, "Members": m, "Weekly price": p,
+                          "Freeze": p < 10} for l, w, s, m, p in rows])
+
+
+def test_composition_by_month_uses_the_last_upload_in_the_month():
+    comp = _comp([("A", "2026-08-02", 1, 10, 40), ("A", "2026-08-30", 1, 10, 42),
+                  ("A", "2026-08-30", 2, 30, 74)])
+    cm = ps.composition_by_month(comp, ["2026-08"])
+    r = cm.loc[("A", "2026-08")]
+    assert r["Members"] == 40                                     # 30 Aug upload only
+    assert r["ARPM"] == pytest.approx((10 * 42 + 30 * 74) / 40)
+    assert r["Revenue per session"] == pytest.approx((10 * 42 + 30 * 74) / (10 + 60))
+    assert ps.composition_by_month(None, ["2026-08"]).empty
+    peers = _comp([(f"P{i}", "2026-08-30", 2, 20, 70 + i) for i in range(5)])
+    t = ps.typical_composition(ps.composition_by_month(peers, ["2026-08"]),
+                               [f"P{i}" for i in range(5)], ["2026-08"])
+    assert t.at["2026-08", "ARPM"] == 72 and t.at["2026-08", "Revenue per session"] == 36
+    t4 = ps.typical_composition(ps.composition_by_month(peers, ["2026-08"]),
+                                [f"P{i}" for i in range(4)], ["2026-08"])
+    assert t4.at["2026-08", "ARPM"] is None                       # fewer than 5 centres
+
+
+def test_last_12_months_has_two_columns_of_charts():
+    at = run_share()
+    assert not at.exception, at.exception
+    specs = [str(c.proto.spec) for c in at.get("plotly_chart")]
+    joined = " ".join(specs)
+    for t in ["Revenue", "Gross margin % of revenue", "OPEX % of revenue", "Total members",
+              "ARPM (per member a week)", "Revenue per session"]:
+        assert t in joined, t
+    no_data = [s for s in specs if "Data Not Available" in s]
+    assert len(no_data) == 2                     # no composition uploads: ARPM and per session
+    assert not any("Total members" in s for s in no_data)
+
+
+def test_composition_charts_show_this_centres_figures():
+    def script():
+        import streamlit as st
+        import pnl_reports as pr
+        from test_pnl_share import PNL, VL, WM, AGE, REVENUE, _comp
+        comp = _comp([("Success Tutoring - Auburn", "2026-08-30", 2, 60, 74)])
+        pr.report_share(PNL, WM, VL, dict(
+            age_group=AGE, age_order=[], state_of=lambda r: r, show_chart=st.plotly_chart,
+            std_layout=lambda t, y="", height=400: dict(title=t, height=height),
+            report_filters=None, revenue=REVENUE, viewer_name="Pat", composition=comp),
+            bench=(PNL, WM))
+    at = AppTest.from_function(script, default_timeout=30).run()
+    assert not at.exception, at.exception
+    at.selectbox(key="ps_centre").set_value("Auburn").run()
+    specs = [str(c.proto.spec) for c in at.get("plotly_chart")]
+    arpm = next(s for s in specs if "ARPM (per member a week)" in s)
+    assert "Data Not Available" not in arpm and "74" in arpm
+    per_s = next(s for s in specs if "Revenue per session" in s)
+    assert "37" in per_s

@@ -1514,42 +1514,68 @@ def _md_html(text):
     return "".join(f"<b>{p}</b>" if i % 2 else p for i, p in enumerate(parts))
 
 
-def _trend_charts(data, months, typical, unit, cur, helpers):
+NO_DATA = "Data Not Available"
+
+
+def _trend_chart(name, x, months, ys, tys, yfmt, ytitle, helpers, width):
+    """One small trend chart: this centre (teal) against the typical similar centre (dashed).
+    With nothing for this centre, the chart says Data Not Available."""
+    fig = go.Figure()
+    ys = pd.Series(list(ys), dtype=float)
+    if tys is not None and pd.Series(tys).notna().any():
+        fig.add_trace(go.Scatter(
+            x=x, y=list(pd.Series(tys).reindex(months)), mode="lines",
+            name="Typical similar centre", line=dict(color="#5d6d73", width=2, dash="dash"),
+            hovertemplate=f"%{{x}}<br>Typical similar centre: {yfmt}<extra></extra>"))
+    fig.add_trace(go.Scatter(
+        x=x, y=list(ys), mode="lines+markers", name="This centre",
+        line=dict(color="#1f9a9a", width=3), marker=dict(size=7),
+        hovertemplate=f"%{{x}}<br>This centre: {yfmt}<extra></extra>"))
+    if ys.isna().all():
+        fig.add_annotation(text=NO_DATA, x=0.5, y=0.5, xref="paper", yref="paper",
+                           showarrow=False, font=dict(size=15, color="#8a9a9f"))
+        fig.update_yaxes(showticklabels=False)
+    fig.update_layout(**helpers["std_layout"](name, ytitle, height=260))
+    # A fixed width that fits half an A4 page: charts don't resize when printed.
+    fig.update_layout(width=width, margin=dict(l=55, r=10, t=40, b=60),
+                      legend=dict(orientation="h", x=0, y=-0.22, yanchor="top"))
+    fig.update_xaxes(type="category")
+    helpers["show_chart"](fig, use_container_width=False)
+
+
+def _trend_charts(data, months, typical, unit, cur, helpers, comp=None, comp_typical=None):
+    """Two columns: revenue, gross margin % and OPEX % on the left; members, ARPM and
+    revenue per session on the right."""
     x = [pd.Timestamp(p + "-01").strftime("%b %y") for p in months]
     d = data.reindex(months)
-    per_member = unit == "$ per member"
-    if per_member:
+    tcol = lambda c: typical[c] if len(typical) and c in typical else None
+    rev_ok = d["Total Revenue"].where(d["Total Revenue"] > 0)
+    if unit == "$ per member":
         y = d["Total Revenue"] / d["Members"].where(d["Members"] > 0) / pnl.WEEKS_PER_MONTH
-        ty = typical["Revenue per member"] / pnl.WEEKS_PER_MONTH if len(typical) else None
-        title, fmt = "Revenue per member / week", "$%{y:,.2f}"
+        ty = tcol("Revenue per member")
+        ty = ty / pnl.WEEKS_PER_MONTH if ty is not None else None
+        rev = ("Revenue per member / week", y, ty, "$%{y:,.2f}", f"{cur} per member a week")
     else:
-        y = d["Total Revenue"]
-        ty = typical["Revenue"] if len(typical) else None
-        title, fmt = "Revenue", "$%{y:,.0f}"
-    gm = (d["Total Revenue"] - d[pnl.TUTOR]) / d["Total Revenue"].where(d["Total Revenue"] > 0) * 100
-    tgm = typical["Gross margin %"] if len(typical) else None
-    opex = d["OPEX"] / d["Total Revenue"].where(d["Total Revenue"] > 0) * 100
-    topex = typical["OPEX %"] if len(typical) else None
-    for name, ys, tys, yfmt, ytitle in [
-            (title, y, ty, fmt, f"{cur} per member a week" if per_member else f"{cur} a month"),
-            ("Gross margin % of revenue", gm, tgm, "%{y:.1f}%", "% of revenue"),
-            ("OPEX % of revenue", opex, topex, "%{y:.1f}%", "% of revenue")]:
-        fig = go.Figure()
-        if tys is not None and pd.Series(tys).notna().any():
-            fig.add_trace(go.Scatter(
-                x=x, y=list(pd.Series(tys).reindex(months)), mode="lines",
-                name="Typical similar centre", line=dict(color="#5d6d73", width=2, dash="dash"),
-                hovertemplate=f"%{{x}}<br>Typical similar centre: {yfmt}<extra></extra>"))
-        fig.add_trace(go.Scatter(
-            x=x, y=list(ys), mode="lines+markers", name="This centre",
-            line=dict(color="#1f9a9a", width=3), marker=dict(size=7),
-            hovertemplate=f"%{{x}}<br>This centre: {yfmt}<extra></extra>"))
-        fig.update_layout(**helpers["std_layout"](name, ytitle, height=250))
-        # A fixed width that fits an A4 page: charts don't resize when printed.
-        fig.update_layout(width=CHART_WIDTH, legend=dict(orientation="h", x=1, xanchor="right",
-                                                         y=1.12, yanchor="bottom"))
-        fig.update_xaxes(type="category")
-        helpers["show_chart"](fig, use_container_width=False)
+        rev = ("Revenue", d["Total Revenue"], tcol("Revenue"), "$%{y:,.0f}", f"{cur} a month")
+    c = comp.reindex(months) if comp is not None and len(comp) else \
+        pd.DataFrame(index=months, columns=["ARPM", "Revenue per session"], dtype=float)
+    ct = comp_typical if comp_typical is not None and len(comp_typical) else None
+    left = [rev,
+            ("Gross margin % of revenue", (d["Total Revenue"] - d[pnl.TUTOR]) / rev_ok * 100,
+             tcol("Gross margin %"), "%{y:.1f}%", "% of revenue"),
+            ("OPEX % of revenue", d["OPEX"] / rev_ok * 100, tcol("OPEX %"), "%{y:.1f}%",
+             "% of revenue")]
+    right = [("Total members", d["Members"], tcol("Members"), "%{y:,.0f}", "members"),
+             ("ARPM (per member a week)", c["ARPM"], ct["ARPM"] if ct is not None else None,
+              "$%{y:,.2f}", f"{cur} a week"),
+             ("Revenue per session", c["Revenue per session"],
+              ct["Revenue per session"] if ct is not None else None, "$%{y:,.2f}", f"{cur}")]
+    width = CHART_WIDTH // 2 - 6
+    for l_, r_ in zip(left, right):
+        a, b = st.columns(2)
+        for col, (name, ys, tys, yfmt, ytitle) in ((a, l_), (b, r_)):
+            with col:
+                _trend_chart(name, x, months, ys, tys, yfmt, ytitle, helpers, width)
 
 
 def _members_section(trend, cur_members):
@@ -1740,7 +1766,13 @@ def report_share(df_pnl, df_wm, vl, helpers, bench=None):
                                          t_months, values.get("Country"), country_of) \
         if len(peers) else pd.DataFrame()
     data_m = data.copy()
-    _trend_charts(data_m, t_months, typical, unit, cur, helpers)
+    cm = pnl_share.composition_by_month(helpers.get("composition"), t_months)
+    own_c = cm.xs(loc, level="Location") if len(cm) and \
+        loc in cm.index.get_level_values("Location") else None
+    comp_t = pnl_share.typical_composition(cm, list(peers.index), t_months,
+                                           values.get("Country"), country_of) \
+        if len(peers) else None
+    _trend_charts(data_m, t_months, typical, unit, cur, helpers, own_c, comp_t)
 
     # ── Members trend ──
     end = pd.Timestamp(sel[-1] + "-01") + pd.offsets.MonthEnd(0)

@@ -243,6 +243,10 @@ def typical_by_month(lm, members, peer_locs, periods, country=None, country_of=N
             gm = m["Total Revenue"] - m[pnl.TUTOR]
             row["Gross margin %"] = float((gm / m["Total Revenue"] * 100).median())
             row["OPEX %"] = float((m["OPEX"] / m["Total Revenue"] * 100).median())
+            if members is not None and not members.empty:
+                mem = pd.Series({l: members.get((l, p)) for l in m.index}, dtype=float).dropna()
+                if len(mem) >= min_n:
+                    row["Members"] = float(mem.median())
         if country is not None and country_of is not None:
             m = m[[str(country_of.get(l, "")) == str(country) for l in m.index]]
         if len(m) >= min_n:
@@ -254,6 +258,46 @@ def typical_by_month(lm, members, peer_locs, periods, country=None, country_of=N
                     row["Revenue per member"] = float(per.median())
         rows.append(row)
     return pd.DataFrame(rows).set_index("Period") if rows else pd.DataFrame()
+
+
+# ── Membership Composition (ARPM and revenue per session) ────────────────────
+def composition_by_month(comp, periods):
+    """Members, ARPM (weekly value ÷ members) and revenue per session (weekly value ÷
+    sessions) for each centre and month, from the last Membership Composition upload in
+    that month. comp: membership_composition.prepare(). Indexed by (Location, Period)."""
+    cols = ["Members", "ARPM", "Revenue per session"]
+    if comp is None or comp.empty:
+        return pd.DataFrame(columns=cols)
+    c = comp.assign(Period=comp["Week ending"].dt.strftime("%Y-%m"))
+    c = c[c["Period"].isin(periods)]
+    last = c.groupby(["Location", "Period"])["Week ending"].transform("max")
+    c = c[c["Week ending"] == last].assign(Value=lambda d: d["Members"] * d["Weekly price"],
+                                           Sessions=lambda d: d["Members"] * d["Sessions/week"])
+    g = c.groupby(["Location", "Period"])[["Members", "Value", "Sessions"]].sum()
+    g["ARPM"] = g["Value"] / g["Members"].where(g["Members"] > 0)
+    g["Revenue per session"] = g["Value"] / g["Sessions"].where(g["Sessions"] > 0)
+    return g[cols]
+
+
+def typical_composition(cm, peer_locs, periods, country=None, country_of=None,
+                        min_n=MIN_PEERS):
+    """Typical (median) ARPM and revenue per session of similar centres in the same country
+    each month; blank with fewer than min_n of them."""
+    rows = []
+    for p in periods:
+        row = {"Period": p, "ARPM": None, "Revenue per session": None}
+        if len(cm):
+            m = cm[cm.index.get_level_values("Period") == p].droplevel("Period")
+            m = m[m.index.isin(peer_locs)]
+            if country is not None and country_of is not None:
+                m = m[m.index.map(lambda l: str(country_of.get(l, "")) == str(country))
+                      .astype(bool)]
+            for col in ["ARPM", "Revenue per session"]:
+                v = m[col].dropna()
+                if len(v) >= min_n:
+                    row[col] = float(v.median())
+        rows.append(row)
+    return pd.DataFrame(rows).set_index("Period")
 
 
 # ── Members trend ─────────────────────────────────────────────────────────────
