@@ -562,7 +562,8 @@ def test_presale_no_revenue_before_billing_week_and_presale_marketing():
         t["Members"].iloc[1] * 80 * 0.4)
     assert t["Tuition"].iloc[2] == pytest.approx(t["Members"].iloc[2] * 80 * 4.2)
     assert t["Total Revenue"].iloc[2] == pytest.approx(t["Tuition"].iloc[2] + 12 * 100)
-    assert t["Tutor Wages + Super"].iloc[0] == 0 and t["Rent"].iloc[0] == 4000
+    assert t["Tutor Wages + Super"].iloc[0] == 0 and t["OPEX"].iloc[0] == 1500
+    assert t["Rent"].iloc[0] == 0 and t["Rent"].iloc[2] == 4000      # 2 months rent free
     assert t["Marketing - Agency Fees"].iloc[0] == pytest.approx(1200)
     assert t["Marketing"].iloc[0] == pytest.approx(100 * 7 * 4.2)
     # month 3 = weeks 8.4–12.6: presale ends at week 12 (3.6 of 4.2 weeks)
@@ -706,3 +707,16 @@ def test_model_milestones_road_to_profit():
     assert "Manager hired" not in [l for _, l in wo]
     never = pm.milestones(t, s, 10 ** 9)
     assert never[-1] == (None, "Investment paid back")              # not within 5 years
+
+
+def test_rent_free_months_at_the_start():
+    t = pm.run(dict(FLAT), TYP, "2026-07", 6)                       # 2 months by default
+    assert list(t["Rent"].iloc[:4]) == [0, 0, 4000, 4000]
+    half = pm.run({**FLAT, "rent_free_months": 2.5}, TYP, "2026-07", 4)
+    assert half["Rent"].iloc[2] == pytest.approx(2000)                # half month free
+    none = pm.run({**FLAT, "rent_free_months": 0.0}, TYP, "2026-07", 2)
+    assert (none["Rent"] == 4000).all()
+    later = pm.run({**FLAT, "cost_rise": 3.0, "rent_free_months": 14.0}, TYP, "2026-07", 16)
+    assert later["Rent"].iloc[13] == 0 and later["Rent"].iloc[14] == pytest.approx(4120)
+    ms = dict((l, m) for m, l in pm.milestones(t, FLAT, 110000))
+    assert ms["Rent starts"] == 3

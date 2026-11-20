@@ -2226,6 +2226,8 @@ HOW_MODEL = """
 - **Revenue** = tuition (active members × price banked × 4.2 weeks, from the week billing
   starts) + suspension fees + **joining fees** ($100 for each sign-up, from week 1, presale
   included). Before billing starts it is a presale: members sign up but no sessions run.
+- **Rent-free period**: no rent in the first months after opening (2 to start; a part month
+  pays part). After that, the typical rent, rising each July.
 - **Presale campaign** (first 12 weeks): the presale agency fee a month and the presale
   advertising a day. After that: the typical agency fee but at least the minimum, and the
   usual advertising a day.
@@ -2660,6 +2662,11 @@ def _settings(d, typ, k, country, helpers, b_pnl, b_wm, vl):
             "Agency fee after presale, at least $ / month", 0.0, value=d["agency_min"],
             format="%.0f", step=50.0, key=k + "agency_min",
             help=f"Typical agency fee: ${typ['fixed']['Marketing - Agency Fees']:,.0f} a month.")
+        c = st.columns(4)
+        s["rent_free_months"] = c[0].number_input(
+            "Rent-free period at the start (months)", 0.0, 60.0,
+            value=d["rent_free_months"], format="%.1f", step=0.5, key=k + "rent_free",
+            help="No rent in these first months after opening (part months pay part).")
     with tabs[3]:
         c = st.columns(3)
         s["royalty_min"] = c[0].number_input(

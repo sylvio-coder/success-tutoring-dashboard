@@ -14,7 +14,8 @@ for the next 20, $65 for the next 10) for as long as they stay (8.5% leave a mon
 else pays the standard price (the state RRP for the typical package mix). These are list
 prices including GST: the model takes off GST and applies the collected % (what centres
 actually bank against RRP, from the P&L). Prices rise each July from the first July at least
-12 months after opening; rent, OPEX and wages rise each July after opening.
+12 months after opening; rent, OPEX and wages rise each July after opening. No rent is
+paid in the rent-free months at the start (2).
 Revenue = tuition (active members x price x 4.2 weeks, billed from the billing week) +
 suspension fees + joining fees ($100 for each sign-up, from week 1). Marketing is advertising a day (presale amount during the presale campaign, then the usual amount); the
 agency fee is the presale fee, then the typical fee but at least the minimum. Tutor wages use
@@ -45,6 +46,7 @@ DEFAULTS = dict(target_aud=110000.0, payback_months=42, ramp_members=40.0, ramp_
                 owner_on=False, owner_wage=60000.0,
                 owner_stops=False, relief_weeks=18.0, royalty_min=2266.0, royalty_rise=3.0,
                 royalty_fy=2026, price_rise=3.0, wage_rise=3.0, cost_rise=3.0, billing_week=9.0,
+                rent_free_months=2.0,
                 presale_weeks=12.0, presale_agency=1200.0, presale_ads_day=100.0,
                 agency_min=250.0, ads_day=30.0, signups=10.0, joining_fee=100.0,
                 suspension_fee=5.0, holiday_drop=85.0)
@@ -295,6 +297,11 @@ def manager_monthly(s):
     return s["manager_salary"] * (1 + s["super_pct"] / 100) / 12
 
 
+def rent_free_share(month, s):
+    """Share of model month `month` that is rent free (the first rent-free months)."""
+    return min(max(s.get("rent_free_months", 0.0) - (month - 1), 0.0), 1.0)
+
+
 def royalty_min(period, s):
     return s["royalty_min"] * (1 + s["royalty_rise"] / 100) ** (pf.fy_start(period) -
                                                                s["royalty_fy"])
@@ -372,6 +379,7 @@ def run(s, typ, start, n, manager=True, grid=None, base=None):
         r.update({l: typ["fixed"][l] for l in FIXED})
         for l in ("Rent", "OPEX"):                            # rise each July after opening
             r[l] = typ["fixed"][l] * _rises(p, start, s["cost_rise"])
+        r["Rent"] *= 1 - rent_free_share(i, s)                # rent-free months at the start
         r["Marketing - Agency Fees"] = s["presale_agency"] * pre + max(       # then at least
             typ["fixed"]["Marketing - Agency Fees"], s["agency_min"]) * (1 - pre)  # the minimum
         for l in LINES:
@@ -506,6 +514,8 @@ def milestones(table, s, target):
         (first(table["On books"] >= s["ramp_members"] - 1e-6),
          f"{s['ramp_members']:g} members"),
         (_week_month(s["relief_weeks"]) if s["relief_weeks"] else None, "Royalty relief ends"),
+        (int(s.get("rent_free_months", 0.0)) + 1 if s.get("rent_free_months") else None,
+         "Rent starts"),
         (breakeven_month(table), "First month in profit"),
         (cash_month, "Lowest cash point"),
         (royalty_start(table), "Can afford royalties every month"),
