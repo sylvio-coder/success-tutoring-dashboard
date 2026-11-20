@@ -333,6 +333,7 @@ def report_pnl(df_wm, page=None):
         # Sessions for every centre; names only for centres this viewer may see.
         revenue=load_revenue(), holidays=load_school_holidays(),
         composition=membership_composition.prepare(_load_tab_or_empty(membership_composition.TAB)),
+        rrp=membership_composition.rrp_table(_load_tab_or_empty(membership_composition.RRP_TAB)),
         can_name=lambda loc: st.session_state.get("access_level") == "admin"
         or loc in st.session_state.get("allowed_locations", []),
         viewer_name=st.session_state.get("user_name", "")),
