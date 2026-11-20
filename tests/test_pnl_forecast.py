@@ -368,7 +368,7 @@ FLAT = {**pm.DEFAULTS, "standard_price": 80.0, "founder_prices": (80.0, 80.0, 80
 
 
 def test_model_ramp_relief_and_royalty_minimum():
-    s = dict(FLAT)
+    s = {**FLAT, "relief_weeks": 18.0}
     t = pm.run(s, TYP, "2026-07", 60)
     m4 = 40 + 10 - 0.085 * 40                                  # 10 sign-ups, 8.5% leave
     ends = [14.0, 28.0, 40.0, m4, m4 + 10 - 0.085 * m4]         # end of each month
@@ -494,7 +494,7 @@ def test_gpm_cannot_see_the_franchise_model():
 def test_model_settings_by_country():
     au, ph = pm.settings_for("Australia")
     assert not ph and au["royalty_min"] == 2266 and au["royalty_rise"] == 3.0 \
-        and au["relief_weeks"] == 18 and au["target_aud"] == 110000
+        and au["relief_weeks"] == 8 and au["target_aud"] == 110000
     nz, ph = pm.settings_for("New Zealand")
     assert ph and nz["royalty_min"] == 2266                    # placeholder until set
     assert pm.run(nz, TYP, "2026-07", 6)["Royalties"].iloc[5] > 0
@@ -620,9 +620,9 @@ def test_model_opening_months_and_cases():
         pm.payback_month(pm.run(s, TYP, "2026-07", 60, False), 110000)
     c = pm.cases(s, TYP, "2026-07", 110000)
     assert list(c["Case"]) == ["Worst case", "Base case", "Best case"]
-    assert c.at[2, "Members after 5 years (without manager)"] == pytest.approx(145)  # targets
+    assert c.at[2, "Members after 5 years (without manager)"] == pytest.approx(175)  # targets
     best = pm.run({**s, "growth_mode": "targets"}, TYP, "2026-07", 60, False)
-    assert [round(best["On books"].iloc[m]) for m in (11, 23, 35, 47)] == [80, 110, 130, 140]
+    assert [round(best["On books"].iloc[m]) for m in (11, 23, 35, 47)] == [80, 120, 150, 165]
     p = c["5-year profit (with manager)"]
     assert p.iloc[0] < p.iloc[1] < p.iloc[2]
     assert c.at[1, "5-year profit (without manager)"] == pytest.approx(
@@ -648,8 +648,8 @@ def test_model_price_cost_rises_foundation_prices_and_manager_cost():
     assert pm.founders_after([0, 0, 0], 0, 14, s, False) == [14, 0, 0]
     assert pm.founders_after([14, 0, 0], 14, 14, s, False) == [20, 8, 0]
     assert pm.founders_after([20, 20, 0], 40, 15, s, False) == [20, 20, 10]   # 5 left over
-    left = pm.founders_after([20, 20, 10], 60, 10, s, True)                 # 8.5% leave
-    assert left == pytest.approx([20 * 0.915, 20 * 0.915, 10 * 0.915])
+    left = pm.founders_after([20, 20, 10], 60, 10, s, True)
+    assert left == pytest.approx([20 * 0.96, 20 * 0.96, 10 * 0.96])   # 4% leave
     assert pm.list_price([20, 20, 10], 50, s) == pytest.approx((1000 + 1200 + 650) / 50)
     assert pm.list_price([20, 20, 10], 100, {**s, "standard_price": 70.0}) == \
         pytest.approx((1000 + 1200 + 650 + 50 * 70) / 100)
@@ -657,8 +657,10 @@ def test_model_price_cost_rises_foundation_prices_and_manager_cost():
     assert pm.collected_share({**s, "gst": 10.0, "collected": 80.0}) == pytest.approx(0.8 / 1.1)
     t = pm.run({**s, "collected": 80.0, "gst": 10.0}, TYP, "2026-07", 4)
     assert t["AMV"].iloc[0] == pytest.approx(50 * 0.8 / 1.1)              # 14 founders at $50
-    assert t["Founders"].iloc[3] == pytest.approx(40 * 0.915 + 10)       # last 10 join as
-    #                                                       the first 40 start to leave
+    books = 40 + 10 - 0.085 * 40                                          # month 4: 46.6
+    assert t["On books"].iloc[3] == pytest.approx(books)
+    assert t["Founders"].iloc[3] == pytest.approx(min(40 * 0.96 + 10, books))  # never more
+    #                                                       than the members on the books
 
 
 def test_model_package_mix_rrp_price_and_collected_pct():
@@ -689,7 +691,7 @@ def test_model_milestones_road_to_profit():
     months = dict((l, m) for m, l in ms)
     assert months["Sessions and billing start"] == 2                 # week 9 is in month 2
     assert months["Presale campaign ends"] == 3 and months["40 members"] == 3
-    assert months["Royalty relief ends"] == 5                         # 18 weeks
+    assert months["Royalty relief ends"] == 2                         # 8 weeks
     assert months["First month in profit"] == pm.breakeven_month(t)
     assert months["Investment paid back"] == pm.payback_month(t, 110000)
     assert months["Manager hired"] == int(t[t[pnl.MANAGER] > 0]["Model month"].iloc[0])

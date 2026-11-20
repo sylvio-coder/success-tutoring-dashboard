@@ -2193,7 +2193,11 @@ YEAR_ROWS = [
 ]
 HOW_MODEL = """
 - **A theoretical new centre** over its first 5 years (60 months), opening in the chosen
-  month. Typical figures (rent, OPEX, tutor wage %, agency fees) come from the country's
+  month. Rent ($3,936) and OPEX ($2,066) start at the median of Australia's established
+  centres; the Costs tab shows the chosen country's median for reference. OPEX is every other
+  operating cost (printing, software, office, insurance, utilities, bookkeeping and so on),
+  not marketing, royalties, rent or wages. Other typical figures (tutor wage %, agency fees)
+  come from the country's
   established centres (12 months or older) over their last 3 P&L months: the middle value
   (median), so one unusual centre doesn't move it. ⚠ = fewer than 8 centres behind a figure.
 - **Members, first 12 weeks**: about 14 join a month until 40 (the members at week 12). In a
@@ -2225,7 +2229,7 @@ HOW_MODEL = """
   starts) + suspension fees + **joining fees** ($100 including GST for each sign-up, so
   $90.91 banked, from week 1, presale included). Before billing starts it is a presale: members sign up but no sessions run.
 - **Rent-free period**: no rent in the first months after opening (2 to start; a part month
-  pays part). After that, the typical rent, rising each July.
+  pays part). After that, the rent, rising each July.
 - **Presale campaign** (first 12 weeks): the presale agency fee a month and the presale
   advertising a day. After that: the typical agency fee but at least the minimum, and the
   usual advertising a day.
@@ -2589,7 +2593,7 @@ def _settings(d, typ, k, country, helpers, b_pnl, b_wm, vl):
     with tabs[1]:
         c = st.columns(4)
         state = c[0].selectbox("State (RRP)", regions, key=k + "state")
-        std = price_of(state) or d["standard_price"]
+        std = d["standard_price"] if state == "All" else (price_of(state) or d["standard_price"])
         raw, got_n = pm.collected_pct(typ["peers"], price_of, d)   # for reference only
         s["standard_price"] = c[1].number_input(
             "Standard price $ / week (incl. GST)", 0.0, value=round(float(std), 2), format="%.2f", step=1.0,
@@ -2635,12 +2639,14 @@ def _settings(d, typ, k, country, helpers, b_pnl, b_wm, vl):
                       "</div>", unsafe_allow_html=True)
     with tabs[2]:
         c = st.columns(4)
-        rent = c[0].number_input(f"Rent $ / month{small(typ['centres'])}", 0.0,
-                                 value=float(round(typ["fixed"]["Rent"])), format="%.0f", step=100.0,
-                                 key=k + "rent", help="Starting value: the typical centre.")
-        opex = c[1].number_input(f"OPEX $ / month{small(typ['centres'])}", 0.0,
-                                 value=float(round(typ["fixed"]["OPEX"])), format="%.0f", step=100.0,
-                                 key=k + "opex", help="Starting value: the typical centre.")
+        rent = c[0].number_input("Rent $ / month", 0.0,
+                                 value=d["rent"], format="%.0f", step=100.0, key=k + "rent",
+                                 help="For reference, the typical (median) centre: "
+                                      f"{_money(typ['fixed']['Rent'])} a month.")
+        opex = c[1].number_input("OPEX $ / month", 0.0,
+                                 value=d["opex"], format="%.0f", step=100.0, key=k + "opex",
+                                 help="For reference, the typical (median) centre: "
+                                      f"{_money(typ['fixed']['OPEX'])} a month.")
         s["cost_rise"] = c[2].number_input("Rent and OPEX rise % each July", 0.0,
                                            value=d["cost_rise"], format="%.1f", step=0.5, key=k + "cost_rise")
         s["ads_day"] = c[3].number_input("Advertising $ / day (after presale)", 0.0,

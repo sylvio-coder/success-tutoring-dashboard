@@ -38,13 +38,14 @@ FIXED = ["Rent", "Marketing - Agency Fees", "OPEX"]
 WITH, WITHOUT = "With manager", "Without manager"
 
 DEFAULTS = dict(target_aud=110000.0, payback_months=42, ramp_members=40.0, ramp_weeks=12.0,
-                leave_pct=8.5, growth_mode="churn", targets=(80.0, 30.0, 20.0, 10.0, 5.0),
+                leave_pct=8.5, growth_mode="churn", targets=(80.0, 40.0, 30.0, 15.0, 10.0),
                 worst_signups=8.0, worst_leave=10.0,
                 founder_sizes=(20.0, 20.0, 10.0), founder_prices=(50.0, 60.0, 65.0),
-                founder_leave=8.5, standard_price=72.0, gst=10.0, collected=95.0,
+                founder_leave=4.0, standard_price=70.0, gst=10.0, collected=95.0,
                 manager_trigger=80.0, manager_salary=32000.0, super_pct=12.0,
                 owner_on=False, owner_wage=60000.0,
-                owner_stops=False, relief_weeks=18.0, royalty_min=2266.0, royalty_rise=3.0,
+                owner_stops=False, relief_weeks=8.0, royalty_min=2266.0, royalty_rise=3.0,
+                rent=3936.0, opex=2066.0,      # Australian established centres' medians
                 royalty_fy=2026, price_rise=3.0, wage_rise=3.0, cost_rise=3.0, billing_week=9.0,
                 rent_free_months=2.0,
                 presale_weeks=12.0, presale_agency=1200.0, presale_ads_day=100.0,
@@ -65,7 +66,7 @@ HOLIDAY_STATES = {"Australia": ["NSW", "VIC", "QLD", "WA", "SA"], "New Zealand":
 # currency for the financial year starting in July of royalty_fy; target_aud is in AUD.
 # A country not listed uses Australia's figures as a placeholder (flagged on the page).
 COUNTRY_DEFAULTS = {
-    "Australia": dict(royalty_min=2266.0, royalty_rise=3.0, royalty_fy=2026, relief_weeks=18.0,
+    "Australia": dict(royalty_min=2266.0, royalty_rise=3.0, royalty_fy=2026, relief_weeks=8.0,
                       target_aud=110000.0),
 }
 COUNTRY_KEYS = ["royalty_min", "royalty_rise", "royalty_fy", "relief_weeks", "target_aud"]
