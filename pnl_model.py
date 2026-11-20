@@ -48,6 +48,10 @@ DEFAULTS = dict(target_aud=110000.0, payback_months=42, ramp_members=40.0, ramp_
                 rent=3936.0, opex=2066.0,      # Australian established centres' medians
                 royalty_fy=2026, price_rise=3.0, wage_rise=3.0, cost_rise=3.0, billing_week=9.0,
                 rent_free_months=2.0,
+                # tutor wages + super % of revenue at these member numbers (straight lines
+                # between them, flat beyond the ends)
+                tutor_curve=((10.0, 50.0), (30.0, 40.0), (50.0, 36.0), (80.0, 33.0),
+                             (100.0, 30.0), (125.0, 27.0), (150.0, 25.0)),
                 presale_weeks=12.0, presale_agency=1200.0, presale_ads_day=100.0,
                 agency_min=250.0, ads_day=30.0, signups=10.0, joining_fee=100.0,
                 suspension_fee=5.0, holiday_drop=85.0)
@@ -290,6 +294,20 @@ def manager_monthly(s):
     return s["manager_salary"] * (1 + s["super_pct"] / 100) / 12
 
 
+def tutor_rate(members, s):
+    """Tutor wages + super as a share of revenue (0–1) for this many members: the tutor curve,
+    blended in a straight line between its points and flat beyond the first and last."""
+    pts = sorted(s["tutor_curve"])
+    if not pts:
+        return 0.0
+    if members <= pts[0][0]:
+        return pts[0][1] / 100
+    for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+        if members <= x1:
+            return (y0 + (y1 - y0) * (members - x0) / (x1 - x0)) / 100 if x1 > x0 else y1 / 100
+    return pts[-1][1] / 100
+
+
 def rent_free_share(month, s):
     """Share of model month `month` that is rent free (the first rent-free months)."""
     return min(max(s.get("rent_free_months", 0.0) - (month - 1), 0.0), 1.0)
@@ -361,7 +379,7 @@ def run(s, typ, start, n, manager=True, grid=None, base=None):
              "Tuition": tuition, "Suspension fees": sus_fees, "Joining fees": joining,
              "Total Revenue": rev,
              # % of total revenue, but none before sessions start (presale)
-             pnl.TUTOR: pnl.rate_for(mem, typ["rates"]) * rev if bill > 0 else 0.0,
+             pnl.TUTOR: tutor_rate(mem, s) * rev if bill > 0 else 0.0,
              # advertising a day: the presale amount, then the usual amount
              "Marketing": (s["presale_ads_day"] * pre + s["ads_day"] * (1 - pre)) * 7 *
              pnl.WEEKS_PER_MONTH,

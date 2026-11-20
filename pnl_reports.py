@@ -2233,8 +2233,12 @@ HOW_MODEL = """
 - **Presale campaign** (first 12 weeks): the presale agency fee a month and the presale
   advertising a day. After that: the typical agency fee but at least the minimum, and the
   usual advertising a day.
-- **Tutor wages + super**: the typical % for that many members (members bands) of total
-  revenue, from the month sessions start (none in presale months). **Gross Margin** = Total
+- **Tutor wages + super**: a % of total revenue that falls as the centre grows, because a
+  session's tutors are shared by more students: 50% at 10 members, 40% at 30, 36% at 50, 33% at
+  80, 30% at 100, 27% at 125 and 25% from 150 (straight lines between those points; editable
+  in Settings → Costs). Set from Australian centres' actual P&L (Jan–Oct 2026: about 54% under
+  20 members, 39% at 20–39, 36% at 40–59, 29% at 60–79 and 27.5% at 80–99), a little more
+  cautious in the middle. Paid from the month sessions start (none in presale months). **Gross Margin** = Total
   Revenue − Tutor Wages + Super.
 - **Manager** (with-manager scenario only): hired the first month members reach the trigger
   and kept after that: the salary plus super a month.
@@ -2670,6 +2674,23 @@ def _settings(d, typ, k, country, helpers, b_pnl, b_wm, vl):
             "Rent-free period at the start (months)", 0.0, 60.0,
             value=d["rent_free_months"], format="%.1f", step=0.5, key=k + "rent_free",
             help="No rent in these first months after opening (part months pay part).")
+        st.markdown('<div class="filter-label">Tutor wages + super % of revenue, by members '
+                    '(straight lines between the points)</div>', unsafe_allow_html=True)
+        curve = pd.DataFrame([{f"{m:g} members": p for m, p in d["tutor_curve"]}])
+        edited = st.data_editor(
+            curve, key=k + "tutor_row", hide_index=True, use_container_width=True,
+            column_config={c_: st.column_config.NumberColumn(format="%.1f%%", min_value=0.0,
+                                                             max_value=100.0, step=0.5)
+                           for c_ in curve.columns})
+        s["tutor_curve"] = tuple((m, float(edited.iloc[0][f"{m:g} members"] or 0.0))
+                                 for m, _ in d["tutor_curve"])
+        actual = pnl.tutor_benchmarks(typ["all_centres"]) if len(typ["all_centres"]) else None
+        if actual is not None:
+            got = [f"{b}: {r['Benchmark %']:.0f}% ({int(r['Centres'])})"
+                   for b, r in actual.iterrows() if r["Centres"] > 0]
+            st.caption(f"For reference, the typical (median) {country} centre by members band "
+                       "(number of centres): " + ", ".join(got) + ". Bands with only a few "
+                       "centres are unreliable.")
     with tabs[3]:
         c = st.columns(3)
         s["royalty_min"] = c[0].number_input(
@@ -2784,6 +2805,7 @@ def report_franchise_model(df_pnl, df_wm, vl, helpers, bench=None):
             st.warning(f"⚠ No royalty or investment figures set for {country} yet: using "
                        "Australia's as a placeholder.")
         st.caption("Changing a setting resets the month-by-month changes at the bottom.")
+        typ = {**typ, "all_centres": cent[cent["Country"].astype(str) == country]}
         s, typ = _settings(d, typ, k, country, helpers, b_pnl, b_wm, vl)
     target = s["target_aud"] / (typ["fx"] or 1.0)
     n = pm.MODEL_MONTHS

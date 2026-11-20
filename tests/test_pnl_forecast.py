@@ -587,7 +587,7 @@ def test_model_results_breakeven_peak_cash_royalty_start_and_years():
     assert len(t) == 60
     # tutor wages are a % of total revenue (joining fees included) once sessions start
     m = t.iloc[5]
-    assert m[pnl.TUTOR] == pytest.approx(pnl.rate_for(m["Members"], TYP["rates"]) *
+    assert m[pnl.TUTOR] == pytest.approx(pm.tutor_rate(m["Members"], s) *
                                          m["Total Revenue"])
     assert t["Joining fees"].iloc[5] == pytest.approx(10 * 100 / 1.1)  # 10 sign-ups, less GST
     assert t["Royalties"].iloc[0] == 0 and t["Royalties due"].iloc[0] == 2266  # relief
@@ -726,3 +726,21 @@ def test_collected_95_for_everyone_and_joining_fee_without_gst():
     std = pm.run({**s, "founder_sizes": (0.0, 0.0, 0.0), "standard_price": 77.0}, TYP,
                  "2026-07", 2)
     assert std["AMV"].iloc[0] == pytest.approx(77 / 1.1 * 0.95)        # same % for everyone
+
+
+
+def test_tutor_wages_fall_as_the_centre_grows():
+    s = dict(pm.DEFAULTS)
+    assert pm.tutor_rate(5, s) == 0.50 and pm.tutor_rate(10, s) == 0.50     # flat below 10
+    assert pm.tutor_rate(30, s) == pytest.approx(0.40)
+    assert pm.tutor_rate(20, s) == pytest.approx(0.45)                      # halfway 10–30
+    assert pm.tutor_rate(90, s) == pytest.approx(0.315)                     # halfway 80–100
+    assert pm.tutor_rate(150, s) == 0.25 and pm.tutor_rate(400, s) == 0.25  # flat from 150
+    rates = [pm.tutor_rate(m, s) for m in range(0, 200, 5)]
+    assert all(a >= b for a, b in zip(rates, rates[1:]))                    # never rises
+    t = pm.run(dict(FLAT), TYP, "2026-07", 60)
+    m = t.iloc[30]
+    assert m[pnl.TUTOR] == pytest.approx(pm.tutor_rate(m["Members"], FLAT) *
+                                         m["Total Revenue"])
+    own = pm.run({**FLAT, "tutor_curve": ((10.0, 30.0),)}, TYP, "2026-07", 6)
+    assert own[pnl.TUTOR].iloc[5] == pytest.approx(0.30 * own["Total Revenue"].iloc[5])
