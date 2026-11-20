@@ -12,8 +12,8 @@ suspension fee ($5 a week) instead of the full price, and comes back the next mo
 Price: the first 50 members (foundation members) pay tier prices ($50 for the first 20, $60
 for the next 20, $65 for the next 10) for as long as they stay (8.5% leave a month); everyone
 else pays the standard price (the state RRP for the typical package mix). These are list
-prices including GST: the model takes off GST and applies the collected % (what centres
-actually bank against RRP, from the P&L). Prices rise each July from the first July at least
+prices including GST: the model takes off GST and applies the collected % (95% to start,
+for every member). Prices rise each July from the first July at least
 12 months after opening; rent, OPEX and wages rise each July after opening. No rent is
 paid in the rent-free months at the start (2).
 Revenue = tuition (active members x price x 4.2 weeks, billed from the billing week) +
@@ -41,7 +41,7 @@ DEFAULTS = dict(target_aud=110000.0, payback_months=42, ramp_members=40.0, ramp_
                 leave_pct=8.5, growth_mode="churn", targets=(80.0, 30.0, 20.0, 10.0, 5.0),
                 worst_signups=8.0, worst_leave=10.0,
                 founder_sizes=(20.0, 20.0, 10.0), founder_prices=(50.0, 60.0, 65.0),
-                founder_leave=8.5, standard_price=72.0, gst=10.0, collected=80.0,
+                founder_leave=8.5, standard_price=72.0, gst=10.0, collected=95.0,
                 manager_trigger=80.0, manager_salary=32000.0, super_pct=12.0,
                 owner_on=False, owner_wage=60000.0,
                 owner_stops=False, relief_weeks=18.0, royalty_min=2266.0, royalty_rise=3.0,
@@ -226,6 +226,11 @@ def collected_share(s):
     return 1 / (1 + s["gst"] / 100) * s["collected"] / 100
 
 
+def joining_fee_banked(s):
+    """Joining fee per sign-up without GST (the fee is set including GST)."""
+    return s["joining_fee"] / (1 + s["gst"] / 100)
+
+
 def list_price(founders, books, s):
     """Average list price a week across members on the books: foundation members at their
     tier price, everyone else at the standard price."""
@@ -263,19 +268,6 @@ def rrp_mix_price(rrp, mix):
     return sum(w * v for w, v in parts) / tot if tot else None
 
 
-def holiday_gross_up(pct, s, list_price, extra):
-    """Collected % with holiday suspensions added back. The P&L the % comes from already
-    includes a year's holiday suspensions, and the model takes them off again in holiday
-    months, so they would count twice. extra: {month: extra % suspended}; list_price: the
-    standard list price a week (GST included)."""
-    if not pct:
-        return pct
-    avg = sum(extra.get(m, 0.0) for m in MONTHS) / 12 / 100       # a year's average
-    banked = list_price / (1 + s["gst"] / 100) * pct / 100
-    lost = avg * max(1 - s["suspension_fee"] / banked, 0.0) if banked else 0.0
-    return pct / (1 - lost) if lost < 1 else pct
-
-
 def collected_pct(peers, price_of_region, s):
     """Collected % (the typical centre): what centres bank per member a week, without joining
     fees, against their state's RRP for the package mix less GST. price_of_region(region)
@@ -287,7 +279,7 @@ def collected_pct(peers, price_of_region, s):
         if not mem or pd.isna(mem) or mem <= 0 or not rrp or not rev:
             continue
         banked = rev / mem / pnl.WEEKS_PER_MONTH - \
-            s["signups"] * s["joining_fee"] / (mem * pnl.WEEKS_PER_MONTH)
+            s["signups"] * joining_fee_banked(s) / (mem * pnl.WEEKS_PER_MONTH)
         vals.append(banked / (rrp / (1 + s["gst"] / 100)) * 100)
     return (float(pd.Series(vals).median()), len(vals)) if vals else (None, 0)
 
@@ -356,7 +348,7 @@ def run(s, typ, start, n, manager=True, grid=None, base=None):
             listed * collected_share(s) * price_rises(p, start, s["price_rise"])
         bill = pnl.WEEKS_PER_MONTH * billed_share(i, s)       # billed from billing week
         tuition, sus_fees = mem * amv * bill, sus * s["suspension_fee"] * bill
-        joining = joins * s["joining_fee"]                    # from week 1, presale too
+        joining = joins * joining_fee_banked(s)               # from week 1, presale too
         rev = tuition + sus_fees + joining
         pre = presale_share(i, s)
         wage = _rises(p, start, s["wage_rise"])

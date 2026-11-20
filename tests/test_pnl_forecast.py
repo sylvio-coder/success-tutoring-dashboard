@@ -589,7 +589,7 @@ def test_model_results_breakeven_peak_cash_royalty_start_and_years():
     m = t.iloc[5]
     assert m[pnl.TUTOR] == pytest.approx(pnl.rate_for(m["Members"], TYP["rates"]) *
                                          m["Total Revenue"])
-    assert t["Joining fees"].iloc[5] == 10 * 100                     # 10 sign-ups after week 12
+    assert t["Joining fees"].iloc[5] == pytest.approx(10 * 100 / 1.1)  # 10 sign-ups, less GST
     assert t["Royalties"].iloc[0] == 0 and t["Royalties due"].iloc[0] == 2266  # relief
     be = pm.breakeven_month(t)
     assert (t["Profit"].iloc[:be - 1] <= 0).all() and t["Profit"].iloc[be - 1] > 0
@@ -674,19 +674,11 @@ def test_model_package_mix_rrp_price_and_collected_pct():
     rrp = mc.rrp_table()[("AU", "all")]                                   # 42 / 74 / 100
     assert pm.rrp_mix_price(rrp, mix) == pytest.approx(0.2 * 42 + 0.8 * 74)
     peers = pd.DataFrame({"Members": [50.0, 100.0, 0.0], "Region": ["X", "X", "X"],
-                          "Total Revenue": [50 * 4.2 * 60 + 1000, 100 * 4.2 * 30 + 1000, 1.0]})
-    s = dict(pm.DEFAULTS)                                                 # 10 x $100 joining
+                          "Total Revenue": [50 * 4.2 * 60 + 1000 / 1.1,
+                                            100 * 4.2 * 30 + 1000 / 1.1, 1.0]})
+    s = dict(pm.DEFAULTS)                                   # 10 x $100 joining, GST included
     pct, n = pm.collected_pct(peers, lambda reg: 66.0, s)                 # $60 after GST
     assert n == 2 and pct == pytest.approx((100 + 50) / 2)                # median of 100%, 50%
-
-def test_holiday_suspensions_are_not_taken_off_twice():
-    s = {**pm.DEFAULTS, "gst": 10.0, "suspension_fee": 5.0}
-    extra = {"01": 12.0, "12": 12.0}                     # 2% of member-months over a year
-    banked = 77.0 / 1.1 * 0.70                           # $49 a week
-    pct = pm.holiday_gross_up(70.0, s, 77.0, extra)
-    assert pct == pytest.approx(70 / (1 - 0.02 * (1 - 5 / banked)))
-    assert pm.holiday_gross_up(70.0, s, 77.0, {}) == 70.0
-    assert pm.holiday_gross_up(None, s, 77.0, extra) is None
 
 
 def test_model_milestones_road_to_profit():
@@ -720,3 +712,15 @@ def test_rent_free_months_at_the_start():
     assert later["Rent"].iloc[13] == 0 and later["Rent"].iloc[14] == pytest.approx(4120)
     ms = dict((l, m) for m, l in pm.milestones(t, FLAT, 110000))
     assert ms["Rent starts"] == 3
+
+
+
+def test_collected_95_for_everyone_and_joining_fee_without_gst():
+    s = dict(pm.DEFAULTS)
+    assert s["collected"] == 95.0 and pm.joining_fee_banked(s) == pytest.approx(100 / 1.1)
+    t = pm.run({**s, "founder_prices": (60.0, 60.0, 60.0)}, TYP, "2026-07", 2)
+    assert t["AMV"].iloc[0] == pytest.approx(60 / 1.1 * 0.95)          # $51.82 banked
+    assert t["Joining fees"].iloc[0] == pytest.approx(14 * 100 / 1.1)
+    std = pm.run({**s, "founder_sizes": (0.0, 0.0, 0.0), "standard_price": 77.0}, TYP,
+                 "2026-07", 2)
+    assert std["AMV"].iloc[0] == pytest.approx(77 / 1.1 * 0.95)        # same % for everyone

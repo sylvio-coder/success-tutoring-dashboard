@@ -2214,18 +2214,16 @@ HOW_MODEL = """
   Everyone else, including anyone replacing a founder, pays the **standard price**: the state's
   RRP for the typical package mix (from the Membership Composition uploads). These are list
   prices including GST; the model takes off GST and applies the **collected %**.
-- **Collected %**: what centres actually bank per member a week (P&L sales less joining fees,
-  divided by members and 4.2 weeks) against their state's RRP for the mix, after GST: the
-  middle centre. It covers discounts, normal suspensions and weeks not billed. It is raised
-  a little so holiday suspensions (taken off in the holiday months) are not counted twice.
-  The centres it comes from also have some foundation members, so applying it to foundation
-  prices may understate the first year slightly.
+- **Collected %**: the share of the list price (after GST) actually banked, the same for
+  foundation and standard members: 95% to start. For example a $60 foundation price is
+  $60 ÷ 1.1 = $54.55 without GST, × 95% = $51.82 banked a week. The Price tab also shows
+  what the typical centre's P&L works out at against RRP, for reference.
 - **Prices rise** by the yearly % each July from the first July at least 12 months after
   opening (foundation prices too). **Rent, OPEX and wages** rise by their % each July after
   opening.
 - **Revenue** = tuition (active members × price banked × 4.2 weeks, from the week billing
-  starts) + suspension fees + **joining fees** ($100 for each sign-up, from week 1, presale
-  included). Before billing starts it is a presale: members sign up but no sessions run.
+  starts) + suspension fees + **joining fees** ($100 including GST for each sign-up, so
+  $90.91 banked, from week 1, presale included). Before billing starts it is a presale: members sign up but no sessions run.
 - **Rent-free period**: no rent in the first months after opening (2 to start; a part month
   pays part). After that, the typical rent, rising each July.
 - **Presale campaign** (first 12 weeks): the presale agency fee a month and the presale
@@ -2592,8 +2590,7 @@ def _settings(d, typ, k, country, helpers, b_pnl, b_wm, vl):
         c = st.columns(4)
         state = c[0].selectbox("State (RRP)", regions, key=k + "state")
         std = price_of(state) or d["standard_price"]
-        raw, got_n = pm.collected_pct(typ["peers"], price_of, d)
-        got = pm.holiday_gross_up(raw, d, std, extra)       # holiday suspensions counted once
+        raw, got_n = pm.collected_pct(typ["peers"], price_of, d)   # for reference only
         s["standard_price"] = c[1].number_input(
             "Standard price $ / week (incl. GST)", 0.0, value=round(float(std), 2), format="%.2f", step=1.0,
             key=k + f"std_{state}",
@@ -2604,12 +2601,12 @@ def _settings(d, typ, k, country, helpers, b_pnl, b_wm, vl):
             (f", from {mix_n} centre(s)" if mix_n else ", HQ's ideal mix") + ").")
         s["collected"] = c[2].number_input(
             "Collected % of list price (after GST)", 0.0, 150.0,
-            value=round(got if got else d["collected"], 1), format="%.1f", step=1.0, key=k + "collected",
-            help="What centres actually bank per member against their state's RRP for the mix, "
-                 "after GST and without joining fees (discounts, suspensions and weeks not "
-                 f"billed). Typical of {got_n} centre(s){small(got_n)}: {raw:.1f}%, raised to "
-                 f"{got:.1f}% because the holiday months already take off holiday suspensions."
-                 if got_n else "No centres to work it out from: a starting value.")
+            value=d["collected"], format="%.1f", step=1.0, key=k + "collected",
+            help="Share of the list price (after GST) actually banked, for every member: "
+                 "foundation and standard. Covers discounts and weeks not billed. For "
+                 f"reference, the typical centre's P&L works out at {raw:.1f}% against RRP "
+                 f"({got_n} centre(s){small(got_n)})." if got_n else
+                 "Share of the list price (after GST) actually banked, for every member.")
         s["gst"] = c[3].number_input("GST % in list prices", 0.0, 50.0, value=d["gst"],
                                      format="%.1f", step=0.5, key=k + "gst")
         c = st.columns(4)
@@ -2627,7 +2624,7 @@ def _settings(d, typ, k, country, helpers, b_pnl, b_wm, vl):
                                             key=k + "price_rise",
                                             help="From the first July at least 12 months after "
                                                  "opening, foundation prices too.")
-        s["joining_fee"] = c[1].number_input("Joining fee $ per sign-up", 0.0,
+        s["joining_fee"] = c[1].number_input("Joining fee $ per sign-up (incl. GST)", 0.0,
                                              value=d["joining_fee"], format="%.0f", step=10.0, key=k + "joining")
         s["suspension_fee"] = c[2].number_input("Suspension fee $ / week", 0.0,
                                                 value=d["suspension_fee"], format="%.0f", step=1.0,
