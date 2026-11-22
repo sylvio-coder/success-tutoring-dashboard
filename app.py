@@ -15,6 +15,8 @@ import os
 import html
 import admin_pages
 import pnl_reports
+import franchise_inputs
+import franchise_report
 import composition_report
 import membership_composition
 import membership_trend
@@ -301,6 +303,18 @@ def load_pnl():
         st.error(f"Could not load the P&L tab ({e}). Click Refresh data to try again.")
         return pd.DataFrame()
 
+@st.cache_data(ttl=300)
+def _load_franchise_versions():
+    return franchise_inputs.read_versions(get_sheets_client().open_by_key(SHEET_ID))
+
+def load_franchise_versions():
+    """The uploaded franchise model assumptions ({version: rows}); {} if none or unreadable."""
+    try:
+        return _load_franchise_versions()
+    except Exception as e:
+        st.error(f"Could not load the Franchise Model tab ({e}). Click Refresh data to try again.")
+        return {}
+
 def _load_tab_or_empty(tab):
     """A tab that may not exist yet: empty if missing. A failed read is not cached."""
     try:
@@ -333,7 +347,6 @@ def report_pnl(df_wm, page=None):
         # Sessions for every centre; names only for centres this viewer may see.
         revenue=load_revenue(), holidays=load_school_holidays(),
         composition=membership_composition.prepare(_load_tab_or_empty(membership_composition.TAB)),
-        rrp=membership_composition.rrp_table(_load_tab_or_empty(membership_composition.RRP_TAB)),
         can_name=lambda loc: st.session_state.get("access_level") == "admin"
         or loc in st.session_state.get("allowed_locations", []),
         viewer_name=st.session_state.get("user_name", "")),
@@ -2455,7 +2468,8 @@ elif selected_report=="12 · P&L Summary":            report_pnl(df_wm)
 elif selected_report=="13 · P&L Deep Dive":          report_pnl(df_wm, pnl_reports.report_centre)
 elif selected_report=="14 · P&L Share":              report_pnl(df_wm, pnl_reports.report_share)
 elif selected_report=="15 · P&L Centre Forecast":    report_pnl(df_wm, pnl_reports.report_forecast)
-elif selected_report=="16 · Franchise Model":        report_pnl(df_wm, pnl_reports.report_franchise_model)
+elif selected_report=="16 · Franchise Model":        franchise_report.report_franchise_model(
+    load_franchise_versions(), dict(show_chart=show_chart, std_layout=std_layout))
 elif selected_report=="17 · Membership Composition": report_composition()
 elif selected_report=="11 · AI Outlier Analysis":     report_outliers_alerts(df_wm, df_rv)
 elif selected_report in ADMIN_PAGES:

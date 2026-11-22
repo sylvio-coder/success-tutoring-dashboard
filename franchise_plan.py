@@ -453,15 +453,17 @@ def thresholds(s, start):
     )
 
 
+# (Cancelled % is left out: members follow the targets, so it changes the new members and
+# advertising needed, not profit.)
 SENSITIVITY = [("Standard price", "standard"), ("Member targets", "targets"),
-               ("Cancelled %", "cancel"), ("Students per study hub", "fill"),
-               ("Rent", "rent"), ("Collected %", "collected"), ("Tutor hourly rate", "rate")]
+               ("Students per study hub", "fill"), ("Rent", "rent"), ("Collected %", "collected"),
+               ("Tutor hourly rate", "rate"), ("Owner's salary", "owner_wage")]
 
 
 def sensitivity(s, start, step=0.10):
     """Payback and 5-year profit with each input 10% worse and 10% better."""
     rows = []
-    worse_up = {"cancel", "rent", "rate"}                # higher is worse for these
+    worse_up = {"rent", "rate", "owner_wage"}            # higher is worse for these
     for label, key in SENSITIVITY:
         r = {"Input": label}
         for name, k in (("10% worse", -1), ("10% better", 1)):
