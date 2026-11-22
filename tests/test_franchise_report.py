@@ -45,6 +45,7 @@ def test_page_shows_every_section_for_an_admin():
               "Standard price", "Enquiries needed a month", "Study hubs a week",
               "Centre opens", "Investment paid back", "What moves the result most",
               "Opening month", "Profit after salary", "Owner's total return, 5 years",
+              "Average owner&#x27;s return a year",
               "total return (salary + profit)"]:
         assert h in t, h
     assert at.selectbox(key="fr_model").options == ["AU National"]   # NSW not ready

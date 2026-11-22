@@ -140,6 +140,8 @@ def summary_cards(res):
                 ("Owner's salary, 5 years", money(sm["owner_5y"])),
                 ("<b>Owner's total return, 5 years</b>",
                  f"<b>{money(sm['owner_5y'] + sm['profit_5y'])}</b>"),
+                ("Average owner's return a year",
+                 money((sm["owner_5y"] + sm["profit_5y"]) / 5)),
                 ("First month in profit", "–" if sm["first_profit"] is None
                  else f"Month {sm['first_profit']}"),
                 ("Yearly return (IRR)", "–" if sm["irr"] is None else f"{sm['irr'] * 100:.0f}%"),
