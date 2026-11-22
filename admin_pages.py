@@ -4,6 +4,7 @@ from datetime import date, timedelta
 import pandas as pd
 import streamlit as st
 
+import franchise_inputs as fin
 import ingest
 import membership_composition as mc
 import pnl
@@ -900,3 +901,100 @@ def page_composition_upload(spreadsheet, df_wm, df_rv, clear_cache):
             st.error(f"Writing to the Sheet failed: {e}\n\n{WRITE_HINT}")
     elif blocked:
         st.caption("Resolve the items above to enable writing.")
+
+
+# ── Franchise Model upload ─────────────────────────────────────────────────────
+def _now_label():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    return datetime.now(ZoneInfo("Australia/Sydney")).strftime("%d/%m/%Y %I:%M %p")
+
+
+def _readiness_table(rows):
+    ready = fin.readiness(rows)
+    counts = {}
+    for r in rows:
+        counts[r["Model"]] = counts.get(r["Model"], 0) + 1
+    st.dataframe(pd.DataFrame([{"Model": m, "Inputs": counts[m],
+                                "Status": "Ready" if not p else f"Not ready: {len(p)} to fix"}
+                               for m, p in ready.items()]),
+                 hide_index=True, width="stretch")
+    for m, p in ready.items():
+        if p:
+            with st.expander(f"{m}: what to fix ({len(p)})"):
+                st.markdown("\n".join(f"- {x}" for x in p[:60]) +
+                            (f"\n- … and {len(p) - 60} more" if len(p) > 60 else ""))
+    return ready
+
+
+def page_franchise_upload(spreadsheet, df_wm, df_rv, clear_cache):
+    st.markdown('<div class="report-title">Franchise Model Upload</div>', unsafe_allow_html=True)
+    _subtitle("Upload the franchise model assumptions workbook (.xlsx). From Google Sheets: "
+              "File → Download → Microsoft Excel. The Franchise Model report uses the latest "
+              "upload; the one before it is kept so you can step back.")
+    try:
+        versions = fin.read_versions(spreadsheet)
+    except Exception as e:
+        st.error(f"Could not read the '{fin.TAB}' tab: {e}")
+        return
+    cur_v, cur_rows, cur_when = fin.latest(versions)
+    if cur_v:
+        ready = [m for m, p in fin.readiness(cur_rows).items() if not p]
+        st.caption(f"In use now: upload {cur_v} from {cur_when} · ready: "
+                   + (", ".join(ready) if ready else "none"))
+    else:
+        st.caption("No model uploaded yet.")
+
+    f = st.file_uploader("Assumptions workbook", type=["xlsx"], key="fm_file")
+    if f:
+        try:
+            rows, problems = fin.read_workbook(f.getvalue())
+        except fin.InputsError as e:
+            st.error(str(e))
+            return
+        if problems:
+            st.error("Fix these in the workbook and upload it again:\n" +
+                     "\n".join(f"- {m}{' · ' + v if v else ''}: {msg}"
+                                for m, v, msg in problems))
+        st.markdown("#### Models in this file")
+        ready = _readiness_table(rows)
+        st.markdown("#### Changes since the upload in use")
+        if not cur_v:
+            st.caption("First upload: everything is new.")
+        else:
+            ch = fin.changes(cur_rows, rows)
+            if ch:
+                st.dataframe(pd.DataFrame(ch, columns=["Model", "Input", "Changed", "Was", "Now"])
+                             .astype(str), hide_index=True, width="stretch")
+            else:
+                st.caption("No changes: the values are the same as the upload in use.")
+        if not any(not p for p in ready.values()):
+            st.warning("No model is ready yet. You can still save it, but the report needs at "
+                       "least one ready model.")
+        if st.button("✅ Save this upload", type="primary", disabled=bool(problems),
+                     key="fm_save"):
+            try:
+                with st.spinner("Writing to the Sheet..."):
+                    v = fin.save_version(spreadsheet, rows, _now_label())
+                clear_cache()
+                st.success(f"Saved as upload {v}. The Franchise Model report now uses it.")
+            except Exception as e:
+                st.error(f"Writing to the Sheet failed: {e}\n\n{WRITE_HINT}")
+    else:
+        st.info("Upload the workbook to check it and see what changed. Nothing is written "
+                "until you click Save.")
+
+    if len(versions) >= 2:
+        prev = sorted(versions)[-2]
+        with st.expander("Step back to the previous upload"):
+            when = versions[prev][0].get("Uploaded", "")
+            st.caption(f"Upload {prev} from {when}. Restoring saves it again as the newest "
+                       "upload; the one in use now is kept as the previous one.")
+            if st.button("Restore the previous upload", key="fm_restore"):
+                try:
+                    with st.spinner("Writing to the Sheet..."):
+                        v = fin.save_version(spreadsheet, versions[prev], _now_label())
+                    clear_cache()
+                    st.success(f"Restored as upload {v}.")
+                except Exception as e:
+                    st.error(f"Writing to the Sheet failed: {e}\n\n{WRITE_HINT}")

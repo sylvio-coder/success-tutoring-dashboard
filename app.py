@@ -2330,7 +2330,7 @@ ADMIN_ONLY_REPORTS = {"15 · P&L Centre Forecast", "16 · Franchise Model",
                       "17 · Membership Composition"}
 if st.session_state.get("access_level") != "admin":
     REPORTS = [r for r in REPORTS if r not in ADMIN_ONLY_REPORTS]
-ADMIN_PAGES = ["⚙ Weekly Upload", "⚙ P&L Upload", "⚙ Composition Upload", "⚙ Locations", "⚙ Sheet Setup"] if st.session_state.get("access_level") == "admin" else []
+ADMIN_PAGES = ["⚙ Weekly Upload", "⚙ P&L Upload", "⚙ Composition Upload", "⚙ Franchise Model Upload", "⚙ Locations", "⚙ Sheet Setup"] if st.session_state.get("access_level") == "admin" else []
 if not REPORTS:
     st.warning("No reports are assigned to your account. Please contact your administrator."); st.stop()
 
@@ -2365,6 +2365,7 @@ ADMIN_NAV = [
     ("⚙ Weekly Upload", "Weekly Upload", ":material/upload_file:"),
     ("⚙ P&L Upload",    "P&L Upload",    ":material/request_quote:"),
     ("⚙ Composition Upload", "Composition Upload", ":material/upload:"),
+    ("⚙ Franchise Model Upload", "Franchise Model Upload", ":material/savings:"),
     ("⚙ Locations",     "Locations",     ":material/store:"),
     ("⚙ Sheet Setup",   "Sheet Setup",   ":material/table_chart:"),
 ]
@@ -2462,6 +2463,7 @@ elif selected_report in ADMIN_PAGES:
     page = {"⚙ Weekly Upload": admin_pages.page_weekly_upload,
             "⚙ P&L Upload": admin_pages.page_pnl_upload,
             "⚙ Composition Upload": admin_pages.page_composition_upload,
+            "⚙ Franchise Model Upload": admin_pages.page_franchise_upload,
             "⚙ Locations": admin_pages.page_locations,
             "⚙ Sheet Setup": admin_pages.page_sheet_setup}[selected_report]
     page(spreadsheet, df_wm, df_rv, st.cache_data.clear)
