@@ -21,6 +21,8 @@ CRM = "P&L"                     # alias scope: names matched for P&L uploads onl
 
 REVENUE_CODES = {200, 260, 270}
 TUTOR_CODES = {472, 474}
+TUTOR = "Tutor Wages + Super"
+GROSS_MARGIN = "Gross Margin"   # Total Revenue - Tutor Wages + Super (a subtotal, not a cost)
 EXCLUDED_CODES = {479}          # Unrelated Expenses: memo only, not in profit
 INTEREST_CODES = {437}
 
@@ -337,9 +339,28 @@ def location_months(lines):
         if c not in out.columns:
             out[c] = 0.0
     costs = [r for r in ROW_ORDER if r != "Total Revenue"]
+    out[GROSS_MARGIN] = out["Total Revenue"] - out[TUTOR]
     out["EBITDA"] = out["Total Revenue"] - out[costs].sum(axis=1)
     out["Net Profit"] = out["EBITDA"] - out["Interest"]
-    return out[ROW_ORDER + ["EBITDA", "Interest", "Net Profit"]]
+    return out[ROW_ORDER + [GROSS_MARGIN, "EBITDA", "Interest", "Net Profit"]]
+
+
+def gross_margin_pct(revenue, tutor):
+    """Gross margin as a % of revenue (None when there is no revenue)."""
+    if revenue is None or tutor is None or pd.isna(revenue) or pd.isna(tutor) or revenue <= 0:
+        return None
+    return (revenue - tutor) / revenue * 100
+
+
+def with_gross_margin(obj):
+    """A copy of a row (dict / Series) or table (DataFrame) with Gross Margin added when it
+    is missing and Total Revenue and Tutor Wages + Super are there."""
+    has = (lambda k: k in obj.columns) if isinstance(obj, pd.DataFrame) else (lambda k: k in obj)
+    if has(GROSS_MARGIN) or not (has("Total Revenue") and has(TUTOR)):
+        return obj
+    out = obj.copy()
+    out[GROSS_MARGIN] = out["Total Revenue"] - out[TUTOR]
+    return out
 
 
 def royalty(revenue, royalty_min, rate=ROYALTY_RATE):
@@ -375,6 +396,7 @@ def model_column(members, per_member, tutor_pct, fixed_lines, royalty_min):
            "Royalties": royalty(rev, royalty_min)}
     col.update({k: fixed_lines.get(k, 0.0) for k in FIXED_ROWS})
     col["EBITDA"] = rev - sum(v for k, v in col.items() if k != "Total Revenue")
+    col[GROSS_MARGIN] = rev - col[TUTOR]
     return col
 
 
@@ -523,8 +545,10 @@ def break_even_banded(per_member, fixed, royalty_min, rates, centres=1, max_memb
 
 
 # ── Benchmarks and outliers ───────────────────────────────────────────────────
-BENCH_LINES = ROW_ORDER[1:] + ["EBITDA"]
-HIGHER_IS_BETTER = {"EBITDA", "Total Revenue", "Average Membership Value"}
+# Gross Margin sits straight after Tutor Wages + Super, as in the tables.
+BENCH_LINES = [TUTOR, GROSS_MARGIN] + [r for r in ROW_ORDER[1:] if r != TUTOR] + ["EBITDA"]
+HIGHER_IS_BETTER = {"EBITDA", "Total Revenue", "Average Membership Value", GROSS_MARGIN}
+NOT_COSTS = {"EBITDA", GROSS_MARGIN}   # results, left out of "costs above typical" totals
 MANAGER = "Wages - Manager/Admin + Super"
 MIN_PEERS = 5                   # ranges from fewer centres jump around too much
 
@@ -585,6 +609,7 @@ def compare_lines(values, peers, lines):
     """Each line as % of revenue against the peers' typical (median) and normal range
     (middle half). Gap $ = what the difference from typical is worth each month:
     positive means it costs more (or earns less) than typical."""
+    values, peers = with_gross_margin(values), with_gross_margin(peers)
     rev = values["Total Revenue"]
     rows = []
     pp = peers[peers["Total Revenue"] > 0]

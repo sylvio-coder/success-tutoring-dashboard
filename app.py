@@ -15,6 +15,10 @@ import os
 import html
 import admin_pages
 import pnl_reports
+import franchise_inputs
+import franchise_report
+import composition_report
+import membership_composition
 import membership_trend
 from dotenv import load_dotenv
 
@@ -299,6 +303,36 @@ def load_pnl():
         st.error(f"Could not load the P&L tab ({e}). Click Refresh data to try again.")
         return pd.DataFrame()
 
+@st.cache_data(ttl=300)
+def _load_franchise_versions():
+    return franchise_inputs.read_versions(get_sheets_client().open_by_key(SHEET_ID))
+
+def load_franchise_versions():
+    """The uploaded franchise model assumptions ({version: rows}); {} if none or unreadable."""
+    try:
+        return _load_franchise_versions()
+    except Exception as e:
+        st.error(f"Could not load the Franchise Model tab ({e}). Click Refresh data to try again.")
+        return {}
+
+def _load_tab_or_empty(tab):
+    """A tab that may not exist yet: empty if missing. A failed read is not cached."""
+    try:
+        return load_sheet_data(tab)
+    except gspread.exceptions.WorksheetNotFound:
+        return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Could not load the {tab} tab ({e}). Click Refresh data to try again.")
+        return pd.DataFrame()
+
+def report_composition():
+    """Membership Composition. Admins see every centre; anyone else only their own."""
+    composition_report.report_composition(
+        _load_tab_or_empty(membership_composition.TAB), load_vlookup(),
+        _load_tab_or_empty(membership_composition.RRP_TAB),
+        allowed=None if st.session_state.get("access_level") == "admin"
+        else list(st.session_state.get("allowed_locations", [])))
+
 def report_pnl(df_wm, page=None):
     """P&L reports. Admins see every centre; anyone else only their own (none if not set).
     Typical values for comparisons use every centre, but other centres are never named."""
@@ -313,9 +347,11 @@ def report_pnl(df_wm, page=None):
         state_of=lambda r: REGION_TO_STATE.get(r, r) if isinstance(r, str) and r.strip() else None,
         show_chart=show_chart, std_layout=std_layout, report_filters=report_filters,
         # Sessions for every centre; names only for centres this viewer may see.
-        revenue=load_revenue(),
+        revenue=load_revenue(), holidays=load_school_holidays(),
+        composition=membership_composition.prepare(_load_tab_or_empty(membership_composition.TAB)),
         can_name=lambda loc: st.session_state.get("access_level") == "admin"
-        or loc in st.session_state.get("allowed_locations", [])),
+        or loc in st.session_state.get("allowed_locations", []),
+        viewer_name=st.session_state.get("user_name", "")),
         bench=(full, load_weekly_membership()))
 
 @st.cache_data(ttl=300)
@@ -2283,11 +2319,15 @@ REPORTS=[
     "1 · Campus Locations",
     "2 · Membership",
     "3 · Membership by Age",
+    "17 · Membership Composition",
     "8 · Net Growth Rate %",
     "9 · Onboarding Progress",
     "10 · Revenue",
     "12 · P&L Summary",
     "13 · P&L Deep Dive",
+    "14 · P&L Share",
+    "15 · P&L Centre Forecast",
+    "16 · Franchise Model",
     "11 · AI Outlier Analysis",
 ]
 
@@ -2300,7 +2340,11 @@ def report_allowed(report, allowed_tabs):
     return num in tabs or name.lower() in tabs or report.lower() in tabs
 
 REPORTS = [r for r in REPORTS if report_allowed(r, st.session_state.get("allowed_tabs", []))]
-ADMIN_PAGES = ["⚙ Weekly Upload", "⚙ P&L Upload", "⚙ Locations", "⚙ Sheet Setup"] if st.session_state.get("access_level") == "admin" else []
+# Admin-only reports: hidden from everyone else, even with allowed_tabs "all".
+ADMIN_ONLY_REPORTS = {"15 · P&L Centre Forecast", "16 · Franchise Model"}
+if st.session_state.get("access_level") != "admin":
+    REPORTS = [r for r in REPORTS if r not in ADMIN_ONLY_REPORTS]
+ADMIN_PAGES = ["⚙ Weekly Upload", "⚙ P&L Upload", "⚙ Composition Upload", "⚙ Franchise Model Upload", "⚙ Locations", "⚙ Sheet Setup"] if st.session_state.get("access_level") == "admin" else []
 if not REPORTS:
     st.warning("No reports are assigned to your account. Please contact your administrator."); st.stop()
 
@@ -2313,6 +2357,7 @@ NAV_GROUPS = [
     ("Membership", [
         ("2 · Membership",          "Membership",          ":material/groups:"),
         ("3 · Membership by Age",   "Membership by Age",   ":material/stacks:"),
+        ("17 · Membership Composition", "Membership Composition", ":material/donut_large:"),
     ]),
     ("Growth", [
         ("8 · Net Growth Rate %",   "Net Growth Rate %",   ":material/trending_up:"),
@@ -2321,6 +2366,9 @@ NAV_GROUPS = [
         ("10 · Revenue",            "Revenue",             ":material/attach_money:"),
         ("12 · P&L Summary",        "P&L – Group Level",   ":material/account_balance:"),
         ("13 · P&L Deep Dive",      "P&L – Centre Level",  ":material/query_stats:"),
+        ("15 · P&L Centre Forecast", "P&L – Centre Forecast", ":material/timeline:"),
+        ("14 · P&L Share",          "P&L Share",           ":material/ios_share:"),
+        ("16 · Franchise Model",    "Franchise Model",     ":material/savings:"),
     ]),
     ("Insights", [
         ("11 · AI Outlier Analysis",            "Outliers & Alerts",    ":material/notification_important:"),
@@ -2330,6 +2378,8 @@ NAV_GROUPS = [
 ADMIN_NAV = [
     ("⚙ Weekly Upload", "Weekly Upload", ":material/upload_file:"),
     ("⚙ P&L Upload",    "P&L Upload",    ":material/request_quote:"),
+    ("⚙ Composition Upload", "Composition Upload", ":material/upload:"),
+    ("⚙ Franchise Model Upload", "Franchise Model Upload", ":material/savings:"),
     ("⚙ Locations",     "Locations",     ":material/store:"),
     ("⚙ Sheet Setup",   "Sheet Setup",   ":material/table_chart:"),
 ]
@@ -2417,11 +2467,18 @@ elif selected_report=="9 · Onboarding Progress":      report_onboarding(df_wm)
 elif selected_report=="10 · Revenue":                 report_revenue(df_rv)
 elif selected_report=="12 · P&L Summary":            report_pnl(df_wm)
 elif selected_report=="13 · P&L Deep Dive":          report_pnl(df_wm, pnl_reports.report_centre)
+elif selected_report=="14 · P&L Share":              report_pnl(df_wm, pnl_reports.report_share)
+elif selected_report=="15 · P&L Centre Forecast":    report_pnl(df_wm, pnl_reports.report_forecast)
+elif selected_report=="16 · Franchise Model":        franchise_report.report_franchise_model(
+    load_franchise_versions(), dict(show_chart=show_chart, std_layout=std_layout))
+elif selected_report=="17 · Membership Composition": report_composition()
 elif selected_report=="11 · AI Outlier Analysis":     report_outliers_alerts(df_wm, df_rv)
 elif selected_report in ADMIN_PAGES:
     spreadsheet = get_sheets_client().open_by_key(SHEET_ID)
     page = {"⚙ Weekly Upload": admin_pages.page_weekly_upload,
             "⚙ P&L Upload": admin_pages.page_pnl_upload,
+            "⚙ Composition Upload": admin_pages.page_composition_upload,
+            "⚙ Franchise Model Upload": admin_pages.page_franchise_upload,
             "⚙ Locations": admin_pages.page_locations,
             "⚙ Sheet Setup": admin_pages.page_sheet_setup}[selected_report]
     page(spreadsheet, df_wm, df_rv, st.cache_data.clear)

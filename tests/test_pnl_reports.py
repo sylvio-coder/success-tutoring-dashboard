@@ -498,3 +498,101 @@ def test_session_chart_names_follow_access():
     at = AppTest.from_function(script, args=("gpm",), default_timeout=30).run()
     charts = " ".join(str(c.proto.spec) for c in at.get("plotly_chart"))
     assert "Howick" in charts and "Auburn" not in charts and "Another centre" in charts
+
+
+# ── Gross Margin (Total Revenue − Tutor Wages + Super) ───────────────────────
+def _row(html_table, label):
+    return html_table.split(f">{label}</td>")[1].split("</tr>")[0]
+
+
+def test_gross_margin_maths():
+    lm = pnl.location_months(PNL)
+    auburn = lm.loc[("Success Tutoring - Auburn", "2026-08")]
+    assert auburn[pnl.GROSS_MARGIN] == 12600 - 3300 - 396
+    assert auburn["EBITDA"] == pytest.approx(12600 - (3300 + 396 + 3500 + 250 + 900 + 2000))
+    assert pnl.gross_margin_pct(12600, 3696) == pytest.approx(8904 / 12600 * 100)
+    assert pnl.gross_margin_pct(0, 100) is None and pnl.gross_margin_pct(None, 1) is None
+    col = pnl.model_column(50, 252, 0.3, {}, 2200)
+    assert col[pnl.GROSS_MARGIN] == pytest.approx(12600 * 0.7)
+    row = pnl.with_gross_margin({"Total Revenue": 100.0, "Tutor Wages + Super": 30.0})
+    assert row[pnl.GROSS_MARGIN] == 70.0
+    assert pnl.with_gross_margin({"Total Revenue": 1.0}) == {"Total Revenue": 1.0}
+    # Straight after tutor wages, a result rather than a cost, and higher is better.
+    assert pnl.BENCH_LINES[:2] == ["Tutor Wages + Super", pnl.GROSS_MARGIN]
+    assert pnl.GROSS_MARGIN in pnl.HIGHER_IS_BETTER and pnl.GROSS_MARGIN in pnl.NOT_COSTS
+    assert pnl.GROSS_MARGIN not in pnl.ROW_ORDER          # never added into EBITDA
+
+
+def test_gross_margin_benchmarked_against_similar_centres():
+    b = bench_frame()                              # no Gross Margin column: worked out
+    peers, _ = pnl.peer_set(b, "Australia", 55, "Big")
+    cmp = pnl.compare_lines(b.loc["Big"], peers, pnl.BENCH_LINES).set_index("Line")
+    gm = cmp.loc[pnl.GROSS_MARGIN]
+    assert gm["Actual $"] == 4000 and gm["Actual %"] == 40.0
+    assert gm["Typical %"] == pytest.approx(100 - 38.5)
+    assert gm["Status"] == "Very low" and pnl.is_bad(pnl.GROSS_MARGIN, gm["Status"])
+    assert gm["Gap $"] == pytest.approx(6000 - 3850)      # earns this much less a month
+    assert list(cmp.index[:2]) == ["Tutor Wages + Super", pnl.GROSS_MARGIN]
+
+
+def test_group_report_shows_gross_margin_under_tutor_wages():
+    at = run_report()
+    assert not at.exception, at.exception
+    at.selectbox(key="pnl_group_view").set_value("Network").run()
+    table = next(m.value for m in at.markdown if "pnl-wrap" in m.value)
+    assert table.index(">Tutor Wages + Super<") < table.index(">Gross Margin<") < \
+        table.index(">Rent<")
+    assert '<tr class="subtotal"><td class="lbl">Gross Margin</td>' in table     # bold row
+    row = _row(table, "Gross Margin")
+    assert "$8,904" in row and "70.7%" in row        # Auburn, August: 12,600 − 3,696
+    assert "$18,304" in row        # network total in AUD: 8,904 + 4,000 + 6,000 NZD × 0.9
+
+
+def test_group_report_gross_margin_for_a_gpm():
+    at = run_report("gpm", ["Success Tutoring - Howick"])
+    assert not at.exception, at.exception
+    table = next(m.value for m in at.markdown if "pnl-wrap" in m.value)
+    assert "Howick" in table and "Auburn" not in table and "Burwood" not in table
+    assert "$6,000" in _row(table, "Gross Margin")          # 8,000 − 2,000 (NZD)
+
+
+def test_centre_report_shows_gross_margin_in_every_table():
+    at = run_centre()
+    assert not at.exception, at.exception
+    at.selectbox(key="pc_centre").set_value("Auburn").run()
+    assert not at.exception, at.exception
+    be = next(m.value for m in at.markdown if "pnl-wrap" in m.value)     # break-even table
+    assert be.index(">Tutor Wages + Super<") < be.index(">Gross Margin<") < be.index(">Rent<")
+    assert "$8,904" in _row(be, "Gross Margin") and "Total Revenue − Tutor Wages" in be
+    frames = [d.value.data if hasattr(d.value, "data") else d.value for d in at.dataframe]
+    acc = next(f for f in frames if "Account" in f.columns)
+    names = list(acc["Account"])
+    assert names.index("472") < names.index(pnl.GROSS_MARGIN) < names.index("469")
+    assert acc.loc[acc["Account"] == pnl.GROSS_MARGIN].iloc[0, -1] == "$8,904"
+    full = next(f for f in frames if "Line" in f.columns and "Members" in list(f["Line"]))
+    lines_ = list(full["Line"])
+    assert lines_.index("Tutor Wages + Super") + 1 == lines_.index(pnl.GROSS_MARGIN)
+    at.selectbox(key="pc_unit").set_value("% of revenue").run()
+    assert not at.exception, at.exception
+    frames = [d.value.data if hasattr(d.value, "data") else d.value for d in at.dataframe]
+    acc = next(f for f in frames if "Account" in f.columns)
+    assert acc.loc[acc["Account"] == pnl.GROSS_MARGIN].iloc[0, -1] == "70.7%"
+    assert "Gross Margin" in pr.HOW_CENTRE and "Gross Margin" in pr.HOW_GROUP
+
+
+def test_centre_report_gross_margin_for_a_gpm():
+    at = run_centre("gpm", ["Success Tutoring - Howick"])
+    assert not at.exception, at.exception
+    text = "".join(m.value for m in at.markdown)
+    assert "Gross Margin" in text and "Auburn" not in text and "Burwood" not in text
+    assert "$6,000" in _row(next(m.value for m in at.markdown if "pnl-wrap" in m.value),
+                            "Gross Margin")
+
+
+def test_centre_outliers_pin_gross_margin_and_leave_it_out_of_costs():
+    b = bench_frame()
+    peers, desc = pnl.peer_set(b, "Australia", 55, "Big")
+    table = pr.comparison_rows(b.loc["Big"], peers, pnl.BENCH_LINES)
+    shown = pr.gross_margin_first(table)
+    assert shown.iloc[0]["Line"] == pnl.GROSS_MARGIN
+    assert len(shown) == len(table)

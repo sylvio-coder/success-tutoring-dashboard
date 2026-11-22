@@ -1,11 +1,18 @@
 """P&L reports: summary in the centres side-by-side layout, and the break-even model."""
+import base64
 import html
+import io
+import os
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
 import pnl
+import pnl_forecast as pf
+import pnl_share
 
 LOC = "Success Tutoring - Business name"
 PREFIX = "Success Tutoring - "
@@ -20,6 +27,7 @@ TABLE_ROWS = [
     (None, None, "gap"),
     ("Total Revenue", "Total Revenue", "total"),
     ("Tutor Wages + Super", "Tutor Wages + Super", "line"),
+    ("Gross Margin", pnl.GROSS_MARGIN, "subtotal"),
     ("Rent", "Rent", "line"),
     ("Wages - Manager/Admin + Super", "Wages - Manager/Admin + Super", "line"),
     ("Royalties", "Royalties", "line"),
@@ -34,7 +42,11 @@ TABLE_ROWS = [
     ("Break-even members", "BE members", "count"),
     ("Members above / below break-even", "BE gap", "count"),
 ]
-AMOUNT_KEYS = pnl.ROW_ORDER + ["EBITDA", "Interest", "Net Profit"]
+AMOUNT_KEYS = pnl.ROW_ORDER + [pnl.GROSS_MARGIN, "EBITDA", "Interest", "Net Profit"]
+# Members, AMV and the condensed P&L down to EBITDA (no months reported, interest or net profit)
+MODEL_ROWS = [r for r in TABLE_ROWS[:TABLE_ROWS.index(("EBITDA", "EBITDA", "result")) + 1]
+              if r[1] != "Months"]
+GM_NOTE = "Total Revenue − Tutor Wages + Super"
 
 CSS = """<style>
 .pnl-wrap{overflow-x:auto;border:1px solid #dde5e6;border-radius:6px;background:#fff;margin-bottom:8px}
@@ -47,7 +59,8 @@ CSS = """<style>
 .pnl td.note{text-align:left;color:#5d6d73;font-size:12px}
 .pnl tr.input td{background:#eef1f3}
 .pnl tr.input td.lbl{background:#eef1f3}
-.pnl tr.total td,.pnl tr.result td{font-weight:700}
+.pnl tr.total td,.pnl tr.result td,.pnl tr.subtotal td{font-weight:700}
+.pnl tr.subtotal td,.pnl tr.subtotal td.lbl{background:#f2f8f8;border-top:1px solid #b9d3d6}
 .pnl tr.result td{border-top:1.5px solid #1c2a30;border-bottom:2px solid #1c2a30}
 .pnl tr.gap td{border:none;height:10px}
 .pnl td.neg{color:#c8322f}
@@ -209,6 +222,17 @@ DISCLAIMER = ("Break-even figures are estimates from network benchmarks and this
 
 
 # ── Rendering ─────────────────────────────────────────────────────────────────
+def _gross_margin(c):
+    """A column's Gross Margin (worked out if it isn't there; None if it can't be)."""
+    v = c.get(pnl.GROSS_MARGIN)
+    if v is not None and not pd.isna(v):
+        return v
+    rev, tutor = c.get("Total Revenue"), c.get(pnl.TUTOR)
+    if rev is None or tutor is None or pd.isna(rev) or pd.isna(tutor):
+        return None
+    return rev - tutor
+
+
 def side_by_side_html(cols, notes=None, rows=None):
     rows = rows or TABLE_ROWS
     head = '<tr><th class="lbl">Account</th>' + "".join(
@@ -222,7 +246,7 @@ def side_by_side_html(cols, notes=None, rows=None):
             continue
         cells = []
         for _, _, c in cols:
-            v = c.get(key)
+            v = _gross_margin(c) if key == pnl.GROSS_MARGIN else c.get(key)
             rev = c.get("Total Revenue")
             if key in AMOUNT_KEYS:
                 neg = " neg" if v is not None and not pd.isna(v) and v < -0.5 else ""
@@ -290,6 +314,18 @@ def _md(text):
 
 def _fmt_pct(v):
     return "" if v is None or pd.isna(v) else f"{v:.1f}%"
+
+
+def bold_gross_margin(df, col):
+    """The table styled with its Gross Margin row(s) in bold (for st.dataframe)."""
+    return df.style.apply(lambda r: ["font-weight:700; background-color:#f2f8f8"] * len(r)
+                          if r[col] == pnl.GROSS_MARGIN else [""] * len(r), axis=1)
+
+
+def gross_margin_first(df, col="Line"):
+    """Gross Margin pinned to the top, the other rows in their order."""
+    gm = df[col] == pnl.GROSS_MARGIN
+    return pd.concat([df[gm], df[~gm]])
 
 
 def comparison_rows(values, peers, lines):
@@ -364,7 +400,8 @@ def months_shown(index, span, month):
     if span == "Year to date":
         return [p for p in ps if p >= f"{month[:4]}-01"]
     return ps
-TREND_LINES = pnl.ROW_ORDER + ["EBITDA", "Net Profit"]
+TREND_LINES = [pnl.ROW_ORDER[0], pnl.TUTOR, pnl.GROSS_MARGIN] + \
+    [r for r in pnl.ROW_ORDER[1:] if r != pnl.TUTOR] + ["EBITDA", "Net Profit"]
 
 
 def location_info(df_pnl, vl):
@@ -420,6 +457,7 @@ def entity_months(lm, members, info, locs):
 
 
 def _in_units(df, unit, lines):
+    df = pnl.with_gross_margin(df)
     if unit == "% of revenue":
         rev = df["Total Revenue"].where(df["Total Revenue"] > 0)
         return df[lines].div(rev, axis=0) * 100
@@ -479,6 +517,7 @@ HOW_GROUP = f"""
   settings above); rent, manager wages, marketing and OPEX stay at the centre's own amounts;
   royalties are the higher of the centre's Royalty Min (Vlookup, blank = 2,200) or 8% of
   revenue. ⚠ = the tutor % used comes from fewer than {pnl.SMALL_SAMPLE} centres.
+- **Gross Margin** = Total Revenue − Tutor Wages + Super (accounts 472 and 474), with its % of revenue. Higher is better. It is a subtotal, so it is never added into costs or EBITDA.
 - **Outliers**: each centre is compared with similar centres across the whole network (same
   country and members band; centres under 12 months old with other developing centres).
   Other centres are counted but never named. Centres with under {pnl.LOW_REVENUE:,} revenue
@@ -698,10 +737,12 @@ def _centre_outliers(pick, values, peers, desc, acct_values, acct_peers, label):
         table = comparison_rows(values, peers, pnl.BENCH_LINES)
     st.caption(f"{pick} compared with {desc} ({label}). 'Cost vs typical' is what the "
                "difference is worth each month: positive costs money, negative saves it.")
-    show = table.sort_values("Cost vs typical $/month", ascending=False, key=lambda s: s.fillna(0))
-    st.dataframe(show, hide_index=True, use_container_width=True, column_config={
-        "Cost vs typical $/month": st.column_config.NumberColumn(format="%,.0f")})
-    lines_only = show[~show["Line"].isin(["EBITDA", "↳ vs centres that pay a manager"])]
+    show = gross_margin_first(table.sort_values("Cost vs typical $/month", ascending=False,
+                                                key=lambda s: s.fillna(0)))
+    st.dataframe(bold_gross_margin(show, "Line"), hide_index=True, use_container_width=True,
+                 column_config={"Cost vs typical $/month":
+                                st.column_config.NumberColumn(format="%,.0f")})
+    lines_only = show[~show["Line"].isin(pnl.NOT_COSTS | {"↳ vs centres that pay a manager"})]
     costly = lines_only[lines_only["Cost vs typical $/month"].fillna(0) > 0]
     ebitda = values.get("EBITDA")
     parts = [f"**{pick}** {'made' if ebitda >= 0 else 'lost'} **{_money(abs(ebitda))}** "
@@ -714,6 +755,22 @@ def _centre_outliers(pick, values, peers, desc, acct_values, acct_peers, label):
             parts.append(f"If every line above typical were typical, EBITDA would be about "
                          f"**{_money(ebitda + costly['Cost vs typical $/month'].sum())}**.")
     st.markdown(_md(" ".join(parts)))
+
+
+GM_SECTION = "Revenue − tutor wages + super"
+
+
+def with_gross_margin_row(acc):
+    """Every-account table ($, index P&L section / Account code / Account) with a Gross
+    Margin row after the revenue and cost of sales accounts."""
+    codes = pd.to_numeric(pd.Series(acc.index.get_level_values("Account code")),
+                          errors="coerce").values
+    rev = acc[pd.Series(codes).isin(pnl.REVENUE_CODES).values].sum()
+    tutor = acc[pd.Series(codes).isin(pnl.TUTOR_CODES).values].sum()
+    row = pd.DataFrame([rev - tutor], columns=acc.columns, index=pd.MultiIndex.from_tuples(
+        [(GM_SECTION, -1, pnl.GROSS_MARGIN)], names=acc.index.names))
+    top = acc.index.get_level_values("P&L section").isin(["Revenue", "Cost of Sales"])
+    return pd.concat([acc[top], row, acc[~top]])
 
 
 def _break_even(pick, cur, col, label, rates, samples):
@@ -747,8 +804,8 @@ def _break_even(pick, cur, col, label, rates, samples):
              "Tutor Wages + Super": "Benchmark % for established centres of this size",
              "Royalties": f"Higher of ${rmin:,.0f} or 8% of revenue"}
     notes.update({k: "Centre's own amount (fixed)" for k in pnl.FIXED_ROWS})
-    rows = [r for r in TABLE_ROWS[:13] if r[1] != "Months"]
-    st.markdown(side_by_side_html(model_cols, notes, rows), unsafe_allow_html=True)
+    notes[pnl.GROSS_MARGIN] = GM_NOTE
+    st.markdown(side_by_side_html(model_cols, notes, MODEL_ROWS), unsafe_allow_html=True)
     if be_mem:
         gap = mem - be_mem
         st.markdown(_md(
@@ -777,8 +834,50 @@ HOW_CENTRE = f"""
 - **Break-even**: tutor wages at the benchmark % for established centres of that size (set on
   P&L – Group Level); rent, manager wages, marketing and OPEX at the centre's own amounts;
   royalties the higher of the Royalty Min (blank = 2,200) or 8% of revenue.
+- **Gross Margin** = Total Revenue − Tutor Wages + Super (accounts 472 and 474), with its % of revenue. Higher is better. It is a subtotal, so it is never added into costs or EBITDA. In the outliers table it is pinned to the top and left
+  out of "biggest costs above typical".
 - Unrelated Expenses (479) are a memo line and aren't in EBITDA or Net Profit.
 """
+
+
+def _headline_cards(now, prev, vs):
+    """Revenue, gross margin, EBITDA, EBITDA %, members and revenue per member, each with
+    the change against the previous period."""
+    rev = now["Total Revenue"]
+    mem = now.get("Members")
+    rpm = rev / mem / pnl.WEEKS_PER_MONTH if mem and not pd.isna(mem) and mem > 0 else None
+
+    def delta(fn):
+        if prev is None:
+            return None
+        try:
+            a_, b_ = fn(now), fn(prev)
+            return None if a_ is None or b_ is None else a_ - b_
+        except (TypeError, ZeroDivisionError, KeyError):
+            return None
+
+    gm_pct = lambda r: (r["Total Revenue"] - r["Tutor Wages + Super"]) / r["Total Revenue"] * 100 \
+        if r["Total Revenue"] > 0 else None
+    eb_pct = lambda r: r["EBITDA"] / r["Total Revenue"] * 100 if r["Total Revenue"] > 0 else None
+    rpm_f = lambda r: r["Total Revenue"] / r["Members"] / pnl.WEEKS_PER_MONTH \
+        if r.get("Members") and r["Members"] > 0 else None
+    cards = [
+        ("Revenue", _money(rev), delta(lambda r: r["Total Revenue"]), _money),
+        ("Gross margin (after tutor wages)", f"{gm_pct(now):.1f}%" if rev > 0 else "–",
+         delta(gm_pct), lambda v: f"{abs(v):.1f} pts"),
+        ("EBITDA", _money_short(now["EBITDA"]), delta(lambda r: r["EBITDA"]), _money),
+        ("EBITDA % of revenue", f"{eb_pct(now):.1f}%" if rev > 0 else "–", delta(eb_pct),
+         lambda v: f"{abs(v):.1f} pts"),
+        ("Members", _count(mem), delta(lambda r: r.get("Members")), lambda v: f"{abs(v):,.0f}"),
+        ("Revenue per member / week", f"${rpm:,.2f}" if rpm else "–", delta(rpm_f),
+         lambda v: f"${abs(v):,.2f}"),
+    ]
+    row = st.columns(len(cards))
+    for col, (lbl, value, dlt, fmt) in zip(row, cards):
+        ok = dlt is not None and not pd.isna(dlt)
+        col.markdown(_card(lbl, value, dlt if ok else None, fmt(abs(dlt)) if ok else "",
+                           dlt > 0 if ok else None, vs), unsafe_allow_html=True)
+
 
 
 def report_centre(df_pnl, df_wm, vl, helpers, bench=None):
@@ -832,40 +931,8 @@ def report_centre(df_pnl, df_wm, vl, helpers, bench=None):
     if missed:
         st.caption(f"⚠ No P&L for {', '.join(pnl.period_name(p) for p in missed)}: the average "
                    "is over the months reported.")
+    _headline_cards(now, prev, vs)
     rev = now["Total Revenue"]
-    mem = now.get("Members")
-    rpm = rev / mem / pnl.WEEKS_PER_MONTH if mem and not pd.isna(mem) and mem > 0 else None
-
-    def delta(fn):
-        if prev is None:
-            return None
-        try:
-            a_, b_ = fn(now), fn(prev)
-            return None if a_ is None or b_ is None else a_ - b_
-        except (TypeError, ZeroDivisionError, KeyError):
-            return None
-
-    gm_pct = lambda r: (r["Total Revenue"] - r["Tutor Wages + Super"]) / r["Total Revenue"] * 100 \
-        if r["Total Revenue"] > 0 else None
-    eb_pct = lambda r: r["EBITDA"] / r["Total Revenue"] * 100 if r["Total Revenue"] > 0 else None
-    rpm_f = lambda r: r["Total Revenue"] / r["Members"] / pnl.WEEKS_PER_MONTH \
-        if r.get("Members") and r["Members"] > 0 else None
-    cards = [
-        ("Revenue", _money(rev), delta(lambda r: r["Total Revenue"]), _money),
-        ("Gross margin (after tutor wages)", f"{gm_pct(now):.1f}%" if rev > 0 else "–",
-         delta(gm_pct), lambda v: f"{abs(v):.1f} pts"),
-        ("EBITDA", _money_short(now["EBITDA"]), delta(lambda r: r["EBITDA"]), _money),
-        ("EBITDA % of revenue", f"{eb_pct(now):.1f}%" if rev > 0 else "–", delta(eb_pct),
-         lambda v: f"{abs(v):.1f} pts"),
-        ("Members", _count(mem), delta(lambda r: r.get("Members")), lambda v: f"{abs(v):,.0f}"),
-        ("Revenue per member / week", f"${rpm:,.2f}" if rpm else "–", delta(rpm_f),
-         lambda v: f"${abs(v):,.2f}"),
-    ]
-    row = st.columns(len(cards))
-    for col, (lbl, value, dlt, fmt) in zip(row, cards):
-        ok = dlt is not None and not pd.isna(dlt)
-        col.markdown(_card(lbl, value, dlt if ok else None, fmt(abs(dlt)) if ok else "",
-                           dlt > 0 if ok else None, vs), unsafe_allow_html=True)
 
     # Comparison with similar centres, for this month.
     b_pnl, b_wm = bench if bench is not None else (df_pnl, df_wm)
@@ -946,6 +1013,7 @@ def report_centre(df_pnl, df_wm, vl, helpers, bench=None):
                  "Interest, Tax & Depreciation": 3}
         acc = acc.sort_index(key=lambda i: i.map(lambda v: order.get(v, 9))
                              if i.name == "P&L section" else i)
+        acc = with_gross_margin_row(acc)
         acc = acc.droplevel("Account code")
         if unit == "% of revenue":
             rev_m = data["Total Revenue"].reindex(acc.columns)
@@ -956,7 +1024,8 @@ def report_centre(df_pnl, df_wm, vl, helpers, bench=None):
         acc = acc.apply(lambda col: col.map(lambda v: _fmt_unit(v, unit))).reset_index()
         acc = acc[["Account", "P&L section"] + [c for c in acc.columns
                                                 if c not in ("Account", "P&L section")]]
-        st.dataframe(acc, hide_index=True, use_container_width=True,
+        st.dataframe(bold_gross_margin(acc, "Account"), hide_index=True,
+                     use_container_width=True,
                      column_config={"Account": st.column_config.TextColumn(
                          "Account", width="large", pinned=True)})
 
@@ -982,7 +1051,7 @@ def report_centre(df_pnl, df_wm, vl, helpers, bench=None):
                                    index=["Members"], columns=shown.columns)
         full = pd.concat([members_row, shown])
         full.insert(0, "Line", full.index)
-        st.dataframe(full, hide_index=True, use_container_width=True,
+        st.dataframe(bold_gross_margin(full, "Line"), hide_index=True, use_container_width=True,
                      column_config={"Line": st.column_config.TextColumn(
                          "Line", width="large", pinned=True)})
 
@@ -1273,3 +1342,894 @@ def scheduling_efficiency(pick, loc, values, peers, bench_cent, revenue, vl, sel
     if trend:
         text += f" Over the last 12 weeks its group sizes are **{trend.lower()}**."
     st.markdown(_md(text))
+    return status
+
+
+# ── P&L Share (for franchise partners) ────────────────────────────────────────
+SHARE_UNITS = ["$", "$ per member"]
+CHART_WIDTH = 700               # px: fits the printable width of an A4 page
+LOGO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.png")
+
+SHARE_CSS = """<style>
+.share-head{display:flex;align-items:center;gap:16px;border-bottom:3px solid #1f9a9a;
+ padding:4px 0 10px;margin:4px 0 12px}
+.share-head img{height:46px}
+.share-head .c{font-size:1.55em;font-weight:700;color:#1c2a30;line-height:1.15}
+.share-head .m{color:#5d6d73;font-size:.92em}
+.share-head .conf{margin-left:auto;text-align:right;font-size:.82em;color:#5d6d73}
+.share-head .conf b{color:#c8322f;letter-spacing:.08em;text-transform:uppercase;font-size:1.05em}
+.share-tbl{border-collapse:collapse;width:100%;font-size:12.5px;background:#fff;
+ border:1px solid #dde5e6;margin-bottom:8px}
+.share-tbl th{background:#1f3b57;color:#fff;font-weight:600;padding:6px 8px;text-align:right}
+.share-tbl th.l,.share-tbl td.l{text-align:left}
+.share-tbl td{padding:4px 8px;border-bottom:1px solid #eef2f3;text-align:right;color:#1c2a30}
+.share-tbl td.muted{color:#8a9a9f}
+.share-tbl tr.sens td{background:#f6f8f9}
+.own-tbl{border-collapse:collapse;width:100%;max-width:720px;font-size:13px;background:#fff;
+ border:1px solid #dde5e6}
+.own-tbl th{background:#1f3b57;color:#fff;font-weight:600;padding:6px 10px;text-align:right}
+.own-tbl th.l,.own-tbl td.l{text-align:left}
+.own-tbl td{padding:4px 10px;border-bottom:1px solid #eef2f3;text-align:right;color:#1c2a30;
+ white-space:nowrap}
+.own-tbl td.l{white-space:normal;padding-left:22px}
+.own-tbl td,.own-tbl th{border-left:none!important;border-right:none!important}
+.own-tbl td.neg{color:#c8322f}
+.own-tbl td.b{width:30%}
+.own-tbl tr.tot td{font-weight:700;background:#f2f8f8;border-top:1px solid #b9d3d6;
+ border-bottom:1px solid #b9d3d6}
+.own-tbl tr.tot td.l{padding-left:10px}
+.own-tbl tr.grp td{font-size:11.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+ color:#1f9a9a;padding:8px 10px 2px;border-bottom:none}
+.own-bar{background:#eef2f3;border-radius:3px;height:8px;width:100%}
+.own-bar span{display:block;height:8px;border-radius:3px;background:#8fcfcf}
+.share-tbl tr.sub td{font-weight:700;background:#f2f8f8;border-bottom:1px solid #b9d3d6}
+.pill{display:inline-block;border-radius:10px;padding:1px 8px;font-size:11.5px;font-weight:600;
+ white-space:nowrap}
+.pill.bad{background:#fbe9e8;color:#c8322f}.pill.good{background:#e7f3ea;color:#2e8540}
+.pill.ok{background:#eef1f3;color:#5d6d73}.pill.none{background:transparent;color:#8a9a9f;
+ font-weight:500;padding:0}
+.share-box{background:#fff;border:1px solid #dde5e6;border-left:4px solid var(--c);
+ border-radius:8px;padding:10px 14px;margin-bottom:10px;height:100%}
+.share-box .h{font-weight:700;color:var(--c);margin-bottom:6px;font-size:1.02em}
+.share-box ul{margin:0;padding-left:18px}.share-box li{margin:4px 0;color:#1c2a30;font-size:.92em}
+.bands{display:flex;flex-wrap:wrap;gap:8px;margin:2px 0 8px}
+.band{background:#fff;border:1px solid #dde5e6;border-radius:16px;padding:3px 12px;
+ font-size:.85em;color:#1c2a30}.band b{color:#1f9a9a}
+.check-item{margin:2px 0;color:#1c2a30}
+.ps-new{background:#eef6f6;border-left:4px solid #1f9a9a;padding:8px 12px;margin:4px 0 10px;font-size:13.5px;color:#1c2a30;border-radius:4px}
+.otile svg{max-width:100%;height:auto}
+@media print {
+  @page { size: A4 portrait; margin: 10mm; }
+  * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+  html, body, .stApp, div[data-testid="stAppViewContainer"], section[data-testid="stMain"],
+  .main, div[data-testid="stMainBlockContainer"] {
+    height: auto !important; min-height: 0 !important; overflow: visible !important;
+    position: static !important; background: #fff !important; }
+  section[data-testid="stSidebar"], div[data-testid="stSidebarCollapsedControl"],
+  header[data-testid="stHeader"], div[data-testid="stToolbar"],
+  div[data-testid="stDecoration"], div[data-testid="stStatusWidget"],
+  .topbar, .st-key-ps_filters, .st-key-ps_check, .st-key-ps_screen, .st-key-ps_how,
+  details[data-testid="stExpander"] { display: none !important; }
+  div[data-testid="stMainBlockContainer"], .main .block-container {
+    padding: 0 !important; max-width: 100% !important; zoom: 0.8; }
+  div[data-testid="stBottom"], .st-key-ps_how { display: none !important; }
+  .otile, .metric-card, .share-box, .share-head, .bands, .share-tbl tr, .own-tbl tr,
+  div[data-testid="stPlotlyChart"], div[data-testid="stHorizontalBlock"] {
+    break-inside: avoid; page-break-inside: avoid; }
+  .section-header { break-after: avoid; page-break-after: avoid; }
+  .st-key-ps_sched, .st-key-ps_members { break-inside: avoid; page-break-inside: avoid; }
+  .page-break { break-before: page; page-break-before: always; }
+  div[data-testid="stPlotlyChart"] { border: none !important; }
+  .metric-card { padding: 8px 10px !important; }
+  .metric-value { font-size: 1.35em !important; }
+}
+</style>"""
+
+HOW_SHARE = f"""
+- **New centres** ({pnl_share.NEW_MONTHS} months trading or less, counting the opening month as month 1)
+  are not compared with other centres: their numbers are still settling. The report shows
+  the centre's own figures only, with a note at the top. Comparisons start from month 13.
+- **Similar centres** are centres at the same stage (developing: under 12 months; or
+  established), in the same country and of a similar size. If fewer than
+  {pnl_share.MIN_PEERS} reported, the group widens (nearby sizes, then the whole country, then
+  any stage). With fewer than {pnl_share.MIN_PEERS}, nothing is compared. Centres
+  {pnl_share.YOUNG_WEEKS} weeks old or younger and centres with under {pnl.LOW_REVENUE:,} revenue
+  a month are left out. Other centres are never named.
+- **Typical** is the middle value of similar centres. **Normal range** is the middle half of
+  them (the 25th to 75th percentile), so no single centre's figure is shown.
+- A line is only compared when **most similar centres use that account**; otherwise it shows
+  "No benchmark".
+- **Rent, royalties, manager wages, interest and CRM software** are shown as this centre's own figures
+  only. They are never compared and are left out of every total and opportunity.
+- **Cost vs typical** is what the difference from typical is worth each month: positive costs
+  money, negative saves it. **Bands** say which quarter of similar centres this centre is in,
+  never an exact position.
+- **Gross Margin** = Total Revenue − Tutor Wages + Super (accounts 472 and 474), with its % of revenue. Higher is better. It is a subtotal, so it is never added into costs or EBITDA. It is pinned to the top of the table and compared with similar
+  centres like the other lines, but never counted in the opportunities.
+- **Members trend**: average active members over the last 4 weeks against the 4 weeks before,
+  compared with the network's established centres.
+- Unrelated Expenses (479) are a memo line and aren't in EBITDA.
+"""
+
+
+def _logo_html():
+    if not os.path.exists(LOGO):
+        return ""
+    with open(LOGO, "rb") as f:
+        return f'<img src="data:image/png;base64,{base64.b64encode(f.read()).decode()}" alt="">'
+
+
+def _share_header(pick, label, viewer):
+    today = datetime.now(ZoneInfo("Australia/Sydney")).strftime("%-d %B %Y")
+    by = f"Prepared by {html.escape(viewer)} · " if viewer else ""
+    return (f'<div class="share-head">{_logo_html()}<div><div class="c">{html.escape(pick)}</div>'
+            f'<div class="m">P&amp;L review — {html.escape(label)}</div></div>'
+            f'<div class="conf"><b>Confidential</b><br>{by}{today}</div></div>')
+
+
+def _signed_money(v):
+    if v is None or pd.isna(v):
+        return ""
+    return ("+" if v > 0.5 else "−" if v < -0.5 else "") + f"${abs(v):,.0f}"
+
+
+def _pill(line, status, note):
+    if note:
+        return f'<span class="pill none">{html.escape(note)}</span>'
+    if not status:
+        return ""
+    word = pnl_share.soft_status(line, status)
+    cls = "ok" if status == "Typical" else "bad" if pnl.is_bad(line, status) else "good"
+    return f'<span class="pill {cls}">{html.escape(word)}</span>'
+
+
+def own_accounts_html(accounts, codes, revenue, ebitda):
+    """A new centre's own P&L for the month, laid out like a statement: revenue, tutor
+    costs, Gross Margin, other costs, EBITDA. Each line with its % of revenue and a bar."""
+    t = accounts[accounts["Actual $"].astype(float).abs() > 0.5]
+    tutor = t[t["Line"].map(lambda a: int(codes.get(a, 0)) in pnl.TUTOR_CODES)] \
+        .sort_values("Actual $", ascending=False)
+    code = lambda a: int(codes.get(a, 0))
+    t = t[~t["Line"].map(code).isin(pnl.REVENUE_CODES | pnl.EXCLUDED_CODES)]
+    below = t[t["Line"].map(code).isin(pnl.INTEREST_CODES)]      # after EBITDA
+    other = t.drop(tutor.index.union(below.index)).sort_values("Actual $", ascending=False)
+    pct = lambda v: v / revenue * 100 if revenue else None
+
+    def row(label, value, cls="", bar=True):
+        p = pct(value)
+        width = min(abs(p), 100) if p is not None else 0
+        bar_html = (f'<div class="own-bar"><span style="width:{width:.1f}%"></span></div>'
+                    if bar and p is not None else "")
+        neg = " neg" if value < -0.5 else ""
+        return (f'<tr class="{cls}"><td class="l">{html.escape(label)}</td>'
+                f'<td class="{neg.strip()}">{_money(value)}</td>'
+                f'<td class="{neg.strip()}">{_fmt_pct(p)}</td><td class="b">{bar_html}</td></tr>')
+
+    def heading(label):
+        return f'<tr class="grp"><td class="l" colspan="4">{html.escape(label)}</td></tr>'
+
+    gross = revenue - float(tutor["Actual $"].sum())
+    body = [row("Total revenue", revenue, "tot", bar=False)]
+    if len(tutor):
+        body += [heading("Tutor costs")] + [row(r["Line"], r["Actual $"]) for _, r in
+                                            tutor.iterrows()]
+    body.append(row(pnl.GROSS_MARGIN, gross, "tot", bar=False))
+    if len(other):
+        body += [heading("Other costs")] + [row(r["Line"], r["Actual $"]) for _, r in
+                                            other.iterrows()]
+    body.append(row("EBITDA (profit before interest, tax and depreciation)", ebitda, "tot",
+                    bar=False))
+    if len(below):
+        body += [heading("Below EBITDA")] + [row(r["Line"], r["Actual $"]) for _, r in
+                                             below.iterrows()]
+        body.append(row("Net profit", ebitda - float(below["Actual $"].sum()), "tot",
+                        bar=False))
+    return (f'<table class="own-tbl"><tr><th class="l">Line</th><th>Amount</th>'
+            f'<th>% of revenue</th><th></th></tr>{"".join(body)}</table>').replace("$", "&#36;")
+
+
+def share_table_html(table, top=None):
+    """Every account line, all rows, as a plain table (prints in full, no scroll box).
+    top: rows pinned first in bold (the Gross Margin row)."""
+    t = table.copy()
+    t["_b"] = t["Benchmarked"].astype(bool)
+    t["_g"] = t["Gap $"].astype(float).fillna(0)
+    t["_a"] = t["Actual $"].astype(float).fillna(0)
+    t = pd.concat([t[t["_b"]].sort_values("_g", ascending=False),
+                   t[~t["_b"]].sort_values("_a", ascending=False)])
+    if top is not None and len(top):
+        t = pd.concat([top.assign(_sub=True), t.assign(_sub=False)])
+    head = ('<tr><th class="l">Line</th><th>Actual</th><th>% of revenue</th><th>Typical</th>'
+            '<th>Normal range</th><th>Similar centres</th><th>Cost vs typical / month</th>'
+            '<th class="l">Status</th></tr>')
+    body = []
+    for _, r in t.iterrows():
+        amv = r["Line"] == "Average Membership Value"
+        ok = bool(r["Benchmarked"])
+        actual = f"${r['Actual $']:,.2f}/wk" if amv else _money(r["Actual $"])
+        if ok and amv:
+            typ = f"${r['Typical $']:,.2f}/wk"
+            rng = f"${r['Range low $']:,.2f} – ${r['Range high $']:,.2f}"
+        elif ok:
+            typ = _fmt_pct(r["Typical %"])
+            rng = f"{_fmt_pct(r['Range low %'])} – {_fmt_pct(r['Range high %'])}"
+        else:
+            typ = rng = ""
+        comp = (f"{int(r['Centres'])}" + (" ⚠" if pnl.small_sample(r["Centres"]) else "")) \
+            if ok else ""
+        sens = r["Note"] == pnl_share.NOT_BENCHMARKED
+        cls = "sub" if r.get("_sub") is True else "sens" if sens else ""
+        body.append(
+            f'<tr class="{cls}"><td class="l">{html.escape(str(r["Line"]))}</td>'
+            f'<td>{actual}</td><td>{_fmt_pct(r["Actual %"])}</td><td>{typ}</td><td>{rng}</td>'
+            f'<td class="muted">{comp}</td><td>{_signed_money(r["Gap $"]) if ok else ""}</td>'
+            f'<td class="l">{_pill(r["Line"], r["Status"], r["Note"])}</td></tr>')
+    return f'<table class="share-tbl">{head}{"".join(body)}</table>'.replace("$", "&#36;")
+
+
+def _box(title, items, colour, empty):
+    li = "".join(f"<li>{_md_html(i)}</li>" for i in items) or f"<li>{html.escape(empty)}</li>"
+    return (f'<div class="share-box" style="--c:{colour}"><div class="h">{html.escape(title)}'
+            f'</div><ul>{li}</ul></div>').replace("$", "&#36;")
+
+
+def _md_html(text):
+    """**bold** to <b>, everything else escaped."""
+    parts = html.escape(text).split("**")
+    return "".join(f"<b>{p}</b>" if i % 2 else p for i, p in enumerate(parts))
+
+
+NO_DATA = "Data Not Available"
+
+
+def _trend_chart(name, x, months, ys, tys, yfmt, ytitle, helpers):
+    """One small trend chart: this centre (teal) against the typical similar centre (dashed).
+    With nothing for this centre, the chart says Data Not Available."""
+    fig = go.Figure()
+    ys = pd.Series(list(ys), dtype=float)
+    if tys is not None and pd.Series(tys).notna().any():
+        fig.add_trace(go.Scatter(
+            x=x, y=list(pd.Series(tys).reindex(months)), mode="lines",
+            name="Typical similar centre", line=dict(color="#5d6d73", width=2, dash="dash"),
+            hovertemplate=f"%{{x}}<br>Typical similar centre: {yfmt}<extra></extra>"))
+    fig.add_trace(go.Scatter(
+        x=x, y=list(ys), mode="lines+markers", name="This centre",
+        line=dict(color="#1f9a9a", width=3), marker=dict(size=7),
+        hovertemplate=f"%{{x}}<br>This centre: {yfmt}<extra></extra>"))
+    if ys.isna().all():
+        fig.add_annotation(text=NO_DATA, x=0.5, y=0.5, xref="paper", yref="paper",
+                           showarrow=False, font=dict(size=15, color="#8a9a9f"))
+        fig.update_yaxes(showticklabels=False)
+    fig.update_layout(**helpers["std_layout"](name, ytitle, height=260))
+    # Fills its column; the key (legend) sits under the chart so it never covers the title.
+    fig.update_layout(margin=dict(l=55, r=10, t=40, b=60),
+                      legend=dict(orientation="h", x=0, y=-0.22, yanchor="top"))
+    fig.update_xaxes(type="category")
+    helpers["show_chart"](fig, use_container_width=True)
+
+
+def _trend_charts(data, months, typical, unit, cur, helpers, comp=None, comp_typical=None):
+    """Two columns: revenue, gross margin % and OPEX % on the left; members, ARPM and
+    revenue per session on the right."""
+    x = [pd.Timestamp(p + "-01").strftime("%b %y") for p in months]
+    d = data.reindex(months)
+    tcol = lambda c: typical[c] if len(typical) and c in typical else None
+    rev_ok = d["Total Revenue"].where(d["Total Revenue"] > 0)
+    if unit == "$ per member":
+        y = d["Total Revenue"] / d["Members"].where(d["Members"] > 0) / pnl.WEEKS_PER_MONTH
+        ty = tcol("Revenue per member")
+        ty = ty / pnl.WEEKS_PER_MONTH if ty is not None else None
+        rev = ("Revenue per member / week", y, ty, "$%{y:,.2f}", f"{cur} per member a week")
+    else:
+        rev = ("Revenue", d["Total Revenue"], tcol("Revenue"), "$%{y:,.0f}", f"{cur} a month")
+    c = comp.reindex(months) if comp is not None and len(comp) else \
+        pd.DataFrame(index=months, columns=["ARPM", "Revenue per session"], dtype=float)
+    ct = comp_typical if comp_typical is not None and len(comp_typical) else None
+    left = [rev,
+            ("Gross margin % of revenue", (d["Total Revenue"] - d[pnl.TUTOR]) / rev_ok * 100,
+             tcol("Gross margin %"), "%{y:.1f}%", "% of revenue"),
+            ("OPEX % of revenue", d["OPEX"] / rev_ok * 100, tcol("OPEX %"), "%{y:.1f}%",
+             "% of revenue")]
+    right = [("Total members", d["Members"], tcol("Members"), "%{y:,.0f}", "members"),
+             ("ARPM (per member a week)", c["ARPM"], ct["ARPM"] if ct is not None else None,
+              "$%{y:,.2f}", f"{cur} a week"),
+             ("Revenue per session", c["Revenue per session"],
+              ct["Revenue per session"] if ct is not None else None, "$%{y:,.2f}", f"{cur}")]
+    for l_, r_ in zip(left, right):
+        a, b = st.columns(2)
+        for col, (name, ys, tys, yfmt, ytitle) in ((a, l_), (b, r_)):
+            with col:
+                _trend_chart(name, x, months, ys, tys, yfmt, ytitle, helpers)
+
+
+def _members_section(trend, cur_members, compare=True):
+    _section("Members trend",
+             "Average active members over the last 4 weeks against the 4 weeks before" +
+             (", compared with the network average." if compare else "."))
+    if trend is None:
+        st.caption("Not enough weekly membership history to show a trend yet.")
+        return
+    if trend["too_new"]:
+        st.caption(f"Too new to compare: trading for {trend['weeks']} weeks "
+                   f"(trends start at {pnl_share.YOUNG_WEEKS} weeks).")
+        return
+    colour = {"Green": "#2e8540", "Red": "#c8322f"}.get(trend["status"], "#5d6d73")
+    word = {"Significantly above average trend": "Well ahead of the network",
+            "Above average trend": "Ahead of the network",
+            "About average": "In line with the network",
+            "Below average trend": "A little behind the network",
+            "Significantly below average trend": "Behind the network"}.get(trend["category"],
+                                                                           trend["category"])
+    tiles = [
+        _tile("Members now", f"{trend['members']:,.0f}",
+              f"{trend['change']:+,.0f} over 4 weeks"),
+        _tile("This centre's trend", f"{trend['trend']:+.1f}%", "last 4 weeks vs the 4 before",
+              colour),
+        _tile("Network average", f"{trend['average']:+.1f}%", "established centres"),
+        _tile("Compared with the network", word, f"{trend['vs']:+.1f} pts", colour),
+        _tile("Last 12 weeks", "", "Active members each week", "#1f9a9a",
+              _sparkline(trend["spark"], [])),
+    ]
+    if not compare:                                   # new centre: its own figures only
+        tiles = [tiles[0], _tile("This centre's trend", f"{trend['trend']:+.1f}%",
+                                 "last 4 weeks vs the 4 before"), tiles[4]]
+    st.markdown(TILE_CSS, unsafe_allow_html=True)
+    for col, t in zip(st.columns(len(tiles)), tiles):
+        col.markdown(t, unsafe_allow_html=True)
+    if trend["small"]:
+        st.caption("⚠ Under 20 members: percentages swing a lot from week to week.")
+
+
+def report_share(df_pnl, df_wm, vl, helpers, bench=None):
+    """P&L Share: one centre's month in a partner-friendly layout that GPMs can screenshot
+    or print to PDF. Benchmarks use every centre, but no other centre is ever named and no
+    single centre's figures can be worked out."""
+    st.markdown(SHARE_CSS, unsafe_allow_html=True)
+    with st.container(key="ps_screen"):
+        st.markdown('<div class="report-title">P&L Share</div>', unsafe_allow_html=True)
+        st.markdown('<div class="report-subtitle">A one-centre P&L review to share with the '
+                    'franchise partner: how the month went, what is going well and where the '
+                    'opportunities are.</div>', unsafe_allow_html=True)
+    if df_pnl.empty:
+        st.info("No P&L figures yet. An admin can add a month on the P&L Upload page.")
+        return
+    info = location_info(df_pnl, vl)
+    lm = pnl.location_months(df_pnl)
+    members = members_by_month(df_wm)
+    periods = sorted(df_pnl["Period"].unique())
+    centres = {loc.replace(PREFIX, ""): loc for loc in
+               sorted(info.index, key=lambda l: l.replace(PREFIX, "").lower())}
+
+    with st.container(border=True, key="ps_filters"):
+        st.markdown('<div class="filter-label">Filters</div>', unsafe_allow_html=True)
+        a, b, c, d = st.columns([2, 1, 1, 1])
+        pick = a.selectbox("Centre", list(centres), key="ps_centre")
+        month = b.selectbox("Month", periods[::-1], format_func=pnl.period_name, key="ps_month")
+        span = c.selectbox("Months shown", DD_SPANS, index=DD_SPANS.index(DEFAULT_SPAN),
+                           key="ps_span")
+        unit = d.selectbox("Show as", SHARE_UNITS, key="ps_unit",
+                           help="Units for the 12-month revenue chart.")
+        st.caption("To share: press Ctrl + P (Cmd + P on a Mac) and choose Save as PDF. The "
+                   "menu, filters and the 'Check before sharing' box are left out of the "
+                   "printout.")
+    loc = centres[pick]
+    data, cur, _ = entity_months(lm, members, info, [loc])
+    data = data[data.index <= month]
+    if month not in data.index:
+        st.warning(f"{pick} has no P&L for {pnl.period_name(month)}.")
+        return
+    sel = months_shown(list(data.index), span, month)
+    n_sel = len(sel)
+    earlier = [p for p in data.index if p < sel[0]]
+    prev_sel = earlier[-n_sel:] if len(earlier) >= n_sel else []
+    now = average_months(data, sel)
+    prev = average_months(data, prev_sel) if prev_sel else None
+    label = pnl.period_name(month) if n_sel == 1 else \
+        f"Average per month, {pnl.period_name(sel[0])} – {pnl.period_name(sel[-1])}"
+    vs = "vs previous month" if n_sel == 1 else f"vs previous {n_sel} months"
+    missed = [p for p in periods if sel[0] <= p <= month and p not in sel]
+    rev = now["Total Revenue"]
+
+    # ── Numbers: this centre, similar centres, every account line ──
+    b_pnl, b_wm = bench if bench is not None else (df_pnl, df_wm)
+    young = young_centres(vl)
+    b_members = members_by_month(b_wm)
+    bench_cent = centre_table(b_pnl, b_members, vl, sel, helpers["age_group"])
+    mine = centre_table(df_pnl[df_pnl["Location"] == loc], members, vl, sel,
+                        helpers["age_group"])
+    values = mine.loc[loc] if loc in mine.index else None
+    if values is None:
+        st.warning(f"{pick} has no P&L for these months.")
+        return
+    peers, desc = bench_cent.iloc[0:0], None
+    trading = pnl_share.months_trading(vl, loc, month, values.get("Age (Months)"))
+    too_new = trading is not None and trading <= pnl_share.NEW_MONTHS
+    no_compare = pnl_share.too_new_note(pick, trading) if too_new else pnl_share.NOT_ENOUGH + "."
+    if rev >= pnl.LOW_REVENUE and not too_new:
+        peers, desc = pnl_share.share_peers(bench_cent, values.get("Age (Months)"),
+                                            values.get("Country"), values.get("Members"), loc,
+                                            young)
+    sens = pnl_share.sensitive_accounts(b_pnl)
+    grouped = pnl_share.benchmark_lines(values, peers, pnl.BENCH_LINES, sens)
+    acct = pnl.account_table(b_pnl, sel)
+    accounts = None
+    if loc in acct.index:
+        for col_ in ["Total Revenue", "Members", "Country"]:
+            acct[col_] = bench_cent[col_].reindex(acct.index)
+        acct_values = acct.loc[loc].copy()
+        acct_peers = acct.loc[acct.index.intersection(peers.index)]
+        lines = [c_ for c_ in acct.columns
+                 if c_ not in ("Total Revenue", "Members", "Country")
+                 and (acct_peers[c_].abs().sum() > 0 or abs(acct_values.get(c_, 0)) > 0)]
+        accounts = pnl_share.benchmark_lines(acct_values, acct_peers, lines, sens)
+    more = less = pd.DataFrame()
+    if accounts is not None:
+        more, less = pnl_share.out_of_step(accounts)
+    codes = b_pnl.groupby("Account")["Account code"].first()
+    account_rows = {a_: pnl.row_of(int(c_)) for a_, c_ in codes.items()}
+    opps = pnl_share.top_opportunities(pnl_share.opportunity_lines(
+        grouped, accounts if accounts is not None else grouped.iloc[0:0], account_rows))
+    bands = pnl_share.centre_bands(values, peers)
+    mine_rows = df_pnl[(df_pnl["Location"] == loc) & df_pnl["Period"].isin(sel)]
+    interest_income = float(mine_rows.loc[mine_rows["Account code"] == 270, "Amount"]
+                            .astype(float).sum()) / max(n_sel, 1)
+
+    # ── Check before sharing (screen only) ──
+    found = pnl_share.checks(values, peers, accounts, [pnl.period_name(p) for p in missed],
+                             interest_income, loc in young)
+    with st.container(border=True, key="ps_check"):
+        st.markdown('<div class="section-header" style="margin-top:0">Check before sharing'
+                    '</div>', unsafe_allow_html=True)
+        st.caption("Only you see this box: it is left out when you print.")
+        if found:
+            for f_ in found:
+                st.markdown(f'<div class="check-item">⚠ {_md_html(f_)}</div>',
+                            unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="check-item">✓ Nothing unusual found.</div>',
+                        unsafe_allow_html=True)
+
+    # ── Header ──
+    st.markdown(_share_header(pick, label, helpers.get("viewer_name", "")),
+                unsafe_allow_html=True)
+
+    # ── Headline ──
+    _section(f"Headline — {label} ({cur})")
+    if missed:
+        st.caption(f"⚠ No P&L for {', '.join(pnl.period_name(p) for p in missed)}: the average "
+                   "is over the months reported.")
+    if too_new:
+        st.markdown(f'<div class="ps-new">ⓘ {html.escape(no_compare)}</div>',
+                    unsafe_allow_html=True)
+    _headline_cards(now, prev, vs)
+    if desc:
+        st.markdown('<div class="bands">' + "".join(
+            f'<span class="band"><b>{html.escape(b_)}</b> for {html.escape(m_)}</span>'
+            for m_, b_ in bands.items()) + '</div>', unsafe_allow_html=True)
+        st.caption(f"Compared with {desc} ({len(peers)} centres)" +
+                   (" ⚠ small sample" if pnl.small_sample(len(peers)) else "") + ".")
+    elif not too_new:
+        st.caption(pnl_share.NOT_ENOUGH + "." if rev >= pnl.LOW_REVENUE else
+                   "Revenue is too low this month for a meaningful comparison.")
+
+    # ── Accounts out of step ──
+    for bad, title, rows in ((True, "Accounts costing more than typical", more),
+                             (False, "Accounts costing less than typical", less)):
+        _section(title)
+        if not desc:
+            st.caption("No comparisons: under 13 months trading." if too_new else
+                       pnl_share.NOT_ENOUGH + ".")
+            continue
+        _outlier_tiles(rows, bad, cur)
+
+    # ── What's going well / top opportunities (filled once scheduling is known) ──
+    well_slot = st.container()
+
+    # ── Scheduling efficiency ──
+    with st.container(key="ps_sched"):
+        if too_new:
+            _section("Scheduling Efficiency")
+            st.caption("No comparisons: under 13 months trading.")
+            sched = None
+        else:
+            sched = scheduling_efficiency(pick, loc, values, peers if len(peers) else None,
+                                          bench_cent, helpers.get("revenue"), vl, sel, cur)
+
+    # ── 12-month trend ──
+    _section("Last 12 months", "This centre only: no typical line while it is under 13 "
+             "months trading." if too_new else
+             "This centre (teal) against the typical similar centre "
+             f"(dashed). The typical line needs at least {pnl_share.MIN_PEERS} similar centres "
+             "reporting that month.")
+    t_months = months_shown(list(data.index), "Last 12 months", month)
+    country_of = location_info(b_pnl, vl)["Country"].to_dict()
+    typical = pnl_share.typical_by_month(pnl.location_months(b_pnl), b_members, list(peers.index),
+                                         t_months, values.get("Country"), country_of) \
+        if len(peers) else pd.DataFrame()
+    data_m = data.copy()
+    cm = pnl_share.composition_by_month(helpers.get("composition"), t_months)
+    own_c = cm.xs(loc, level="Location") if len(cm) and \
+        loc in cm.index.get_level_values("Location") else None
+    comp_t = pnl_share.typical_composition(cm, list(peers.index), t_months,
+                                           values.get("Country"), country_of) \
+        if len(peers) else None
+    _trend_charts(data_m, t_months, typical, unit, cur, helpers, own_c, comp_t)
+
+    # ── Members trend ──
+    end = pd.Timestamp(sel[-1] + "-01") + pd.offsets.MonthEnd(0)
+    trend = None
+    if b_wm is not None and not b_wm.empty and "Date" in b_wm:
+        weeks = b_wm.loc[b_wm["Date"] <= end, "Date"]
+        if len(weeks):
+            trend = pnl_share.members_trend(b_wm, loc, weeks.max())
+    with st.container(key="ps_members"):
+        _members_section(trend, now.get("Members"), compare=not too_new)
+
+    # ── What's going well ──
+    good = []
+    for _, r in less.head(3).iterrows():
+        good.append(f"**{r['Line']}**: {r['Actual %']:.1f}% of revenue vs {r['Typical %']:.1f}% "
+                    f"typical, about ${abs(r['Gap $']):,.0f} a month less.")
+    for m_, b_ in bands.items():
+        if b_ in pnl_share.BANDS[:2]:
+            good.append(f"**{b_}** of similar centres for {m_}.")
+    if now["EBITDA"] > 0:
+        good.append(f"Made a profit (EBITDA) of **${now['EBITDA']:,.0f}**" +
+                    (" a month." if n_sel > 1 else "."))
+    if prev is not None and rev > prev["Total Revenue"] + 0.5:
+        good.append(f"Revenue up **${rev - prev['Total Revenue']:,.0f}** {vs}.")
+    if trend and not trend["too_new"] and not too_new and trend["vs"] > 2:
+        good.append(f"Members growing faster than the network ({trend['trend']:+.1f}% vs "
+                    f"{trend['average']:+.1f}% over 4 weeks).")
+    if sched == "Fewer sessions than typical":
+        good.append("Fuller groups than typical: fewer sessions for the number of students.")
+    tips = [o["Text"] for o in opps]
+    with well_slot:
+        g1, g2 = st.columns(2)
+        g1.markdown(_box("What's going well", good, "#2e8540",
+                         "A steady period: nothing stands out yet."), unsafe_allow_html=True)
+        g2.markdown(_box("Top opportunities", tips, "#1f9a9a",
+                         "No costs well above similar centres this period." if desc else
+                         "No comparisons: under 13 months trading." if too_new else
+                         pnl_share.NOT_ENOUGH + "."), unsafe_allow_html=True)
+
+    # ── Outliers vs similar centres: every account line, all rows ──
+    st.markdown('<div class="page-break"></div>', unsafe_allow_html=True)
+    _section("This centre's accounts" if too_new else "Outliers vs similar centres",
+             "Revenue and costs, each as a % of revenue. No comparisons: under 13 "
+             "months trading."
+             if too_new else
+             (f"{pick} compared with {desc}. " if desc else "") +
+             "Rent, royalties, manager wages, interest and CRM software are this centre's own "
+             "figures only. "
+             "'Cost vs typical' is what the difference is worth each month: + costs money, "
+             "− saves it.")
+    if accounts is None or accounts.empty:
+        st.caption("No account lines for this period.")
+    else:
+        st.markdown(own_accounts_html(accounts, codes, rev, now["EBITDA"]) if too_new else
+                    share_table_html(accounts, grouped[grouped["Line"] == pnl.GROSS_MARGIN]),
+                    unsafe_allow_html=True)
+    ebitda = now["EBITDA"]
+    parts = [f"**{pick}** {'made' if ebitda >= 0 else 'lost'} **${abs(ebitda):,.0f}** "
+             f"({label})."]
+    if not more.empty:
+        parts.append("Biggest costs above typical: " + "; ".join(
+            f"**{r['Line']}** (${r['Gap $']:,.0f} more)" for _, r in more.head(3).iterrows()) +
+            ".")
+        parts.append(f"If these accounts were at typical, EBITDA would be about "
+                     f"**{_money_short(ebitda + more['Gap $'].sum())}**.")
+    st.markdown(_md(" ".join(parts)))
+
+    with st.container(key="ps_how"):
+        with st.expander("How this is worked out"):
+            st.markdown(HOW_SHARE)
+
+
+# ── P&L Centre Forecast (admins only) ─────────────────────────────────────────
+FORECAST_VIEWS = ["Financial year", "Next 12 months"]
+GRID_LABELS = {"Tutor Wages + Super": "Tutor wages %", "Rent": "Rent %",
+               "Wages - Manager/Admin + Super": "Manager wages %", "Royalties": "Royalties %",
+               "Marketing - Agency Fees": "Agency fees %", "Marketing": "Marketing %",
+               "OPEX": "OPEX %"}
+BASIS_COLOURS = {pf.ACTUAL: "#1f9a9a", pf.FORECAST: "#8fcfcf", pf.ESTIMATE: "#d5e3e4"}
+FORECAST_ROWS = MODEL_ROWS + [
+    (None, None, "gap"),
+    ("Break-even members", "BE members", "count"),
+    ("Members above / below break-even", "BE gap", "count"),
+]
+HOW_FORECAST = f"""
+- **Actual** months are the centre's P&L. Every later month is worked out from the centre's
+  last {pf.RECENT} P&L months (fewer if it has fewer).
+- **Members**: months with Weekly Membership data use it. Later months carry on from the last
+  known month: the usual change for that time of year plus the centre's recent growth, which
+  counts a little less each month (×{pf.DAMP}) and is capped at ±{pf.MAX_TREND:.0%} a month. The time-of-year pattern
+  is the centre's own once it has {pf.OWN_PATTERN_MONTHS} months of membership history, otherwise the network's
+  (centres with {pf.NETWORK_MIN_MEMBERS}+ members).
+- **Revenue** = members × Average Membership Value (average of the last {pf.RECENT} months) × 4.2 weeks.
+- **Tutor wages and marketing**: the average % of revenue over the last {pf.RECENT} months.
+- **Rent, manager wages, agency fees and OPEX** stay at their average $ of the last {pf.RECENT} months,
+  shown as a % of that month's revenue. **Royalties**: the higher of the Royalty minimum or 8%
+  of revenue, or $0 while royalty relief lasts.
+- **Changing a %** sets that line to that % of revenue for that month. Lines left alone keep
+  the behaviour above, so rent stays the same $ if you change members.
+- **Estimate ⚠** = the centre has no P&L for that month of the year yet, so the forecast
+  relies more on the network pattern. Treat these months with more caution.
+- **Break-even members** = members needed that month for EBITDA of 0 at that month's AMV and
+  costs.
+- **Benchmarks**: the forecast months' average % of revenue against similar centres (same
+  country and members band; centres under 12 months old against other developing centres).
+  The normal range is the middle half (25th–75th percentile). ⚠ = fewer than
+  {pnl.SMALL_SAMPLE} centres. Not shown with fewer than {pnl_share.MIN_PEERS} centres.
+- **Gross Margin** = Total Revenue − Tutor Wages + Super (accounts 472 and 474), with its % of revenue. Higher is better. It is a subtotal, so it is never added into costs or EBITDA.
+- Interest Income (account 270) is counted in revenue, as in the other P&L reports.
+"""
+FORECAST_NOTE = ("A forecast is an estimate from the centre's recent figures and network "
+                 "patterns, not a promise. Check it against what you know about the centre: "
+                 "price changes, staffing, lease and marketing plans.")
+
+
+def _royalty_min(vl, loc):
+    v = vl.set_index(LOC)["Royalty Min"].get(loc) if LOC in vl.columns and \
+        "Royalty Min" in vl.columns else None
+    v = pd.to_numeric(str(v).replace("$", "").replace(",", "").strip(), errors="coerce")
+    return float(v) if not pd.isna(v) else pnl.DEFAULT_ROYALTY_MIN
+
+
+def _forecast_chart(table, pick, cur, helpers):
+    t = table[table["Basis"] != pf.MISSING]
+    x = [pd.Period(p, "M").strftime("%b %y") for p in t.index]
+    fig = go.Figure()
+    for basis, colour in BASIS_COLOURS.items():
+        mask = t["Basis"] == basis
+        if mask.any():
+            fig.add_bar(x=[x_ for x_, m in zip(x, mask) if m], y=t.loc[mask, "Total Revenue"],
+                        name=f"Revenue ({basis.replace(' ⚠', '')})", marker_color=colour,
+                        hovertemplate="%{x}: %{y:$,.0f}<extra>Revenue</extra>")
+    fig.add_scatter(x=x, y=t["EBITDA"], name="EBITDA", mode="lines+markers",
+                    line=dict(color="#1c2a30", width=2),
+                    marker=dict(color=["#c8322f" if v < 0 else "#2e8540" for v in t["EBITDA"]],
+                                size=8),
+                    hovertemplate="%{x}: %{y:$,.0f}<extra>EBITDA</extra>")
+    fig.add_hline(y=0, line=dict(color="#5d6d73", width=1))
+    fig.update_layout(**helpers["std_layout"](f"Revenue and EBITDA by month — {pick}",
+                                               f"{cur} per month", height=420))
+    fig.update_layout(barmode="overlay", legend=dict(orientation="h", y=-0.25),
+                      xaxis=dict(categoryorder="array", categoryarray=x))
+    helpers["show_chart"](fig)
+
+
+def _forecast_benchmarks(values, peers, desc, min_n=pnl_share.MIN_PEERS, label="Forecast"):
+    """Benchmark % for each line, next to the forecast's average %."""
+    if values is None:
+        st.caption("No forecast months shown, so there's nothing to compare.")
+        return
+    if peers is None or len(peers) < min_n:
+        st.caption(pnl_share.NOT_ENOUGH + ".")
+        return
+    rows = pnl.compare_lines(values, peers, pnl.BENCH_LINES)
+    rows = rows[rows["Centres"] >= min_n] if not rows.empty else rows
+    if rows.empty:
+        st.caption(pnl_share.NOT_ENOUGH + ".")
+        return
+    small = pnl.small_sample(len(peers))
+    out = []
+    for _, r in rows.iterrows():
+        amv = r["Line"] == "Average Membership Value"
+        fmt = (lambda v: "–" if v is None or pd.isna(v) else f"${v:,.2f}") if amv else \
+            (lambda v: "–" if v is None or pd.isna(v) else f"{v:.1f}%")
+        lo, hi = (r.get("Range low $"), r.get("Range high $")) if amv else \
+            (r["Range low %"], r["Range high %"])
+        out.append({"Line": r["Line"],
+                    f"{label} (avg)": fmt(r["Actual $"] if amv else r["Actual %"]),
+                    "Typical": fmt(r.get("Typical $") if amv else r["Typical %"]),
+                    "Normal range": f"{fmt(lo)} – {fmt(hi)}",
+                    "Compared with": f"{int(r['Centres'])} centres" + (" ⚠" if small else ""),
+                    f"{label} vs range": pnl_share.soft_status(r["Line"], r["Status"])})
+    st.caption(f"Compared with {desc}. Use these when changing a line's %.")
+    st.dataframe(pd.DataFrame(out), hide_index=True, use_container_width=True)
+    if small:
+        st.warning(f"⚠ Fewer than {pnl.SMALL_SAMPLE} similar centres: treat these ranges as "
+                   "indicative.")
+
+
+def _forecast_excel(table, grid, settings):
+    """The months, the grid as changed and the settings, as an Excel file."""
+    buf = io.BytesIO()
+    lines = [pnl.ROW_ORDER[0], pnl.TUTOR, pnl.GROSS_MARGIN, "Gross Margin %"] + \
+        [r for r in pnl.ROW_ORDER[1:] if r != pnl.TUTOR]
+    cols = ["Basis", "Members", "AMV"] + lines + ["EBITDA", "BE members"]
+    t = pnl.with_gross_margin(table)
+    t["Gross Margin %"] = [pnl.gross_margin_pct(r, w) for r, w in
+                           zip(t.get("Total Revenue", []), t.get(pnl.TUTOR, []))]
+    out = t.reindex(columns=cols).copy()
+    out.index = [pnl.period_name(p) for p in out.index]
+    with pd.ExcelWriter(buf, engine="openpyxl") as xl:
+        out.rename(columns={"AMV": "AMV $ / week"}).to_excel(xl, sheet_name="Forecast",
+                                                             index_label="Month")
+        if grid is not None and not grid.empty:
+            g = grid.copy()
+            g.index = [pnl.period_name(p) for p in g.index]
+            g.to_excel(xl, sheet_name="Adjustments", index_label="Month")
+        pd.DataFrame(list(settings.items()), columns=["Setting", "Value"]).to_excel(
+            xl, sheet_name="Settings", index=False)
+    return buf.getvalue()
+
+
+def report_forecast(df_pnl, df_wm, vl, helpers, bench=None):
+    """P&L Centre Forecast (admins only): one centre's condensed P&L for a financial year or
+    the next 12 months, worked out from its recent months, with every line adjustable."""
+    st.markdown('<div class="report-title">P&L Centre Forecast</div>', unsafe_allow_html=True)
+    st.markdown('<div class="report-subtitle">One centre\'s P&L forecast month by month, from '
+                'its recent results. Change members, AMV or any line\'s % to test a plan.</div>',
+                unsafe_allow_html=True)
+    if st.session_state.get("access_level") != "admin":
+        st.error("This report is for admins only.")
+        return
+    if df_pnl.empty:
+        st.info("No P&L figures yet. An admin can add a month on the P&L Upload page.")
+        return
+    info = location_info(df_pnl, vl)
+    lm = pnl.location_months(df_pnl)
+    members = members_by_month(df_wm)
+    b_pnl, b_wm = bench if bench is not None else (df_pnl, df_wm)
+    centres = {loc.replace(PREFIX, ""): loc for loc in
+               sorted(info.index, key=lambda l: l.replace(PREFIX, "").lower())}
+
+    with st.container(border=True):
+        st.markdown('<div class="filter-label">Filters</div>', unsafe_allow_html=True)
+        a, b, c = st.columns([2, 1, 1])
+        pick = a.selectbox("Centre", list(centres), key="pf_centre")
+        loc = centres[pick]
+        data, cur, _ = entity_months(lm, members, info, [loc])
+        last = data.index.max()
+        view = b.selectbox("Show", FORECAST_VIEWS, key="pf_view")
+        first_fy = pf.fy_start(pf.add_months(last, 1))
+        fy = c.selectbox("Financial year", [first_fy, first_fy + 1], format_func=pf.fy_label,
+                         key="pf_fy", disabled=view != "Financial year")
+    months = pf.window(last, view, fy)
+    fc_months = [p for p in months if p > last]
+    start = pf.starting_point(data)
+    own_series = members.xs(loc, level=0) if not members.empty and \
+        loc in members.index.get_level_values(0) else pd.Series(dtype=float)
+    if not start["amv"] or own_series.empty:
+        st.warning(f"{pick} has no members data for its recent P&L months, so revenue can't "
+                   "be forecast. Check its Weekly Membership upload.")
+        return
+    own = pf.own_pattern(own_series)
+    pattern = own or pf.network_pattern(members_by_month(b_wm))
+    member_fc = pf.forecast_members(own_series, fc_months, pattern)
+    seen = set(data.index.str[5:7])
+    if len(start["months"]) < pf.RECENT:
+        st.warning(f"⚠ {pick} has only {len(start['months'])} month(s) of P&L, so the starting "
+                   "point is based on fewer months than usual.")
+
+    # ── Settings ──
+    _section("Settings", "These set the starting forecast. Changing one resets the "
+                         "month-by-month changes below.")
+    s1, s2, s3, s4 = st.columns(4)
+    rmin = s1.number_input("Royalty minimum $ / month", min_value=0.0, step=100.0,
+                           value=_royalty_min(vl, loc), key=f"pf_rmin_{loc}")
+    relief_opts = ["None"] + [f"Until {pnl.period_name(p)}" for p in fc_months[:-1]] + \
+        ["Whole forecast"]
+    relief = s2.selectbox("Royalty relief", relief_opts,
+                          index=len(relief_opts) - 1 if start["royalties"] == 0 else 0,
+                          key=f"pf_relief_{loc}",
+                          help="Royalties at $0 now are normal (royalty relief). Choose when "
+                               "the relief ends.")
+    relief_until = None if relief == "None" or not fc_months else \
+        fc_months[-1] if relief == "Whole forecast" else \
+        fc_months[relief_opts.index(relief) - 1]
+    rise_pct = s3.number_input("Price rise %", min_value=-50.0, max_value=100.0, value=0.0,
+                               step=1.0, key=f"pf_rise_{loc}")
+    rise_from = s4.selectbox("Price rise from", fc_months or [None],
+                             format_func=lambda p: pnl.period_name(p) if p else "–",
+                             key=f"pf_rise_from_{loc}", disabled=not rise_pct)
+    base = pf.defaults(fc_months, member_fc, start, rmin, relief_until, rise_from, rise_pct)
+
+    top = st.container()                    # headline and chart, filled in once worked out
+
+    # ── Adjust the forecast ──
+    grid = base
+    if fc_months:
+        resets = st.session_state.setdefault("pf_resets", 0)
+        key = f"pf_grid_{loc}_{view}_{fy}_{rmin}_{relief}_{rise_pct}_{rise_from}_{resets}"
+        shown = base.copy()
+        shown.insert(0, "Basis", [pf.FORECAST if p[5:7] in seen else pf.ESTIMATE
+                                  for p in fc_months])
+        shown.index = [pnl.period_name(p) for p in fc_months]
+        pct_cols = {pf.PCT[l]: st.column_config.NumberColumn(
+            GRID_LABELS[l], format="%.1f%%", min_value=0.0, max_value=200.0, step=0.1)
+            for l in pf.COST_LINES}
+        _section("Adjust the forecast",
+                 "Change members, AMV or any line's % of revenue for any month. Lines you "
+                 "leave alone keep their usual behaviour (see How this is worked out).")
+        edited = st.data_editor(
+            shown, key=key, use_container_width=True,
+            disabled=["Basis"],
+            column_config={"Basis": st.column_config.TextColumn("Basis"),
+                           "Members": st.column_config.NumberColumn(format="%.1f", min_value=0.0),
+                           "AMV $ / week": st.column_config.NumberColumn(format="$%.2f",
+                                                                         min_value=0.0),
+                           **pct_cols})
+        if st.button("Reset to forecast", icon=":material/restart_alt:", key="pf_reset"):
+            st.session_state["pf_resets"] = resets + 1
+            st.rerun()
+        grid = edited.drop(columns="Basis")
+        grid.index = fc_months
+        grid = grid.fillna(base)
+    fc = pf.compute(grid, base, start, rmin, relief_until)
+    table = pf.months_table(data, fc, months, seen, rmin)
+    table["BE gap"] = table["Members"] - table["BE members"] if "BE members" in table else None
+    tot = pf.totals(table)
+
+    # ── Headline ──
+    title = pf.fy_label(fy) if view == "Financial year" else \
+        f"Next 12 months ({pnl.period_name(months[0])} – {pnl.period_name(months[-1])})"
+    with top:
+        _section(f"Headline — {title} ({cur})",
+                 f"{tot['Months'] - tot['Forecast months']} actual and "
+                 f"{tot['Forecast months']} forecast months" +
+                 (f", {tot['Estimate months']} of them estimates ⚠"
+                  if tot["Estimate months"] else "") + ".")
+        cards = [("Revenue", _money(tot["Revenue"])), ("EBITDA", _money_short(tot["EBITDA"])),
+                 ("EBITDA % of revenue",
+                  f"{tot['EBITDA %']:.1f}%" if tot["EBITDA %"] is not None else "–"),
+                 (f"Members in {pnl.period_name(months[-1])}", _count(tot["End members"])),
+                 ("Months below break-even", f"{tot['Months below 0']} of {tot['Months']}")]
+        for col, (lbl, value) in zip(st.columns(len(cards)), cards):
+            col.markdown(_card(lbl, value), unsafe_allow_html=True)
+        missing = table.index[table["Basis"] == pf.MISSING]
+        if len(missing):
+            st.caption(f"⚠ No P&L for {', '.join(pnl.period_name(p) for p in missing)}: left "
+                       "out of the totals.")
+        _forecast_chart(table, pick, cur, helpers)
+
+    # ── Month by month ──
+    _section("Forecast by month",
+             "Actual = the centre's P&L. Forecast / Estimate ⚠ = worked out (see How this is "
+             "worked out).")
+    cols = []
+    for p in months:
+        r = table.loc[p].to_dict()
+        cols.append((pnl.period_name(p), r["Basis"], {k: (None if v is None or
+                     (isinstance(v, float) and pd.isna(v)) else v) for k, v in r.items()}))
+    t = table[table["Basis"] != pf.MISSING]
+    total = pnl.with_gross_margin(t)[pnl.ROW_ORDER + [pnl.GROSS_MARGIN, "EBITDA"]].sum().to_dict()
+    total["Members"] = t["Members"].mean()
+    total["AMV"] = total["Total Revenue"] / total["Members"] / pnl.WEEKS_PER_MONTH / len(t) \
+        if total["Members"] and len(t) else None
+    cols.append(("Total", f"{len(t)} months", total))
+    st.markdown(side_by_side_html(cols, rows=FORECAST_ROWS), unsafe_allow_html=True)
+    st.caption("Total: amounts added up over the months; members and AMV are the average "
+               "per month.")
+
+    # ── Benchmarks ──
+    _section("Benchmark % for each line")
+    sel = start["months"]
+    bench_cent = centre_table(b_pnl, members_by_month(b_wm), vl, sel, helpers["age_group"])
+    values = pf.benchmark_values(table, info.at[loc, "Country"]
+                                 if isinstance(info.at[loc, "Country"], str) else None)
+    age = vl.set_index(LOC)["Age (Months)"].get(loc) if LOC in vl.columns and \
+        "Age (Months)" in vl.columns else None
+    peers, desc = None, ""
+    if not bench_cent.empty:
+        country = values.get("Country") if values is not None else None
+        peers, desc = peers_by_age(bench_cent, age, country,
+                                   data["Members"].tail(pf.RECENT).mean(), loc)
+    _forecast_benchmarks(values, peers, desc)
+
+    settings = {"Centre": pick, "Shown": title, "Royalty minimum $ / month": rmin,
+                "Royalty relief": relief, "Price rise %": rise_pct,
+                "Price rise from": pnl.period_name(rise_from) if rise_pct and rise_from else "–",
+                "Starting point": ", ".join(pnl.period_name(p) for p in sel),
+                "Time-of-year pattern": "centre's own" if own else "network",
+                "Made": datetime.now(ZoneInfo("Australia/Sydney")).strftime("%d/%m/%Y %H:%M")}
+    st.download_button("Download as Excel", _forecast_excel(table, grid if fc_months else None,
+                                                            settings),
+                       file_name=f"{datetime.now(ZoneInfo('Australia/Sydney')):%d-%m-%Y}-"
+                                 f"pnl-forecast-{pick.lower().replace(' ', '-')}.xlsx",
+                       icon=":material/download:", key="pf_download")
+    st.info(FORECAST_NOTE)
+    with st.expander("How this is worked out"):
+        st.markdown(_md(HOW_FORECAST))

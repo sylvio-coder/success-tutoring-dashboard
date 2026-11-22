@@ -4,7 +4,9 @@ from datetime import date, timedelta
 import pandas as pd
 import streamlit as st
 
+import franchise_inputs as fin
 import ingest
+import membership_composition as mc
 import pnl
 import sheet_setup
 import sheet_writer as sw
@@ -767,3 +769,232 @@ def page_sheet_setup(spreadsheet, df_wm, df_rv, clear_cache):
                 st.success("Done. No broken formulas found in any tab.")
         except Exception as e:
             st.error(f"The change failed: {e}")
+
+
+# ── Membership Composition upload ─────────────────────────────────────────────
+def ensure_rrp_tab(spreadsheet):
+    """Create the RRP tab with HQ's default prices if it doesn't exist. True if created."""
+    import gspread
+    try:
+        spreadsheet.worksheet(mc.RRP_TAB)
+        return False
+    except gspread.WorksheetNotFound:
+        ws = spreadsheet.add_worksheet(mc.RRP_TAB, rows=50, cols=len(mc.RRP_HEADERS))
+        ws.update([mc.RRP_HEADERS], "A1")
+        ws.append_rows([[r[h] for h in mc.RRP_HEADERS] for r in mc.DEFAULT_RRP],
+                       value_input_option="RAW")
+        return True
+
+
+def page_composition_upload(spreadsheet, df_wm, df_rv, clear_cache):
+    st.markdown('<div class="report-title">Membership Composition Upload</div>',
+                unsafe_allow_html=True)
+    _subtitle("Drop in the portal's Membership Composition export (CSV, all centres) each "
+              "week. Each centre's plans are saved to the 'Membership Composition' tab.")
+
+    f = st.file_uploader("Membership Composition CSV", type=["csv"], key="comp_file")
+    if not f:
+        st.info("Upload the week's export to see a preview. Nothing is written to the Sheet "
+                "until you confirm.")
+        return
+    try:
+        data = mc.read_export(f.getvalue())
+    except mc.CompositionError as e:
+        st.error(str(e))
+        return
+    try:
+        _, _, master = _load_master(spreadsheet)
+        aliases = sw.read_aliases(spreadsheet)
+    except Exception as e:
+        st.error(f"Could not read the master location list: {e}")
+        return
+
+    week = st.date_input("Week ending", value=data["week_end"] or date.today(),
+                         format="DD/MM/YYYY", key="comp_week")
+    if not data["week_end"]:
+        st.warning("The file has no date. Check the week ending above.")
+    rows = data["rows"]
+    names = sorted(rows["Centre"].unique())
+    st.caption(f"{len(names)} centres with members"
+               + (f"; {len(data['empty'])} listed with none" if data["empty"] else "") + ".")
+
+    found, sugg = mc.match_centres(names, master, aliases)
+    extra_aliases, left_out = {}, set()
+    if sugg:
+        st.markdown("#### Centres not in the master list")
+        st.caption("Pick the location each name refers to, or leave it out. A mapping you "
+                   "choose is remembered for future uploads.")
+        all_names = master["Location"].tolist()
+        SKIP, CHOOSE = "Leave out this week", "— choose —"
+        for n, s in sugg.items():
+            opts = [CHOOSE] + s + [SKIP] + [x for x in all_names if x not in s]
+            c1, c2 = st.columns([2, 3])
+            c1.markdown(f"**{n}**")
+            choice = c2.selectbox("Maps to", opts, key=f"comp_map_{n}",
+                                  label_visibility="collapsed")
+            if choice == SKIP:
+                left_out.add(n)
+            elif choice != CHOOSE:
+                extra_aliases[ingest.scoped_alias(mc.CRM, n)] = choice
+                found[n] = choice
+    unresolved = [n for n, loc in found.items() if not loc and n not in left_out]
+
+    by_loc = {}
+    for n, loc in found.items():
+        if loc:
+            by_loc.setdefault(loc, []).append(n)
+    clash = {loc: ns for loc, ns in by_loc.items() if len(ns) > 1}
+    for loc, ns in clash.items():
+        st.error(f"{' and '.join(ns)} both map to {loc}. Map one of them to another location.")
+
+    st.markdown("#### Preview")
+    prev = mc.prepare(pd.DataFrame(mc.records(rows, found, week)))
+    if not prev.empty:
+        view = mc.group_table(prev, None, mc.rrp_table())
+        frozen = prev[prev["Freeze"]].groupby("Location")["Members"].sum()
+        view["Under $10"] = view["Location"].map(frozen).fillna(0).astype(int)
+        st.dataframe(view[["Centre", "Country", "Members", "ARPM", "Revenue per session",
+                           "Under $10"]].sort_values("Centre"), hide_index=True,
+                     width="stretch",
+                     column_config={c: st.column_config.NumberColumn(c, format="%.2f")
+                                    for c in ["ARPM", "Revenue per session"]})
+        st.caption("Weekly prices in each centre's own currency (US monthly prices ÷ 4). "
+                   f"'Under ${mc.FREEZE_BELOW}' = freeze fee or discretionary amount: kept in "
+                   "totals, left out of the plan rows.")
+        odd = prev[prev["Freeze"]]
+        if not odd.empty:
+            with st.expander(f"Prices under ${mc.FREEZE_BELOW} to check ({len(odd)})"):
+                st.dataframe(odd[["Location", "Type", "Sessions/week", "Members",
+                                  "Weekly price"]], hide_index=True, width="stretch")
+
+    label = week.isoformat()
+    try:
+        headers, existing = sw.read_tab(spreadsheet.worksheet(mc.TAB))
+        wi = headers.index("Week ending")
+        if any(len(r) > wi and r[wi].strip().lstrip("'") == label for r in existing):
+            st.info(f"The Sheet already has {week:%d/%m/%Y}. Centres in this upload will be "
+                    "replaced, not duplicated.")
+    except Exception:
+        pass
+
+    if unresolved:
+        st.warning("Choose what these names map to: " + ", ".join(unresolved))
+    recs = mc.records(rows, found, week)
+    blocked = bool(unresolved) or bool(clash) or not recs
+    if st.button(f"✅ Confirm and write week ending {week:%d/%m/%Y} to the Sheet",
+                 type="primary", disabled=blocked):
+        try:
+            with st.spinner("Writing to the Sheet..."):
+                if extra_aliases:
+                    sw.add_aliases(spreadsheet, list(extra_aliases.items()))
+                ws = sw.get_or_add_tab(spreadsheet, mc.TAB, mc.HEADERS)
+                deleted, added = sw.replace_week(ws, recs, "Location", label,
+                                                 key_header="Week ending")
+                rrp_added = ensure_rrp_tab(spreadsheet)
+            clear_cache()
+            st.success(f"Week ending {week:%d/%m/%Y} written: {added} plan rows for "
+                       f"{len(by_loc)} centres ({deleted} earlier rows for this week replaced).")
+            if rrp_added:
+                st.info("Added an 'RRP' tab with HQ's prices from 1 July 2026. Edit it there "
+                        "when prices change.")
+        except Exception as e:
+            st.error(f"Writing to the Sheet failed: {e}\n\n{WRITE_HINT}")
+    elif blocked:
+        st.caption("Resolve the items above to enable writing.")
+
+
+# ── Franchise Model upload ─────────────────────────────────────────────────────
+def _now_label():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    return datetime.now(ZoneInfo("Australia/Sydney")).strftime("%d/%m/%Y %I:%M %p")
+
+
+def _readiness_table(rows):
+    ready = fin.readiness(rows)
+    counts = {}
+    for r in rows:
+        counts[r["Model"]] = counts.get(r["Model"], 0) + 1
+    st.dataframe(pd.DataFrame([{"Model": m, "Inputs": counts[m],
+                                "Status": "Ready" if not p else f"Not ready: {len(p)} to fix"}
+                               for m, p in ready.items()]),
+                 hide_index=True, width="stretch")
+    for m, p in ready.items():
+        if p:
+            with st.expander(f"{m}: what to fix ({len(p)})"):
+                st.markdown("\n".join(f"- {x}" for x in p[:60]) +
+                            (f"\n- … and {len(p) - 60} more" if len(p) > 60 else ""))
+    return ready
+
+
+def page_franchise_upload(spreadsheet, df_wm, df_rv, clear_cache):
+    st.markdown('<div class="report-title">Franchise Model Upload</div>', unsafe_allow_html=True)
+    _subtitle("Upload the franchise model assumptions workbook (.xlsx). From Google Sheets: "
+              "File → Download → Microsoft Excel. The Franchise Model report uses the latest "
+              "upload; the one before it is kept so you can step back.")
+    try:
+        versions = fin.read_versions(spreadsheet)
+    except Exception as e:
+        st.error(f"Could not read the '{fin.TAB}' tab: {e}")
+        return
+    cur_v, cur_rows, cur_when = fin.latest(versions)
+    if cur_v:
+        ready = [m for m, p in fin.readiness(cur_rows).items() if not p]
+        st.caption(f"In use now: upload {cur_v} from {cur_when} · ready: "
+                   + (", ".join(ready) if ready else "none"))
+    else:
+        st.caption("No model uploaded yet.")
+
+    f = st.file_uploader("Assumptions workbook", type=["xlsx"], key="fm_file")
+    if f:
+        try:
+            rows, problems = fin.read_workbook(f.getvalue())
+        except fin.InputsError as e:
+            st.error(str(e))
+            return
+        if problems:
+            st.error("Fix these in the workbook and upload it again:\n" +
+                     "\n".join(f"- {m}{' · ' + v if v else ''}: {msg}"
+                                for m, v, msg in problems))
+        st.markdown("#### Models in this file")
+        ready = _readiness_table(rows)
+        st.markdown("#### Changes since the upload in use")
+        if not cur_v:
+            st.caption("First upload: everything is new.")
+        else:
+            ch = fin.changes(cur_rows, rows)
+            if ch:
+                st.dataframe(pd.DataFrame(ch, columns=["Model", "Input", "Changed", "Was", "Now"])
+                             .astype(str), hide_index=True, width="stretch")
+            else:
+                st.caption("No changes: the values are the same as the upload in use.")
+        if not any(not p for p in ready.values()):
+            st.warning("No model is ready yet. You can still save it, but the report needs at "
+                       "least one ready model.")
+        if st.button("✅ Save this upload", type="primary", disabled=bool(problems),
+                     key="fm_save"):
+            try:
+                with st.spinner("Writing to the Sheet..."):
+                    v = fin.save_version(spreadsheet, rows, _now_label())
+                clear_cache()
+                st.success(f"Saved as upload {v}. The Franchise Model report now uses it.")
+            except Exception as e:
+                st.error(f"Writing to the Sheet failed: {e}\n\n{WRITE_HINT}")
+    else:
+        st.info("Upload the workbook to check it and see what changed. Nothing is written "
+                "until you click Save.")
+
+    if len(versions) >= 2:
+        prev = sorted(versions)[-2]
+        with st.expander("Step back to the previous upload"):
+            when = versions[prev][0].get("Uploaded", "")
+            st.caption(f"Upload {prev} from {when}. Restoring saves it again as the newest "
+                       "upload; the one in use now is kept as the previous one.")
+            if st.button("Restore the previous upload", key="fm_restore"):
+                try:
+                    with st.spinner("Writing to the Sheet..."):
+                        v = fin.save_version(spreadsheet, versions[prev], _now_label())
+                    clear_cache()
+                    st.success(f"Restored as upload {v}.")
+                except Exception as e:
+                    st.error(f"Writing to the Sheet failed: {e}\n\n{WRITE_HINT}")
