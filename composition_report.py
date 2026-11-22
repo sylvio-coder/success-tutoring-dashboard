@@ -127,14 +127,31 @@ def ideal_composition_html(comp):
 
 
 # ── Views ─────────────────────────────────────────────────────────────────────
-def _group(week, vl, table):
+MIN_FOR_MEDIAN = 5   # non-admins: country median only shown with at least this many centres
+
+
+def _visible(week, vl, table, allowed):
+    """Group table for the centres this viewer may see. Medians use every centre, but for a
+    non-admin they are only shown where the country has enough centres to stay anonymous."""
     t = mc.group_table(week, vl, table)
+    if allowed is None or t.empty:
+        return t
+    count = t.groupby("Country")["Centre"].transform("count")
+    t = t.assign(**{"ARPM vs country median":
+                    t["ARPM vs country median"].where(count >= MIN_FOR_MEDIAN)})
+    return t[t["Location"].isin(allowed)].reset_index(drop=True)
+
+
+def _group(week, vl, table, allowed):
+    t = _visible(week, vl, table, allowed)
     countries = sorted(t["Country"].unique())
     pick = st.selectbox("Country", ["All countries"] + countries, key="comp_country")
     if pick != "All countries":
         t = t[t["Country"] == pick]
     st.caption("Lowest % of RRP first. Amounts weekly, in each centre's own currency. "
-               "ARPM vs country median: \"–\" where the country has one centre.")
+               "ARPM vs country median: \"–\" where the country has one centre"
+               + ("." if allowed is None else
+                  f" or fewer than {MIN_FOR_MEDIAN} centres."))
     show = t[["Centre", "Country", "RRP used", "Members", "ARPM", "Revenue per session",
               "% of RRP", "ARPM vs country median"]]
     st.dataframe(show.style.map(lambda v: "" if pd.isna(v) else
@@ -149,8 +166,8 @@ def _group(week, vl, table):
                                     format="$%+.2f")})
 
 
-def _centre(comp, week, vl, table):
-    g = mc.group_table(week, vl, table)
+def _centre(comp, week, vl, table, allowed):
+    g = _visible(week, vl, table, allowed)
     names = dict(sorted(zip(g["Centre"], g["Location"]), key=lambda kv: kv[0].lower()))
     pick = st.selectbox("Centre", list(names), key="comp_centre")
     loc = names[pick]
@@ -183,14 +200,14 @@ def _centre(comp, week, vl, table):
              'higher than RRP.</div>' if own else ""))
 
 
-def report_composition(df_comp, vl, df_rrp):
+def report_composition(df_comp, vl, df_rrp, allowed=None):
+    """allowed: None for admins (every centre), else the locations this viewer may see."""
     st.markdown('<div class="report-title">Membership Composition</div>',
                 unsafe_allow_html=True)
     st.markdown('<div class="report-subtitle">Each centre\'s plans and prices against RRP, '
                 'and the ideal composition to achieve RRP.</div>', unsafe_allow_html=True)
-    if st.session_state.get("access_level") != "admin":
-        st.error("This report is for admins only.")
-        return
+    if st.session_state.get("access_level") != "admin" and allowed is None:
+        allowed = []                     # never show every centre to a non-admin
     comp = mc.prepare(df_comp)
     if comp.empty:
         st.info("No Membership Composition data yet. An admin can add a week on the "
@@ -207,9 +224,12 @@ def report_composition(df_comp, vl, df_rrp):
         wk = b.selectbox("Week ending", weeks, key="comp_week_pick",
                          format_func=lambda d: pd.Timestamp(d).strftime("%d/%m/%Y"))
     week = comp[comp["Week ending"] == pd.Timestamp(wk)]
+    if allowed is not None and not week["Location"].isin(allowed).any():
+        st.info("None of your centres is in this week's Membership Composition data.")
+        return
     if view == VIEWS[0]:
-        _group(week, vl, table)
+        _group(week, vl, table, allowed)
     else:
-        _centre(comp, week, vl, table)
+        _centre(comp, week, vl, table, allowed)
     with st.expander("How this is worked out"):
         st.markdown(HOW)

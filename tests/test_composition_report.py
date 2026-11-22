@@ -1,4 +1,4 @@
-"""Membership Composition report page: group overview, centre tables, admin-only rule
+"""Membership Composition report page: group overview, centre tables, GPMs see only their own centres
 and the menu entry. Made-up data only."""
 import pandas as pd
 from streamlit.testing.v1 import AppTest
@@ -14,15 +14,16 @@ COMP = pd.concat([SHEET, LATER])
 VL = pd.DataFrame({mc.LOC: [P + "Tex"], "Region": ["Texas"]})
 
 
-def run(level="admin", comp=COMP):
-    def script(level, comp):
+def run(level="admin", comp=COMP, allowed=None):
+    def script(level, comp, allowed):
         import pandas as pd
         import streamlit as st
         import composition_report as cr
         from test_composition_report import VL
         st.session_state["access_level"] = level
-        cr.report_composition(comp, VL, pd.DataFrame())
-    return AppTest.from_function(script, args=(level, comp), default_timeout=60).run()
+        cr.report_composition(comp, VL, pd.DataFrame(), allowed=allowed)
+    return AppTest.from_function(script, args=(level, comp, allowed),
+                                 default_timeout=60).run()
 
 
 def test_group_overview():
@@ -66,10 +67,26 @@ def test_centre_note_for_prices_under_10():
     assert "$4.97" not in html.split("Members under $10")[0]          # not in the rows
 
 
-def test_gpm_cannot_see_the_report():
-    at = run("gpm")
-    assert any("admins only" in e.value for e in at.error)
-    assert not at.dataframe
+def test_gpm_sees_only_their_own_centres():
+    at = run("gpm", allowed=[P + "Alpha"])
+    assert not at.exception, at.exception
+    g = at.dataframe[0].value
+    assert list(g["Centre"]) == ["Alpha"]
+    assert g["ARPM vs country median"].isna().all()          # AU has under 5 centres
+    assert at.selectbox(key="comp_country").options == ["All countries", "AU"]
+    at.radio(key="comp_view").set_value("Centre deep dive").run()
+    assert at.selectbox(key="comp_centre").options == ["Alpha"]
+    html = " ".join(m.value for m in at.markdown)
+    for other in ["Beta", "Kiwi", "Tex"]:
+        assert P + other not in html
+
+
+def test_gpm_with_no_centres_sees_nothing():
+    for allowed in ([], None):                               # None: a GPM is never shown all
+        at = run("gpm", allowed=allowed)
+        assert not at.exception, at.exception
+        assert any("None of your centres" in i.value for i in at.info)
+        assert not at.dataframe
 
 
 def test_no_data_yet():
@@ -77,7 +94,7 @@ def test_no_data_yet():
     assert any("No Membership Composition data yet" in i.value for i in at.info)
 
 
-def test_menu_entry_admin_only_and_upload_page():
+def test_menu_entry_and_upload_page():
     src = open(mc.__file__.replace("membership_composition.py", "app.py")).read()
     reports = src[src.index("REPORTS=["):src.index("]", src.index("REPORTS=["))]
     assert '"17 · Membership Composition"' in reports
@@ -86,6 +103,7 @@ def test_menu_entry_admin_only_and_upload_page():
     assert membership.index('"3 · Membership by Age"') < \
         membership.index('"17 · Membership Composition"')
     lock = src[src.index("ADMIN_ONLY_REPORTS = {"):src.index("if not REPORTS:")]
-    assert '"17 · Membership Composition"' in lock
+    assert '"17 · Membership Composition"' not in lock        # GPMs: own centres only
+    assert "allowed=None if st.session_state.get(\"access_level\") == \"admin\"" in src
     assert 'selected_report=="17 · Membership Composition"' in src
     assert '"⚙ Composition Upload": admin_pages.page_composition_upload' in src

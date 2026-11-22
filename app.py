@@ -326,10 +326,12 @@ def _load_tab_or_empty(tab):
         return pd.DataFrame()
 
 def report_composition():
-    """Membership Composition (admins only for now)."""
+    """Membership Composition. Admins see every centre; anyone else only their own."""
     composition_report.report_composition(
         _load_tab_or_empty(membership_composition.TAB), load_vlookup(),
-        _load_tab_or_empty(membership_composition.RRP_TAB))
+        _load_tab_or_empty(membership_composition.RRP_TAB),
+        allowed=None if st.session_state.get("access_level") == "admin"
+        else list(st.session_state.get("allowed_locations", [])))
 
 def report_pnl(df_wm, page=None):
     """P&L reports. Admins see every centre; anyone else only their own (none if not set).
@@ -2339,8 +2341,7 @@ def report_allowed(report, allowed_tabs):
 
 REPORTS = [r for r in REPORTS if report_allowed(r, st.session_state.get("allowed_tabs", []))]
 # Admin-only reports: hidden from everyone else, even with allowed_tabs "all".
-ADMIN_ONLY_REPORTS = {"15 · P&L Centre Forecast", "16 · Franchise Model",
-                      "17 · Membership Composition"}
+ADMIN_ONLY_REPORTS = {"15 · P&L Centre Forecast", "16 · Franchise Model"}
 if st.session_state.get("access_level") != "admin":
     REPORTS = [r for r in REPORTS if r not in ADMIN_ONLY_REPORTS]
 ADMIN_PAGES = ["⚙ Weekly Upload", "⚙ P&L Upload", "⚙ Composition Upload", "⚙ Franchise Model Upload", "⚙ Locations", "⚙ Sheet Setup"] if st.session_state.get("access_level") == "admin" else []
