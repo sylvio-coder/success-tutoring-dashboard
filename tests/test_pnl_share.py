@@ -319,6 +319,46 @@ def test_share_page_with_too_few_similar_centres():
     assert "similar centres</td>" not in table
 
 
+def test_months_trading():
+    vl = pd.DataFrame({LOC: ["A", "B"], "Location Start Date": ["15-Sep-2025", ""]})
+    assert ps.months_trading(vl, "A", "2025-09") == 1          # opening month = month 1
+    assert ps.months_trading(vl, "A", "2026-08") == 12
+    assert ps.months_trading(vl, "A", "2026-09") == 13
+    # No start date: current age wound back to that month.
+    assert ps.months_trading(vl, "B", "2026-08", age_now=20,
+                             today=pd.Timestamp("2026-11-20")) == 18
+    assert ps.months_trading(vl, "B", "2026-08") is None
+
+
+def test_share_page_no_comparisons_for_a_centre_12_months_or_younger():
+    def script():
+        import streamlit as st
+        import pnl_reports as pr
+        from test_pnl_share import PNL, VL, WM, AGE, REVENUE
+        vl = VL.assign(**{"Location Start Date": ["1-Oct-2025"] + ["1-Jan-2023"] * 9})
+        pr.report_share(PNL, WM, vl, dict(
+            age_group=AGE, age_order=[], state_of=lambda r: r, show_chart=st.plotly_chart,
+            std_layout=lambda t, y="", height=400: dict(title=t, height=height),
+            report_filters=None, revenue=REVENUE), bench=(PNL, WM))
+    at = AppTest.from_function(script, default_timeout=30).run()
+    at.selectbox(key="ps_centre").set_value("Auburn").run()     # Aug 2026 = month 11
+    assert not at.exception, at.exception
+    text = page_text(at)
+    assert "No comparisons with other centres: Auburn had been trading for 11 months" in text
+    assert "Comparisons start from its 13th month" in text
+    assert not any("otile" in m.value and "Wages - Tutor" in m.value for m in at.markdown)
+    assert "Compared with" not in text and "Typical similar centre" not in text
+    assert "Network average" not in text and "Outliers vs similar centres" not in text
+    assert "This centre&#x27;s accounts" in text or "This centre's accounts" in text
+    table = next(m.value for m in at.markdown if '<table class="share-tbl"' in m.value)
+    assert "Worth a look" not in table and "Typical" not in table and "Similar" not in table
+    assert ">Wages - Tutor<" in table and ">Gross Margin<" in table
+    assert "Not enough similar centres" not in text
+    at.selectbox(key="ps_centre").set_value("Peer 0").run()      # established: compared
+    assert "No comparisons with other centres" not in page_text(at)
+    assert "Outliers vs similar centres" in page_text(at)
+
+
 def test_share_page_with_no_pnl_yet():
     def script():
         import pandas as pd

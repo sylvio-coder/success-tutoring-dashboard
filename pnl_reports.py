@@ -1379,6 +1379,7 @@ SHARE_CSS = """<style>
 .band{background:#fff;border:1px solid #dde5e6;border-radius:16px;padding:3px 12px;
  font-size:.85em;color:#1c2a30}.band b{color:#1f9a9a}
 .check-item{margin:2px 0;color:#1c2a30}
+.ps-new{background:#eef6f6;border-left:4px solid #1f9a9a;padding:8px 12px;margin:4px 0 10px;font-size:13.5px;color:#1c2a30;border-radius:4px}
 .otile svg{max-width:100%;height:auto}
 @media print {
   @page { size: A4 portrait; margin: 10mm; }
@@ -1408,6 +1409,9 @@ SHARE_CSS = """<style>
 </style>"""
 
 HOW_SHARE = f"""
+- **New centres** ({pnl_share.NEW_MONTHS} months trading or less, counting the opening month as month 1)
+  are not compared with other centres: their numbers are still settling. The report shows
+  the centre's own figures only, with a note at the top. Comparisons start from month 13.
 - **Similar centres** are centres at the same stage (developing: under 12 months; or
   established), in the same country and of a similar size. If fewer than
   {pnl_share.MIN_PEERS} reported, the group widens (nearby sizes, then the whole country, then
@@ -1462,9 +1466,10 @@ def _pill(line, status, note):
     return f'<span class="pill {cls}">{html.escape(word)}</span>'
 
 
-def share_table_html(table, top=None):
+def share_table_html(table, top=None, own_only=False):
     """Every account line, all rows, as a plain table (prints in full, no scroll box).
-    top: rows pinned first in bold (the Gross Margin row)."""
+    top: rows pinned first in bold (the Gross Margin row). own_only: this centre's figures
+    only, with no comparison columns (centres 12 months old or younger)."""
     t = table.copy()
     t["_b"] = t["Benchmarked"].astype(bool)
     t["_g"] = t["Gap $"].astype(float).fillna(0)
@@ -1473,6 +1478,16 @@ def share_table_html(table, top=None):
                    t[~t["_b"]].sort_values("_a", ascending=False)])
     if top is not None and len(top):
         t = pd.concat([top.assign(_sub=True), t.assign(_sub=False)])
+    if own_only:
+        rows = []
+        for _, r in t.iterrows():
+            amv = r["Line"] == "Average Membership Value"
+            actual = f"${r['Actual $']:,.2f}/wk" if amv else _money(r["Actual $"])
+            cls = "sub" if r.get("_sub") is True else ""
+            rows.append(f'<tr class="{cls}"><td class="l">{html.escape(str(r["Line"]))}</td>'
+                        f'<td>{actual}</td><td>{_fmt_pct(r["Actual %"])}</td></tr>')
+        return (f'<table class="share-tbl"><tr><th class="l">Line</th><th>Actual</th>'
+                f'<th>% of revenue</th></tr>{"".join(rows)}</table>').replace("$", "&#36;")
     head = ('<tr><th class="l">Line</th><th>Actual</th><th>% of revenue</th><th>Typical</th>'
             '<th>Normal range</th><th>Similar centres</th><th>Cost vs typical / month</th>'
             '<th class="l">Status</th></tr>')
@@ -1576,10 +1591,10 @@ def _trend_charts(data, months, typical, unit, cur, helpers, comp=None, comp_typ
                 _trend_chart(name, x, months, ys, tys, yfmt, ytitle, helpers)
 
 
-def _members_section(trend, cur_members):
+def _members_section(trend, cur_members, compare=True):
     _section("Members trend",
-             "Average active members over the last 4 weeks against the 4 weeks before, "
-             "compared with the network average.")
+             "Average active members over the last 4 weeks against the 4 weeks before" +
+             (", compared with the network average." if compare else "."))
     if trend is None:
         st.caption("Not enough weekly membership history to show a trend yet.")
         return
@@ -1604,6 +1619,9 @@ def _members_section(trend, cur_members):
         _tile("Last 12 weeks", "", "Active members each week", "#1f9a9a",
               _sparkline(trend["spark"], [])),
     ]
+    if not compare:                                   # new centre: its own figures only
+        tiles = [tiles[0], _tile("This centre's trend", f"{trend['trend']:+.1f}%",
+                                 "last 4 weeks vs the 4 before"), tiles[4]]
     st.markdown(TILE_CSS, unsafe_allow_html=True)
     for col, t in zip(st.columns(len(tiles)), tiles):
         col.markdown(t, unsafe_allow_html=True)
@@ -1673,7 +1691,10 @@ def report_share(df_pnl, df_wm, vl, helpers, bench=None):
         st.warning(f"{pick} has no P&L for these months.")
         return
     peers, desc = bench_cent.iloc[0:0], None
-    if rev >= pnl.LOW_REVENUE:
+    trading = pnl_share.months_trading(vl, loc, month, values.get("Age (Months)"))
+    too_new = trading is not None and trading <= pnl_share.NEW_MONTHS
+    no_compare = pnl_share.too_new_note(pick, trading) if too_new else pnl_share.NOT_ENOUGH + "."
+    if rev >= pnl.LOW_REVENUE and not too_new:
         peers, desc = pnl_share.share_peers(bench_cent, values.get("Age (Months)"),
                                             values.get("Country"), values.get("Members"), loc,
                                             young)
@@ -1726,6 +1747,9 @@ def report_share(df_pnl, df_wm, vl, helpers, bench=None):
     if missed:
         st.caption(f"⚠ No P&L for {', '.join(pnl.period_name(p) for p in missed)}: the average "
                    "is over the months reported.")
+    if too_new:
+        st.markdown(f'<div class="ps-new">ⓘ {html.escape(no_compare)}</div>',
+                    unsafe_allow_html=True)
     _headline_cards(now, prev, vs)
     if desc:
         st.markdown('<div class="bands">' + "".join(
@@ -1733,7 +1757,7 @@ def report_share(df_pnl, df_wm, vl, helpers, bench=None):
             for m_, b_ in bands.items()) + '</div>', unsafe_allow_html=True)
         st.caption(f"Compared with {desc} ({len(peers)} centres)" +
                    (" ⚠ small sample" if pnl.small_sample(len(peers)) else "") + ".")
-    else:
+    elif not too_new:
         st.caption(pnl_share.NOT_ENOUGH + "." if rev >= pnl.LOW_REVENUE else
                    "Revenue is too low this month for a meaningful comparison.")
 
@@ -1742,7 +1766,8 @@ def report_share(df_pnl, df_wm, vl, helpers, bench=None):
                              (False, "Accounts costing less than typical", less)):
         _section(title)
         if not desc:
-            st.caption(pnl_share.NOT_ENOUGH + ".")
+            st.caption("No comparisons: under 13 months trading." if too_new else
+                       pnl_share.NOT_ENOUGH + ".")
             continue
         _outlier_tiles(rows, bad, cur)
 
@@ -1751,11 +1776,18 @@ def report_share(df_pnl, df_wm, vl, helpers, bench=None):
 
     # ── Scheduling efficiency ──
     with st.container(key="ps_sched"):
-        sched = scheduling_efficiency(pick, loc, values, peers if len(peers) else None,
-                                      bench_cent, helpers.get("revenue"), vl, sel, cur)
+        if too_new:
+            _section("Scheduling Efficiency")
+            st.caption("No comparisons: under 13 months trading.")
+            sched = None
+        else:
+            sched = scheduling_efficiency(pick, loc, values, peers if len(peers) else None,
+                                          bench_cent, helpers.get("revenue"), vl, sel, cur)
 
     # ── 12-month trend ──
-    _section("Last 12 months", "This centre (teal) against the typical similar centre "
+    _section("Last 12 months", "This centre only: no typical line while it is under 13 "
+             "months trading." if too_new else
+             "This centre (teal) against the typical similar centre "
              f"(dashed). The typical line needs at least {pnl_share.MIN_PEERS} similar centres "
              "reporting that month.")
     t_months = months_shown(list(data.index), "Last 12 months", month)
@@ -1780,7 +1812,7 @@ def report_share(df_pnl, df_wm, vl, helpers, bench=None):
         if len(weeks):
             trend = pnl_share.members_trend(b_wm, loc, weeks.max())
     with st.container(key="ps_members"):
-        _members_section(trend, now.get("Members"))
+        _members_section(trend, now.get("Members"), compare=not too_new)
 
     # ── What's going well ──
     good = []
@@ -1795,7 +1827,7 @@ def report_share(df_pnl, df_wm, vl, helpers, bench=None):
                     (" a month." if n_sel > 1 else "."))
     if prev is not None and rev > prev["Total Revenue"] + 0.5:
         good.append(f"Revenue up **${rev - prev['Total Revenue']:,.0f}** {vs}.")
-    if trend and not trend["too_new"] and trend["vs"] > 2:
+    if trend and not trend["too_new"] and not too_new and trend["vs"] > 2:
         good.append(f"Members growing faster than the network ({trend['trend']:+.1f}% vs "
                     f"{trend['average']:+.1f}% over 4 weeks).")
     if sched == "Fewer sessions than typical":
@@ -1807,11 +1839,14 @@ def report_share(df_pnl, df_wm, vl, helpers, bench=None):
                          "A steady period: nothing stands out yet."), unsafe_allow_html=True)
         g2.markdown(_box("Top opportunities", tips, "#1f9a9a",
                          "No costs well above similar centres this period." if desc else
+                         "No comparisons: under 13 months trading." if too_new else
                          pnl_share.NOT_ENOUGH + "."), unsafe_allow_html=True)
 
     # ── Outliers vs similar centres: every account line, all rows ──
     st.markdown('<div class="page-break"></div>', unsafe_allow_html=True)
-    _section("Outliers vs similar centres",
+    _section("This centre's accounts" if too_new else "Outliers vs similar centres",
+             "Each account and its % of revenue. No comparisons: under 13 months trading."
+             if too_new else
              (f"{pick} compared with {desc}. " if desc else "") +
              "Rent, royalties, manager wages, interest and CRM software are this centre's own "
              "figures only. "
@@ -1820,8 +1855,8 @@ def report_share(df_pnl, df_wm, vl, helpers, bench=None):
     if accounts is None or accounts.empty:
         st.caption("No account lines for this period.")
     else:
-        st.markdown(share_table_html(accounts, grouped[grouped["Line"] == pnl.GROSS_MARGIN]),
-                    unsafe_allow_html=True)
+        st.markdown(share_table_html(accounts, grouped[grouped["Line"] == pnl.GROSS_MARGIN],
+                                     own_only=too_new), unsafe_allow_html=True)
     ebitda = now["EBITDA"]
     parts = [f"**{pick}** {'made' if ebitda >= 0 else 'lost'} **${abs(ebitda):,.0f}** "
              f"({label})."]

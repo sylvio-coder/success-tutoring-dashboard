@@ -28,6 +28,33 @@ _SENSITIVE_NAME = re.compile(r"royalt|\brent\b|manager|interest\s+expense|\bcrm\
 NOT_BENCHMARKED = "Not benchmarked"
 NO_BENCHMARK = "No benchmark"
 NOT_ENOUGH = "Not enough similar centres to compare"
+LOC = "Success Tutoring - Business name"   # Vlookup location column
+NEW_MONTHS = 12                 # centres trading this many months or fewer: no comparisons
+
+
+def months_trading(vl, loc, period, age_now=None, today=None):
+    """Months the centre had been trading by the end of `period` ("YYYY-MM"), counting its
+    opening month as month 1. Uses Vlookup 'Location Start Date'; falls back to its current
+    'Age (Months)' wound back to that month. None if neither is known."""
+    end = pd.Period(period, "M")
+    start = None
+    if vl is not None and LOC in vl.columns and "Location Start Date" in vl.columns:
+        v = vl.loc[vl[LOC] == loc, "Location Start Date"]
+        if len(v):
+            start = pd.to_datetime(v.iloc[0], dayfirst=True, errors="coerce")
+    if start is not None and not pd.isna(start):
+        return int((end - pd.Period(start, "M")).n) + 1
+    if age_now is None or pd.isna(age_now):
+        return None
+    now = pd.Period(today or pd.Timestamp.today(), "M")
+    return int(age_now) + 1 - max(int((now - end).n), 0)
+
+
+def too_new_note(name, months):
+    return (f"No comparisons with other centres: {name} had been trading for {months} "
+            f"month{'s' if months != 1 else ''} by this month ({NEW_MONTHS} months or less). "
+            "A new centre's numbers are still settling, so comparing them with other centres "
+            "would mislead. Comparisons start from its 13th month.")
 
 # Softer wording for partners. Costs: higher is worse.
 COST_WORDS = {"Very high": "Worth a look", "High": "A little above typical",
