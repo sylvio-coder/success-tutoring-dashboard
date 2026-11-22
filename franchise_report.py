@@ -29,10 +29,10 @@ CSS = """<style>
 .fm-card .sub{font-size:12.5px;color:#5d6d73}
 .fm-card dl{display:grid;grid-template-columns:1fr auto;gap:4px 10px;margin:12px 0 0;font-size:13px}
 .fm-card dt{color:#5d6d73} .fm-card dd{margin:0;font-weight:600;color:#1c2a30;text-align:right}
-.fm-tbl{width:100%;border-collapse:collapse;font-size:13px;background:#fff;border:1px solid #dde5e6}
+.fm-tbl{width:auto;max-width:100%;border-collapse:collapse;font-size:13px;background:#fff;border:1px solid #dde5e6}
 .fm-tbl th{background:#1c2a30;color:#fff;font-weight:600;padding:6px 10px;text-align:right}
 .fm-tbl th:first-child,.fm-tbl td:first-child{text-align:left}
-.fm-tbl td{padding:4px 10px;border-bottom:1px solid #eef1f3;text-align:right}
+.fm-tbl td{padding:4px 10px;min-width:90px;border-bottom:1px solid #eef1f3;text-align:right}
 .fm-tbl tr.grp td{background:#f2f8f8;color:#1f9a9a;font-weight:700;text-align:left}
 .fm-tbl td.neg{color:#c8322f}
 .fm-wrap{overflow-x:auto;margin-bottom:8px}
@@ -43,11 +43,20 @@ CSS = """<style>
 .fm-road li:before{content:"";position:absolute;left:-21px;top:4px;width:10px;height:10px;border-radius:50%;background:#1f9a9a;border:2px solid #fff}
 .fm-road li.goal:before{background:#2e8540} .fm-road li.never:before{background:#c8322f}
 .fm-road .m{font-size:12px;color:#5d6d73} .fm-road .e{font-size:14px;font-weight:600;color:#1c2a30}
+.fm-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin:4px 0 6px}
+.fm-tile{background:#fff;border:1px solid #dde5e6;border-top:3px solid #1f9a9a;border-radius:10px;padding:10px 12px}
+.fm-tile .when{font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#1f9a9a}
+.fm-tile .big{font-size:24px;font-weight:700;color:#1c2a30;margin-top:4px;line-height:1.1}
+.fm-tile .lbl{font-size:12px;color:#5d6d73}
+.fm-tile dl{display:grid;grid-template-columns:1fr auto;gap:3px 8px;margin:8px 0 0;font-size:12.5px}
+.fm-tile dt{color:#5d6d73} .fm-tile dd{margin:0;font-weight:600;color:#1c2a30;text-align:right}
+.fm-tile dd.neg{color:#c8322f} .fm-tile dd.pos{color:#2e8540}
 .fm-warn{background:#fff4e5;border-left:4px solid #e0a100;padding:8px 12px;margin:6px 0;font-size:13.5px;color:#1c2a30;border-radius:4px}
 @media print{
  [data-testid="stSidebar"],[data-testid="stHeader"],[data-testid="stToolbar"],.no-print,
  [data-testid="stExpander"] summary svg{display:none!important}
  .fm-cards{grid-template-columns:repeat(3,1fr)}
+ .fm-tiles{grid-template-columns:repeat(5,1fr)}
  .fm-wrap{overflow:visible}
 }
 </style>"""
@@ -96,7 +105,7 @@ def table_html(head, rows, wrap=False):
 # ── Running the model (cached) ────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def compute(rows, model, start, case, extras=False):
-    """Run one case. extras: also thresholds, sensitivity and the opening-month table."""
+    """Run one case. extras: also sensitivity and the opening-month table."""
     inputs = fin.model_inputs(rows, model)
     s = fp.settings(inputs, case)
     t = fp.run(s, start)
@@ -104,7 +113,6 @@ def compute(rows, model, start, case, extras=False):
                years=fp.year_totals(t), checkpoints=fp.checkpoints(t),
                milestones=fp.milestones(t, s))
     if extras:
-        out["thresholds"] = fp.thresholds(s, start)
         out["sensitivity"] = fp.sensitivity(s, start)
         opens = []
         for i in range(12):
@@ -157,51 +165,35 @@ def summary_cards(res):
 
 
 def investor_metrics(r):
-    s, t, sm, th = r["s"], r["t"], r["summary"], r["thresholds"]
-    cp = r["checkpoints"]
-    rows = [(f"Month {int(x['By month'])}", [(f"{x['Members']:,.0f}", False),
-                                             (money(x["Revenue a month"]), False),
-                                             (f"{x['Tutor wages % of fees']:.0f}%" if pd.notna(
-                                                 x["Tutor wages % of fees"]) else "–", False),
-                                             (money(x["Profit so far"]), x["Profit so far"] < 0)],
-             "row") for _, x in cp.iterrows()]
-    st.markdown("**Checkpoints: are you on plan?**")
-    st.markdown(table_html(["By", "Members", "Revenue a month", "Tutor wages (% of fees)",
-                            "Profit so far (after salary)"], rows), unsafe_allow_html=True)
-    target = sm["payback_target"]
-    st.markdown(f"**To recover the investment within {target} months, you need any ONE of:**")
-    need = []
-    k = th["members_scale"]
-    if k:
-        tg = ", ".join(f"{x * k:,.0f}" for x in s["targets"])
-        need.append(("More members", f"{(k - 1) * 100:+.0f}% on plan: {s['t12'] * k:,.0f} at week 12; "
-                                     f"year ends {tg}"))
-    else:
-        need.append(("More members", "not enough on its own"))
-    need.append(("Standard price", "not enough on its own" if th["price"] is None else
-                 f"at least ${th['price']:,.2f} a week (now ${s['standard']:,.2f})"))
-    if s["owner_on"]:
-        need.append(("Owner's salary", "not enough on its own" if th["owner_wage"] is None else
-                     f"at most {money(th['owner_wage'])} a year (now {money(s['owner_wage'])})"))
-    need.append(("Rent", "not enough on its own" if th["rent"] is None else
-                 f"at most {money(th['rent'])} a month (now {money(s['rent'])})"))
-    if sm["payback"] is not None and sm["payback"] <= target:
-        st.caption(f"Already on target: payback in month {sm['payback']}. The figures below "
-                   "are how far each could slip before payback passes the target.")
-    st.markdown(table_html(["Change (everything else as planned)", "Needed"],
-                           [(a, [(b, False)], "row") for a, b in need]), unsafe_allow_html=True)
+    t, sm = r["t"], r["summary"]
     warns = []
     if sm["ads_gap"] > 100:
-        y1 = t.loc[4:15, "Advertising needed"].mean()
-        warns.append(f"Advertising: the plan budgets about {money(t.loc[4:15, 'Advertising planned'].mean())} "
-                     f"a month; reaching the member targets is likely to need about {money(y1)} a "
-                     "month (enquiries needed × cost per lead).")
+        plan, need = t.loc[4:15, "Advertising planned"].mean(), t.loc[4:15, "Advertising needed"].mean()
+        warns.append(f"<b>Advertising budget: {money(plan)} a month. Likely needed: about "
+                     f"{money(need)} a month. Gap: {money(need - plan)} a month.</b> "
+                     "(Needed = enquiries needed to reach the member targets × cost per lead.)")
     if sm["full_month"]:
-        warns.append(f"Capacity: the centre is full in month {sm['full_month']} "
+        warns.append(f"<b>Capacity: the centre is full in month {sm['full_month']}</b> "
                      f"({sm['capacity']:,.0f} members). Plan more tables or slots before then.")
     for w in warns:
-        st.markdown(f'<div class="fm-warn">⚠ {html.escape(w)}</div>'.replace("$", "&#36;"),
+        st.markdown(f'<div class="fm-warn">⚠ Watch out: {w}</div>'.replace("$", "&#36;"),
                     unsafe_allow_html=True)
+    st.markdown("**Milestones to hit: if you're behind these, act early.**")
+    tiles = []
+    for _, x in r["checkpoints"].iterrows():
+        wages = (f"{x['Tutor wages % of fees']:.0f}%" if pd.notna(x["Tutor wages % of fees"])
+                 else "–")
+        p = x["Profit so far"]
+        tiles.append(
+            f'<div class="fm-tile"><div class="when">Month {int(x["By month"])}</div>'
+            f'<div class="big">{x["Members"]:,.0f}</div><div class="lbl">members</div><dl>'
+            f'<dt>Revenue a month</dt><dd>{money(x["Revenue a month"])}</dd>'
+            f'<dt>Tutor wages</dt><dd>{wages} of fees</dd>'
+            f'<dt>Profit so far</dt><dd class="{"neg" if p < 0 else "pos"}">{money(p)}</dd>'
+            f'</dl></div>')
+    st.markdown(f'<div class="fm-tiles">{"".join(tiles)}</div>'.replace("$", "&#36;"),
+                unsafe_allow_html=True)
+    st.caption("Profit so far is after the owner's salary, added up from opening.")
 
 
 def operating_plan(r):
@@ -404,7 +396,7 @@ def report_franchise_model(versions, helpers):
     section("1. Summary", "Worst, Base and Best side by side. Payback is when profit after the "
             "owner's salary, added up since opening, covers the investment.")
     summary_cards(res)
-    section(f"2. Investor Metrics · {case}", "What needs to happen to reach the target return.")
+    section(f"2. Investor Metrics · {case}", "What to watch, and the milestones to hit.")
     investor_metrics(r)
     section(f"3. Your operating plan · {case}", "The plan figures to commit to and track each "
             "month.")

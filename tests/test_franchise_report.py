@@ -41,13 +41,14 @@ def test_page_shows_every_section_for_an_admin():
               "4. Road to profitability · Base", "5. Profit and cash by year · Base",
               "6. Risks · Base", "7. Assumptions used · Base"]:
         assert h in t, h
-    for h in ["Worst", "Base", "Best", "Total cash needed", "Checkpoints", "you need any ONE of",
+    for h in ["Worst", "Base", "Best", "Total cash needed", "Milestones to hit", "Month 36", "Watch out",
               "Standard price", "Enquiries needed a month", "Study hubs a week",
               "Centre opens", "Investment paid back", "What moves the result most",
               "Opening month", "Profit after salary", "Owner's total return, 5 years",
               "Average owner&#x27;s return a year",
               "total return (salary + profit)"]:
         assert h in t, h
+    assert "you need any ONE of" not in t                            # removed on request
     assert at.selectbox(key="fr_model").options == ["AU National"]   # NSW not ready
     assert len(at.get("plotly_chart")) == 1
     assert any("upload 1" in c.value for c in at.caption)
