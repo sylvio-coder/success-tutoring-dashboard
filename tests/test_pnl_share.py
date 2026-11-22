@@ -350,9 +350,14 @@ def test_share_page_no_comparisons_for_a_centre_12_months_or_younger():
     assert "Compared with" not in text and "Typical similar centre" not in text
     assert "Network average" not in text and "Outliers vs similar centres" not in text
     assert "This centre&#x27;s accounts" in text or "This centre's accounts" in text
-    table = next(m.value for m in at.markdown if '<table class="share-tbl"' in m.value)
+    table = next(m.value for m in at.markdown if '<table class="own-tbl"' in m.value)
     assert "Worth a look" not in table and "Typical" not in table and "Similar" not in table
-    assert ">Wages - Tutor<" in table and ">Gross Margin<" in table
+    order = [">Total revenue<", ">Tutor costs<", ">Wages - Tutor<", ">Gross Margin<",
+             ">Other costs<", ">Rent<", ">EBITDA", ">Below EBITDA<", ">Interest Expense<",
+             ">Net profit<"]
+    pos = [table.index(h) for h in order]
+    assert pos == sorted(pos), list(zip(order, pos))
+    assert "own-bar" in table
     assert "Not enough similar centres" not in text
     at.selectbox(key="ps_centre").set_value("Peer 0").run()      # established: compared
     assert "No comparisons with other centres" not in page_text(at)

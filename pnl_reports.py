@@ -1365,6 +1365,23 @@ SHARE_CSS = """<style>
 .share-tbl td{padding:4px 8px;border-bottom:1px solid #eef2f3;text-align:right;color:#1c2a30}
 .share-tbl td.muted{color:#8a9a9f}
 .share-tbl tr.sens td{background:#f6f8f9}
+.own-tbl{border-collapse:collapse;width:100%;max-width:720px;font-size:13px;background:#fff;
+ border:1px solid #dde5e6}
+.own-tbl th{background:#1f3b57;color:#fff;font-weight:600;padding:6px 10px;text-align:right}
+.own-tbl th.l,.own-tbl td.l{text-align:left}
+.own-tbl td{padding:4px 10px;border-bottom:1px solid #eef2f3;text-align:right;color:#1c2a30;
+ white-space:nowrap}
+.own-tbl td.l{white-space:normal;padding-left:22px}
+.own-tbl td,.own-tbl th{border-left:none!important;border-right:none!important}
+.own-tbl td.neg{color:#c8322f}
+.own-tbl td.b{width:30%}
+.own-tbl tr.tot td{font-weight:700;background:#f2f8f8;border-top:1px solid #b9d3d6;
+ border-bottom:1px solid #b9d3d6}
+.own-tbl tr.tot td.l{padding-left:10px}
+.own-tbl tr.grp td{font-size:11.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+ color:#1f9a9a;padding:8px 10px 2px;border-bottom:none}
+.own-bar{background:#eef2f3;border-radius:3px;height:8px;width:100%}
+.own-bar span{display:block;height:8px;border-radius:3px;background:#8fcfcf}
 .share-tbl tr.sub td{font-weight:700;background:#f2f8f8;border-bottom:1px solid #b9d3d6}
 .pill{display:inline-block;border-radius:10px;padding:1px 8px;font-size:11.5px;font-weight:600;
  white-space:nowrap}
@@ -1396,7 +1413,7 @@ SHARE_CSS = """<style>
   div[data-testid="stMainBlockContainer"], .main .block-container {
     padding: 0 !important; max-width: 100% !important; zoom: 0.8; }
   div[data-testid="stBottom"], .st-key-ps_how { display: none !important; }
-  .otile, .metric-card, .share-box, .share-head, .bands, .share-tbl tr,
+  .otile, .metric-card, .share-box, .share-head, .bands, .share-tbl tr, .own-tbl tr,
   div[data-testid="stPlotlyChart"], div[data-testid="stHorizontalBlock"] {
     break-inside: avoid; page-break-inside: avoid; }
   .section-header { break-after: avoid; page-break-after: avoid; }
@@ -1466,10 +1483,54 @@ def _pill(line, status, note):
     return f'<span class="pill {cls}">{html.escape(word)}</span>'
 
 
-def share_table_html(table, top=None, own_only=False):
+def own_accounts_html(accounts, codes, revenue, ebitda):
+    """A new centre's own P&L for the month, laid out like a statement: revenue, tutor
+    costs, Gross Margin, other costs, EBITDA. Each line with its % of revenue and a bar."""
+    t = accounts[accounts["Actual $"].astype(float).abs() > 0.5]
+    tutor = t[t["Line"].map(lambda a: int(codes.get(a, 0)) in pnl.TUTOR_CODES)] \
+        .sort_values("Actual $", ascending=False)
+    code = lambda a: int(codes.get(a, 0))
+    t = t[~t["Line"].map(code).isin(pnl.REVENUE_CODES | pnl.EXCLUDED_CODES)]
+    below = t[t["Line"].map(code).isin(pnl.INTEREST_CODES)]      # after EBITDA
+    other = t.drop(tutor.index.union(below.index)).sort_values("Actual $", ascending=False)
+    pct = lambda v: v / revenue * 100 if revenue else None
+
+    def row(label, value, cls="", bar=True):
+        p = pct(value)
+        width = min(abs(p), 100) if p is not None else 0
+        bar_html = (f'<div class="own-bar"><span style="width:{width:.1f}%"></span></div>'
+                    if bar and p is not None else "")
+        neg = " neg" if value < -0.5 else ""
+        return (f'<tr class="{cls}"><td class="l">{html.escape(label)}</td>'
+                f'<td class="{neg.strip()}">{_money(value)}</td>'
+                f'<td class="{neg.strip()}">{_fmt_pct(p)}</td><td class="b">{bar_html}</td></tr>')
+
+    def heading(label):
+        return f'<tr class="grp"><td class="l" colspan="4">{html.escape(label)}</td></tr>'
+
+    gross = revenue - float(tutor["Actual $"].sum())
+    body = [row("Total revenue", revenue, "tot", bar=False)]
+    if len(tutor):
+        body += [heading("Tutor costs")] + [row(r["Line"], r["Actual $"]) for _, r in
+                                            tutor.iterrows()]
+    body.append(row(pnl.GROSS_MARGIN, gross, "tot", bar=False))
+    if len(other):
+        body += [heading("Other costs")] + [row(r["Line"], r["Actual $"]) for _, r in
+                                            other.iterrows()]
+    body.append(row("EBITDA (profit before interest, tax and depreciation)", ebitda, "tot",
+                    bar=False))
+    if len(below):
+        body += [heading("Below EBITDA")] + [row(r["Line"], r["Actual $"]) for _, r in
+                                             below.iterrows()]
+        body.append(row("Net profit", ebitda - float(below["Actual $"].sum()), "tot",
+                        bar=False))
+    return (f'<table class="own-tbl"><tr><th class="l">Line</th><th>Amount</th>'
+            f'<th>% of revenue</th><th></th></tr>{"".join(body)}</table>').replace("$", "&#36;")
+
+
+def share_table_html(table, top=None):
     """Every account line, all rows, as a plain table (prints in full, no scroll box).
-    top: rows pinned first in bold (the Gross Margin row). own_only: this centre's figures
-    only, with no comparison columns (centres 12 months old or younger)."""
+    top: rows pinned first in bold (the Gross Margin row)."""
     t = table.copy()
     t["_b"] = t["Benchmarked"].astype(bool)
     t["_g"] = t["Gap $"].astype(float).fillna(0)
@@ -1478,16 +1539,6 @@ def share_table_html(table, top=None, own_only=False):
                    t[~t["_b"]].sort_values("_a", ascending=False)])
     if top is not None and len(top):
         t = pd.concat([top.assign(_sub=True), t.assign(_sub=False)])
-    if own_only:
-        rows = []
-        for _, r in t.iterrows():
-            amv = r["Line"] == "Average Membership Value"
-            actual = f"${r['Actual $']:,.2f}/wk" if amv else _money(r["Actual $"])
-            cls = "sub" if r.get("_sub") is True else ""
-            rows.append(f'<tr class="{cls}"><td class="l">{html.escape(str(r["Line"]))}</td>'
-                        f'<td>{actual}</td><td>{_fmt_pct(r["Actual %"])}</td></tr>')
-        return (f'<table class="share-tbl"><tr><th class="l">Line</th><th>Actual</th>'
-                f'<th>% of revenue</th></tr>{"".join(rows)}</table>').replace("$", "&#36;")
     head = ('<tr><th class="l">Line</th><th>Actual</th><th>% of revenue</th><th>Typical</th>'
             '<th>Normal range</th><th>Similar centres</th><th>Cost vs typical / month</th>'
             '<th class="l">Status</th></tr>')
@@ -1845,7 +1896,8 @@ def report_share(df_pnl, df_wm, vl, helpers, bench=None):
     # ── Outliers vs similar centres: every account line, all rows ──
     st.markdown('<div class="page-break"></div>', unsafe_allow_html=True)
     _section("This centre's accounts" if too_new else "Outliers vs similar centres",
-             "Each account and its % of revenue. No comparisons: under 13 months trading."
+             "Revenue and costs, each as a % of revenue. No comparisons: under 13 "
+             "months trading."
              if too_new else
              (f"{pick} compared with {desc}. " if desc else "") +
              "Rent, royalties, manager wages, interest and CRM software are this centre's own "
@@ -1855,8 +1907,9 @@ def report_share(df_pnl, df_wm, vl, helpers, bench=None):
     if accounts is None or accounts.empty:
         st.caption("No account lines for this period.")
     else:
-        st.markdown(share_table_html(accounts, grouped[grouped["Line"] == pnl.GROSS_MARGIN],
-                                     own_only=too_new), unsafe_allow_html=True)
+        st.markdown(own_accounts_html(accounts, codes, rev, now["EBITDA"]) if too_new else
+                    share_table_html(accounts, grouped[grouped["Line"] == pnl.GROSS_MARGIN]),
+                    unsafe_allow_html=True)
     ebitda = now["EBITDA"]
     parts = [f"**{pick}** {'made' if ebitda >= 0 else 'lost'} **${abs(ebitda):,.0f}** "
              f"({label})."]
