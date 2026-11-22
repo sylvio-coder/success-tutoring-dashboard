@@ -1,7 +1,7 @@
 """Franchise Model report (admins only): a new centre's 5-year plan from the uploaded
 assumptions workbook, for one model (AU National or a state) and opening month, with Worst /
 Base / Best. Sections: Summary, Investor Metrics, Your operating plan, Road to profitability,
-Profit and cash by year, Risks, Assumptions used. Calculations are in franchise_plan.py."""
+Profit and cash by year, Risks. Calculations are in franchise_plan.py."""
 import html
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
@@ -343,22 +343,6 @@ def risks(r):
                              "row") for _, x in op.iterrows()]), unsafe_allow_html=True)
 
 
-def assumptions(rows, model, case):
-    inp = fin.model_inputs(rows, model)
-    out, last = [], None
-    for v, d in inp.items():
-        if str(d.get(case, "")).lower() == "calc" or v.startswith("Check only"):
-            continue
-        if d["Section"] != last:
-            out.append((d["Section"] or "Other", [], "grp"))
-            last = d["Section"]
-        val = d[case]
-        txt = f"{val:,.2f}".rstrip("0").rstrip(".") if isinstance(val, float) else str(val)
-        out.append((v, [(f"{txt} {d['Unit']}".strip(), False), (str(d["Basis"]), False)], "row"))
-    st.markdown(table_html(["Input", f"{case} value", "Basis"], out), unsafe_allow_html=True)
-
-
-# ── The page ──────────────────────────────────────────────────────────────────
 def report_franchise_model(versions, helpers):
     st.markdown('<div class="report-title">Franchise Model</div>', unsafe_allow_html=True)
     st.markdown('<div class="report-subtitle">A new centre\'s 5-year plan from the uploaded '
@@ -407,6 +391,4 @@ def report_franchise_model(versions, helpers):
     profit_and_cash(r)
     section(f"6. Risks · {case}")
     risks(r)
-    section(f"7. Assumptions used · {case}", f"From upload {ver} ({when}), model {model}.")
-    assumptions(rows, model, case)
     st.info(DISCLAIMER)
