@@ -44,7 +44,8 @@ def test_page_shows_every_section_for_an_admin():
     for h in ["Worst", "Base", "Best", "Total cash needed", "Checkpoints", "you need any ONE of",
               "Standard price", "Enquiries needed a month", "Study hubs a week",
               "Centre opens", "Investment paid back", "What moves the result most",
-              "Opening month", "Profit after salary"]:
+              "Opening month", "Profit after salary", "Owner's total return, 5 years",
+              "total return (salary + profit)"]:
         assert h in t, h
     assert at.selectbox(key="fr_model").options == ["AU National"]   # NSW not ready
     assert len(at.get("plotly_chart")) == 1

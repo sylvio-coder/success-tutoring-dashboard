@@ -138,11 +138,14 @@ def summary_cards(res):
         rows = [("Total cash needed", money(sm["total_cash"])),
                 ("5-year profit (after salary)", money(sm["profit_5y"])),
                 ("Owner's salary, 5 years", money(sm["owner_5y"])),
+                ("<b>Owner's total return, 5 years</b>",
+                 f"<b>{money(sm['owner_5y'] + sm['profit_5y'])}</b>"),
                 ("First month in profit", "–" if sm["first_profit"] is None
                  else f"Month {sm['first_profit']}"),
                 ("Yearly return (IRR)", "–" if sm["irr"] is None else f"{sm['irr'] * 100:.0f}%"),
                 ("Members after 5 years", f"{t['Members end'].iloc[-1]:,.0f}")]
-        dl = "".join(f"<dt>{html.escape(a)}</dt><dd>{html.escape(b)}</dd>" for a, b in rows)
+        esc = lambda v: v if v.startswith("<b>") else html.escape(v)
+        dl = "".join(f"<dt>{esc(a)}</dt><dd>{esc(b)}</dd>" for a, b in rows)
         cards.append(f'<div class="fm-card" style="--c:{CASE_COLOURS[case]};--t:{tc};--b:{tb}">'
                      f'<span class="tag">{html.escape(tag)}</span><div class="nm">{case}</div>'
                      f'<div class="big">{html.escape(big)}</div><div class="sub">{html.escape(sub)}'
@@ -296,6 +299,9 @@ def profit_and_cash(r):
                        ("Royalties", "Royalties"), ("Profit before salary (EBITDA)", "EBITDA"),
                        ("Owner's salary", "Owner's wage"), ("Profit after salary", "Profit")]:
         rows.append((label, [(money(v), v < -0.5) for v in tot(col)], "row"))
+    ret = [o + p for o, p in zip(tot("Owner's wage"), tot("Profit"))]
+    rows.append(("Owner's total return (salary + profit)", [(money(v), v < -0.5) for v in ret],
+                 "row"))
     rows.append(("Cash after loan and tax*", [(money(v), v < -0.5) for v in cash + [sum(cash)]],
                  "row"))
     rows.append(("Profit added up since opening", [(money(v), v < -0.5) for v in y["Cumulative"]] +
