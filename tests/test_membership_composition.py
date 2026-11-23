@@ -99,6 +99,7 @@ def test_current_table_rows_totals_and_variances():
     rows = t["rows"]
     assert list(rows["Type"]) == ["Group"] * 5 + ["1:1"]            # every visit count shown
     assert list(rows["Sessions/week"]) == [1, 2, 2, 4, 4, 1]
+    assert list(rows["Total sessions"]) == [1, 2, 12, 4, 4, 2] and t["sessions"] == 25
     two = rows.iloc[2]
     assert two["Revenue per session"] == 40 and two["RRP variance"] == 6
     assert two["RRP variance %"] == pytest.approx(8.1, abs=0.1)
@@ -166,7 +167,7 @@ def test_composition_columns_mix_1to1_sessions():
                           "Weekly price": [100.0, 180.0, 70.0], "Freeze": False})
     comp = mc.current_table(plans, None, {})["composition"].set_index("Plan")
     one = comp.loc["1:1"]                       # 3 x 1 session + 1 x 2 sessions
-    assert one["Members"] == 4 and one["Sessions/week"] == 1.25
+    assert one["Members"] == 4 and one["Total sessions"] == 5
     assert one["Total value"] == 480 and one["Average price"] == 120
     assert one["Revenue per session"] == 480 / 5
     assert comp.loc["Group 2×", "Revenue per session"] == 35

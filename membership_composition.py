@@ -231,6 +231,7 @@ def current_table(plans, rrp, medians):
         rv, rp = _variance(price, r)
         mv, mp = _variance(price, med) if cnt > 1 else (None, None)
         rows.append({"Type": kind, "Members": int(p["Members"]), "Sessions/week": s,
+                     "Total sessions": p["Members"] * s,
                      "Membership price": price, "Total value": p["Members"] * price,
                      "Revenue per session": price / s, "RRP": r, "RRP variance": rv,
                      "RRP variance %": rp, "Median": med if cnt > 1 else None,
@@ -246,14 +247,14 @@ def current_table(plans, rrp, medians):
             .sort_values("order").reset_index())
     members = comp["Members"].where(comp["Members"] > 0)
     comp["% of members"] = comp["Members"] / n * 100 if n else 0
-    comp["Sessions/week"] = comp["Sess"] / members          # 1:1 can mix 1×, 2×, ...
+    comp["Total sessions"] = comp["Sess"]                   # members × sessions a week
     comp["Average price"] = comp["Total value"] / members
     comp["Revenue per session"] = comp["Total value"] / comp["Sess"].where(comp["Sess"] > 0)
     frozen = plans[plans["Freeze"]]
     return {"rows": pd.DataFrame(rows), "members": n, "total": value,
             "per_session": value / sessions if sessions else None,
-            "arpm": value / n if n else None,
-            "composition": comp[["Plan", "Members", "% of members", "Sessions/week",
+            "arpm": value / n if n else None, "sessions": sessions,
+            "composition": comp[["Plan", "Members", "% of members", "Total sessions",
                                  "Average price", "Total value", "Revenue per session"]],
             "freeze_members": int(frozen["Members"].sum()),
             "freeze_value": float((frozen["Members"] * frozen["Weekly price"]).sum())}
@@ -278,6 +279,7 @@ def ideal_table(plans, rrp, target=None):
         price = max(x for x in (r, own) if x is not None) if (r or own) else None
         m = n * target[plan] / 100
         rows.append({"Type": kind, "Plan": plan, "Members": m, "Sessions/week": s,
+                     "Total sessions": m * s,
                      "Membership price": price, "Total value": m * price if price else None,
                      "Revenue per session": price / s if price else None,
                      "Own price used": bool(own and r and own > r + 0.005)})
@@ -287,8 +289,8 @@ def ideal_table(plans, rrp, target=None):
                      "Variance": cur - target[plan]})
     t = pd.DataFrame(rows)
     total = float(t["Total value"].sum())
-    sessions = float((t["Members"] * t["Sessions/week"]).sum())
-    return {"rows": t, "members": n, "total": total,
+    sessions = float(t["Total sessions"].sum())
+    return {"rows": t, "members": n, "total": total, "sessions": sessions,
             "per_session": total / sessions if sessions else None,
             "arpm": total / n if n else None, "vs_today": total - current_value,
             "composition": pd.DataFrame(comp)}
@@ -315,6 +317,7 @@ def group_table(week, vl, table):
         rows.append({"Location": loc, "Centre": loc.removeprefix(ingest.PREFIX),
                      "Country": cc, "Currency": CURRENCY.get(cc, ""),
                      "RRP used": rrp["label"] if rrp else "No RRP set", "Members": n,
+                     "Total sessions/week": sessions,
                      "ARPM": value / n if n else None,
                      "Revenue per session": value / sessions if sessions else None,
                      "% of RRP": paid / at * 100 if at else None})

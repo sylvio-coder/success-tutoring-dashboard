@@ -39,14 +39,15 @@ HOW = f"""
 - **Variance from median** = membership price − the median price members pay for the same
   plan (type and sessions a week) across every centre in the same country. "–" when no other
   centre in the country has that plan.
+- **Total sessions/week** = no. members × sessions a week each, added up (group overview: all
+  the centre's members). In the ideal table, members are fractions, so sessions are too.
 - **Revenue per session** = membership price ÷ sessions a week (totals: total value ÷ all
   weekly sessions).
 - **Prices under ${mc.FREEZE_BELOW}** (a freeze fee or discretionary amount) are left out of the
   rows but kept in the totals, ARPM and composition.
 - **Composition table:** every member on each plan, including prices under ${mc.FREEZE_BELOW}.
   Average membership price = the plan's total value ÷ its members; revenue per session =
-  total value ÷ all its weekly sessions. For 1:1, sessions a week is the average across its
-  members.
+  total value ÷ all its weekly sessions.
 - **Ideal composition:** the centre's members spread {mc.TARGET_MIX['1×']}% 1×,
   {mc.TARGET_MIX['2×']}% 2×, {mc.TARGET_MIX['3+']}% 3 or more and {mc.TARGET_MIX['1:1']}% 1:1,
   each at RRP, or at the centre's own average price per session where that is higher.
@@ -57,6 +58,14 @@ HOW = f"""
 
 def _m(v, cur=""):
     return "–" if v is None or pd.isna(v) else f"${v:,.2f}"
+
+
+def _n(v, dp=0):
+    """A count of sessions: whole numbers, or dp decimals (the ideal table's members are
+    fractions)."""
+    if v is None or pd.isna(v):
+        return "–"
+    return f"{v:,.{dp}f}"
 
 
 def _var(v, p):
@@ -89,41 +98,46 @@ def _card(title, sub, inner):
 
 
 def current_html(t):
-    rows = [[r["Type"], f'{r["Members"]:,}', f'{r["Sessions/week"]}',
+    rows = [[mc.plan_label(r["Type"], r["Sessions/week"]) +
+             (f' ({r["Sessions/week"]}×)' if r["Type"] == "1:1" else ""),
+             f'{r["Members"]:,}', _n(r["Total sessions"]),
              _m(r["Membership price"]), _m(r["Total value"]), _m(r["Revenue per session"]),
              _var(r["RRP variance"], r["RRP variance %"]),
              _var(r["Median variance"], r["Median variance %"])]
             for _, r in t["rows"].iterrows()]
     k = len(rows)
-    rows.append(["Total", f'{t["members"]:,}', "", "", _m(t["total"]), _m(t["per_session"]),
-                 "", ""])
+    rows.append(["Total", f'{t["members"]:,}', _n(t["sessions"]), "", _m(t["total"]),
+                 _m(t["per_session"]), "", ""])
     rows.append(["ARPM", "", "", "", _m(t["arpm"]), "", "", ""])
-    return _table(["Type", "No. members", "Sessions/week", "Membership price", "Total value",
+    return _table(["Plan", "No. members", "Total sessions/week", "Membership price", "Total value",
                    "Revenue per session", "RRP variance", "Variance from median"],
                   rows, {k: "total", k + 1: "arpm"})
 
 
 def composition_html(comp):
-    return _table(["Composition", "No. members", "% of members", "Sessions/week",
+    rows = [[html.escape(r["Plan"]), f'{int(r["Members"]):,}', f'{r["% of members"]:.0f}%',
+             _n(r["Total sessions"]), _m(r["Average price"]), _m(r["Total value"]),
+             _m(r["Revenue per session"])] for _, r in comp.iterrows()]
+    n, sess, value = comp["Members"].sum(), comp["Total sessions"].sum(), comp["Total value"].sum()
+    rows.append(["Total", f"{int(n):,}", "100%" if n else "–", _n(sess),
+                 _m(value / n if n else None), _m(value), _m(value / sess if sess else None)])
+    return _table(["Composition", "No. members", "% of members", "Total sessions/week",
                    "Average membership price", "Total value", "Revenue per session"],
-                  [[html.escape(r["Plan"]), f'{int(r["Members"]):,}',
-                    f'{r["% of members"]:.0f}%', f'{r["Sessions/week"]:.1f}'.removesuffix(".0"),
-                    _m(r["Average price"]), _m(r["Total value"]),
-                    _m(r["Revenue per session"])] for _, r in comp.iterrows()])
+                  rows, {len(rows) - 1: "total"})
 
 
 def ideal_html(t):
-    rows = [[r["Type"], r["Plan"], f'{r["Members"]:.1f}', f'{r["Sessions/week"]}',
+    rows = [[r["Type"], r["Plan"], f'{r["Members"]:.1f}', _n(r["Total sessions"], 1),
              _m(r["Membership price"]) + (" ¹" if r["Own price used"] else ""),
              _m(r["Total value"]), _m(r["Revenue per session"])]
             for _, r in t["rows"].iterrows()]
     k = len(rows)
     sign = "+" if t["vs_today"] >= 0 else "−"
-    rows.append(["Total", "", f'{t["members"]:,}', "", "", _m(t["total"]),
+    rows.append(["Total", "", f'{t["members"]:,}', _n(t["sessions"], 1), "", _m(t["total"]),
                  _m(t["per_session"])])
     rows.append(["ARPM", "", "", "", "", _m(t["arpm"]),
                  f'{sign}${abs(t["vs_today"]):,.2f} a week vs today'])
-    return _table(["Type", "Plan", "No. members", "Sessions/week", "Membership price",
+    return _table(["Type", "Plan", "No. members", "Total sessions/week", "Membership price",
                    "Total value", "Revenue per session"], rows, {k: "total", k + 1: "arpm"})
 
 
@@ -159,13 +173,16 @@ def _group(week, vl, table, allowed):
                "ARPM vs country median: \"–\" where the country has one centre"
                + ("." if allowed is None else
                   f" or fewer than {MIN_FOR_MEDIAN} centres."))
-    show = t[["Centre", "Country", "RRP used", "Members", "ARPM", "Revenue per session",
+    show = t[["Centre", "Country", "RRP used", "Members", "Total sessions/week", "ARPM",
+              "Revenue per session",
               "% of RRP", "ARPM vs country median"]]
     st.dataframe(show.style.map(lambda v: "" if pd.isna(v) else
                                 f"color:{GREEN if v >= 99.5 else RED};font-weight:600",
                                 subset=["% of RRP"]),
                  hide_index=True, width="stretch", key="comp_group",
                  column_config={"ARPM": st.column_config.NumberColumn(format="$%.2f"),
+                                "Total sessions/week": st.column_config.NumberColumn(
+                                    format="%d"),
                                 "Revenue per session": st.column_config.NumberColumn(
                                     format="$%.2f"),
                                 "% of RRP": st.column_config.NumberColumn(format="%.0f%%"),

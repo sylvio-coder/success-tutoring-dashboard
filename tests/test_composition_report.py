@@ -30,8 +30,11 @@ def test_group_overview():
     at = run()
     assert not at.exception, at.exception
     g = at.dataframe[0].value
-    assert list(g.columns) == ["Centre", "Country", "RRP used", "Members", "ARPM",
-                               "Revenue per session", "% of RRP", "ARPM vs country median"]
+    assert list(g.columns) == ["Centre", "Country", "RRP used", "Members",
+                               "Total sessions/week", "ARPM", "Revenue per session",
+                               "% of RRP", "ARPM vs country median"]
+    alpha = g.set_index("Centre").loc["Alpha"]          # 1x1 + 1x2 + 6x2 + 1x4 + 1x4 + 2x1
+    assert alpha["Members"] == 12 and alpha["Total sessions/week"] == 25
     assert list(g["% of RRP"]) == sorted(g["% of RRP"])
     at.selectbox(key="comp_country").set_value("NZ").run()
     assert list(at.dataframe[0].value["Centre"]) == ["Kiwi"]
@@ -46,15 +49,22 @@ def test_centre_tables():
     assert not at.exception, at.exception
     html = " ".join(m.value for m in at.markdown)
     assert "Success Tutoring - Alpha" in html and "Ideal composition to achieve RRP" in html
-    for h in ["No. members", "Sessions/week", "Membership price", "Total value",
+    for h in ["No. members", "Total sessions/week", "Membership price", "Total value",
               "Revenue per session", "RRP variance", "Variance from median"]:
         assert f"<th>{h}</th>" in html
     assert "% of members" in html and "Current %" in html and "Ideal %" in html
+    top = html.split("<th>Plan</th><th>No. members</th>")[1].split("</table>")[0]
+    assert ">Group 4×</td>" in top and ">1:1 (1×)</td>" in top
     comp = html.split("<th>Composition</th>")[1].split("</table>")[0]
-    for h in ["Sessions/week", "Average membership price", "Total value", "Revenue per session"]:
+    for h in ["Total sessions/week", "Average membership price", "Total value",
+              "Revenue per session"]:
         assert f"<th>{h}</th>" in comp
     g2 = comp.split(">Group 2×</td>")[1].split("</tr>")[0]   # 1 at $40 + 6 at $80
-    assert all(v in g2 for v in [">7<", ">2<", "$74.29", "$520.00", "$37.14"])
+    assert all(v in g2 for v in [">7<", ">14<", "$74.29", "$520.00", "$37.14"])
+    total = comp.split(">Total</td>")[1].split("</tr>")[0]
+    assert ">12<" in total and ">25<" in total and ">100%<" in total
+    ideal = html.split("Ideal composition to achieve RRP")[1]
+    assert "<th>Total sessions/week</th>" in ideal
     assert "$1,400.00" in html and "$116.67" in html and "$56.00" in html
     assert "+$6.00 (+8%)" in html and "−$40.00 (−50%)" in html
     assert "−$455" not in html or "vs today" in html
