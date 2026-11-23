@@ -158,3 +158,15 @@ def test_group_table_sorted_and_single_country_median_blank():
         1400 / 12 - (1400 / 12 + 244.97 / 5) / 2)
     beta = au.loc["Beta"]
     assert beta["% of RRP"] == pytest.approx(240 / 296 * 100)          # $4.97 left out
+
+
+def test_composition_columns_mix_1to1_sessions():
+    plans = pd.DataFrame({"Country": "AU", "Type": ["1:1", "1:1", "Group"],
+                          "Sessions/week": [1, 2, 2], "Members": [3, 1, 4],
+                          "Weekly price": [100.0, 180.0, 70.0], "Freeze": False})
+    comp = mc.current_table(plans, None, {})["composition"].set_index("Plan")
+    one = comp.loc["1:1"]                       # 3 x 1 session + 1 x 2 sessions
+    assert one["Members"] == 4 and one["Sessions/week"] == 1.25
+    assert one["Total value"] == 480 and one["Average price"] == 120
+    assert one["Revenue per session"] == 480 / 5
+    assert comp.loc["Group 2×", "Revenue per session"] == 35
