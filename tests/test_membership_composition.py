@@ -171,3 +171,21 @@ def test_composition_columns_mix_1to1_sessions():
     assert one["Total value"] == 480 and one["Average price"] == 120
     assert one["Revenue per session"] == 480 / 5
     assert comp.loc["Group 2×", "Revenue per session"] == 35
+
+
+def test_target_fill_rises_smoothly_with_members():
+    got = {m: mc.target_fill(m) for m in (5, 20, 30, 40, 60, 80, 100, 120, 135, 150, 165,
+                                           180, 300)}
+    assert got == {5: 3.0, 20: 3.0, 30: 3.3, 40: 3.5, 60: 3.9, 80: 4.3, 100: 4.6, 120: 5.0,
+                   135: 5.3, 150: 5.5, 165: 5.8, 180: 6.0, 300: 6.0}
+
+
+def test_scheduling_hubs_tutor_cost_and_margin():
+    r = mc.scheduling(120, 200, 10, 8000, "AU")          # 200 group sessions at 5.0 + 10 x 1:1
+    assert r["Target fill"] == 5.0 and r["Hubs needed a week"] == 50
+    assert r["Tutor cost"] == 50 * 37.90 and r["Margin a week"] == 8000 - 50 * 37.90
+    assert r["Margin per member a week"] == (8000 - 50 * 37.90) / 120
+    assert r["Tutor cost %"] == 50 * 37.90 / 8000 * 100
+    nz = mc.scheduling(120, 200, 10, 8000, "NZ")         # no NZ tutor rate yet
+    assert nz["Hubs needed a week"] == 50 and nz["Tutor cost"] is None
+    assert nz["Margin per member a week"] is None

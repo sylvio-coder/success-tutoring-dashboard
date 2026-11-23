@@ -172,7 +172,77 @@ def _visible(week, vl, table, allowed):
     return t[t["Location"].isin(allowed)].reset_index(drop=True)
 
 
+SMALL = 15            # centres under this many members are faded on the chart
+QUADRANTS = [("Efficient", "fewer sessions, higher price", "left", "top"),
+             ("Premium", "more sessions, higher price", "right", "top"),
+             ("Underpriced", "fewer sessions, lower price", "left", "bottom"),
+             ("Discount trap", "more sessions, lower price", "right", "bottom")]
+
+
+def country_medians(full, country, allowed):
+    """(sessions per member, revenue per session) medians for a country, from every centre.
+    None for a non-admin where the country has too few centres to stay anonymous."""
+    c = full[(full["Country"] == country) & (full["Members"] > 0)]
+    if len(c) < 2 or (allowed is not None and len(c) < MIN_FOR_MEDIAN):
+        return None
+    return float(c["Sessions per member"].median()), float(c["Revenue per session"].median())
+
+
+def price_frequency_chart(t, med, country, title, highlight=None, ideal=None):
+    """Sessions per member (across) vs revenue per session (up), one dot per centre in t,
+    dashed country medians and the four quarters. highlight: a centre to draw strongly;
+    ideal: (sessions per member, revenue per session) to point an arrow to."""
+    import plotly.graph_objects as go
+    fig = go.Figure()
+    cur = mc.CURRENCY.get(country, "")
+    for small in (False, True):
+        d = t[(t["Members"] < SMALL) == small]
+        if d.empty:
+            continue
+        strong = d["Location"] == highlight if highlight else pd.Series(True, index=d.index)
+        fig.add_scatter(
+            x=d["Sessions per member"], y=d["Revenue per session"], mode="markers+text",
+            text=d["Centre"] if highlight is None else
+            [c if s_ else "" for c, s_ in zip(d["Centre"], strong)],
+            textposition="top center", textfont=dict(size=11, color="#1c2a30"),
+            marker=dict(size=[max(10, min(40, m ** 0.5 * 4)) for m in d["Members"]],
+                        color=["#1f9a9a" if s_ else "#c9d3d6" for s_ in strong],
+                        opacity=0.35 if small else 0.85, line=dict(width=1, color="#fff")),
+            customdata=d[["Members", "ARPM", "% of RRP"]].to_numpy(),
+            hovertemplate=("<b>%{text}</b><br>" if highlight is None else "") +
+            "Sessions per member: %{x:.2f}<br>Revenue per session: $%{y:.2f}<br>"
+            "Members: %{customdata[0]:.0f}<br>ARPM: $%{customdata[1]:.2f}<extra></extra>",
+            name=f"Under {SMALL} members" if small else "Centres", showlegend=False)
+    if ideal is not None and highlight is not None and (t["Location"] == highlight).any():
+        r = t[t["Location"] == highlight].iloc[0]
+        fig.add_annotation(x=ideal[0], y=ideal[1], ax=r["Sessions per member"],
+                           ay=r["Revenue per session"], xref="x", yref="y", axref="x",
+                           ayref="y", showarrow=True, arrowhead=3, arrowwidth=2,
+                           arrowcolor="#2e8540")
+        fig.add_scatter(x=[ideal[0]], y=[ideal[1]], mode="markers+text", text=["Ideal"],
+                        textposition="bottom center", showlegend=False, hoverinfo="skip",
+                        marker=dict(size=14, color="#2e8540", symbol="star"))
+    if med:
+        fig.add_vline(x=med[0], line=dict(dash="dash", color="#8a9a9f", width=1))
+        fig.add_hline(y=med[1], line=dict(dash="dash", color="#8a9a9f", width=1))
+        for name, sub, xa, ya in QUADRANTS:
+            fig.add_annotation(
+                text=f"<b>{name}</b><br><span style='font-size:10px'>{sub}</span>",
+                xref="x domain", yref="y domain", x=0.01 if xa == "left" else 0.99,
+                y=0.99 if ya == "top" else 0.01, xanchor=xa, yanchor=ya, showarrow=False,
+                font=dict(size=11, color={"Efficient": GREEN, "Discount trap": RED}.get(
+                    name, "#5d6d73")), align=xa)
+    fig.update_layout(title=title, height=460, margin=dict(l=10, r=10, t=50, b=10),
+                      plot_bgcolor="#fff", paper_bgcolor="#fff",
+                      xaxis=dict(title="Sessions per member a week", gridcolor="#eef1f3",
+                                 zeroline=False),
+                      yaxis=dict(title=f"Revenue per session ({cur})", gridcolor="#eef1f3",
+                                 tickprefix="$", zeroline=False))
+    st.plotly_chart(fig, width="stretch")
+
+
 def _group(week, vl, table, allowed):
+    full = mc.group_table(week, vl, table)
     t = _visible(week, vl, table, allowed)
     countries = sorted(t["Country"].unique())
     pick = st.selectbox("Country", ["All countries"] + countries, key="comp_country")
@@ -181,26 +251,46 @@ def _group(week, vl, table, allowed):
     st.caption("Lowest % of RRP first. Amounts weekly, in each centre's own currency. "
                "ARPM vs country median: \"–\" where the country has one centre"
                + ("." if allowed is None else
-                  f" or fewer than {MIN_FOR_MEDIAN} centres."))
-    t = t.assign(**{"Sessions per member": t["Total sessions/week"] /
-                    t["Members"].where(t["Members"] > 0)})
+                  f" or fewer than {MIN_FOR_MEDIAN} centres.") +
+               " Target fill rises with members (3.0 up to 20, 5.0 at 120, 6.0 from 180); "
+               "tutor cost and margin are AU only for now.")
     show = t[["Centre", "Country", "Members", "Total sessions/week", "Sessions per member",
-              "ARPM", "Revenue per session", "% of RRP", "ARPM vs country median",
-              "RRP used"]]
+              "ARPM", "Revenue per session", "Target fill", "Hubs needed a week",
+              "Tutor cost %", "Margin per member a week", "% of RRP",
+              "ARPM vs country median", "RRP used"]]
+    money = lambda: st.column_config.NumberColumn(format="$%.2f")
     st.dataframe(show.style.map(lambda v: "" if pd.isna(v) else
                                 f"color:{GREEN if v >= 99.5 else RED};font-weight:600",
                                 subset=["% of RRP"]),
                  hide_index=True, width="stretch", key="comp_group",
-                 column_config={"ARPM": st.column_config.NumberColumn(format="$%.2f"),
+                 column_config={"ARPM": money(), "Revenue per session": money(),
+                                "Margin per member a week": money(),
                                 "Total sessions/week": st.column_config.NumberColumn(
                                     format="%d"),
                                 "Sessions per member": st.column_config.NumberColumn(
                                     format="%.2f"),
-                                "Revenue per session": st.column_config.NumberColumn(
-                                    format="$%.2f"),
+                                "Target fill": st.column_config.NumberColumn(
+                                    format="%.1f", help="Target students per study hub for "
+                                    "a centre this size"),
+                                "Hubs needed a week": st.column_config.NumberColumn(
+                                    format="%.0f", help="Group sessions ÷ target fill, plus "
+                                    "1:1 sessions"),
+                                "Tutor cost %": st.column_config.NumberColumn(
+                                    format="%.0f%%", help="Hubs needed × tutor cost an hour, "
+                                    "as a % of total value"),
                                 "% of RRP": st.column_config.NumberColumn(format="%.0f%%"),
                                 "ARPM vs country median": st.column_config.NumberColumn(
                                     format="$%+.2f")})
+    chart_country = pick if pick != "All countries" else (
+        "AU" if "AU" in countries else (countries[0] if countries else None))
+    if chart_country:
+        c = t[(t["Country"] == chart_country) & (t["Members"] > 0)]
+        st.markdown(f"**Price vs frequency · {chart_country}**")
+        st.caption("Each dot is a centre (bigger = more members; faded = under "
+                   f"{SMALL} members). Dashed lines: the country's medians. Top-left is the "
+                   "strongest position: members come less often and each session earns more.")
+        price_frequency_chart(c, country_medians(full, chart_country, allowed),
+                              chart_country, None)
 
 
 def _centre(comp, week, vl, table, allowed):

@@ -32,10 +32,19 @@ def test_group_overview():
     g = at.dataframe[0].value
     assert list(g.columns) == ["Centre", "Country", "Members", "Total sessions/week",
                                "Sessions per member", "ARPM", "Revenue per session",
-                               "% of RRP", "ARPM vs country median", "RRP used"]
+                               "Target fill", "Hubs needed a week", "Tutor cost %",
+                               "Margin per member a week", "% of RRP",
+                               "ARPM vs country median", "RRP used"]
     alpha = g.set_index("Centre").loc["Alpha"]          # 1x1 + 1x2 + 6x2 + 1x4 + 1x4 + 2x1
     assert alpha["Members"] == 12 and alpha["Total sessions/week"] == 25
     assert alpha["Sessions per member"] == 25 / 12
+    hubs = 23 / 3.0 + 2                                 # 23 group sessions at 3.0 + 2 x 1:1
+    assert alpha["Target fill"] == 3.0 and abs(alpha["Hubs needed a week"] - hubs) < 1e-9
+    assert abs(alpha["Margin per member a week"] - (1400 - hubs * 37.90) / 12) < 1e-9
+    kiwi = g.set_index("Centre").loc["Kiwi"]            # no NZ tutor rate yet
+    assert pd.isna(kiwi["Tutor cost %"]) and pd.isna(kiwi["Margin per member a week"])
+    chart = at.get("plotly_chart")[0].proto.spec
+    assert "Discount trap" in chart and "Efficient" in chart and "Alpha" in chart
     assert list(g["% of RRP"]) == sorted(g["% of RRP"])
     at.selectbox(key="comp_country").set_value("NZ").run()
     assert list(at.dataframe[0].value["Centre"]) == ["Kiwi"]
@@ -100,6 +109,8 @@ def test_gpm_sees_only_their_own_centres():
     g = at.dataframe[0].value
     assert list(g["Centre"]) == ["Alpha"]
     assert g["ARPM vs country median"].isna().all()          # AU has under 5 centres
+    chart = at.get("plotly_chart")[0].proto.spec             # own dot, no medians (< 5)
+    assert "Alpha" in chart and "Beta" not in chart and "Discount trap" not in chart
     assert at.selectbox(key="comp_country").options == ["All countries", "AU"]
     at.radio(key="comp_view").set_value("Centre deep dive").run()
     assert at.selectbox(key="comp_centre").options == ["Alpha"]

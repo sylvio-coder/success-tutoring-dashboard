@@ -12,6 +12,7 @@ Rules agreed with HQ:
 """
 import csv
 import io
+import math
 import statistics
 
 import pandas as pd
@@ -33,6 +34,11 @@ REGIONAL = {"US", "CA"}        # countries priced by region (others: national RR
 TARGET_MIX = {"1×": 15, "2×": 80, "3+": 1, "1:1": 4}
 IDEAL_GROUPS = [("Group", "1×", 1, 1, 1), ("Group", "2×", 2, 2, 2),
                 ("Group", "3+", 3, 99, 3), ("1:1", "1:1", 1, 99, 1)]   # type, plan, min, max, sessions
+# Scheduling: the target students per study hub rises with members, in straight lines
+# between these points (CRM: young centres ~3.1-3.4; the best centres over 150 members
+# 5.5-6). A hub holds at most 6. 1:1 sessions need a tutor each.
+FILL_POINTS = [(20, 3.0), (40, 3.5), (120, 5.0), (150, 5.5), (180, 6.0)]
+TUTOR_HOUR = {"AU": 37.90}     # tutor cost an hour incl. super ($33.85 + 12%); one per hub
 CURRENCY = {"AU": "AUD", "NZ": "NZD", "US": "USD", "CA": "CAD", "GB": "GBP"}
 COUNTRY_CODE = {"australia": "AU", "new zealand": "NZ", "united states": "US", "usa": "US",
                 "united states of america": "US", "canada": "CA", "united kingdom": "GB",
@@ -296,6 +302,33 @@ def ideal_table(plans, rrp, target=None):
             "composition": pd.DataFrame(comp)}
 
 
+# ── Scheduling ────────────────────────────────────────────────────────────────
+def target_fill(members):
+    """Target students per study hub for a centre this size (1 decimal)."""
+    pts = FILL_POINTS
+    if members <= pts[0][0]:
+        return pts[0][1]
+    for (m0, f0), (m1, f1) in zip(pts, pts[1:]):
+        if members <= m1:
+            return math.floor((f0 + (f1 - f0) * (members - m0) / (m1 - m0)) * 10 + 0.5 + 1e-9) / 10
+    return pts[-1][1]
+
+
+def scheduling(members, group_sessions, one_sessions, value, country, fill=None):
+    """Hubs needed a week at the target fill, tutor cost, and the margin after tutor cost.
+    Tutor cost and margin are None where no tutor rate is set for the country."""
+    fill = fill or target_fill(members)
+    hubs = group_sessions / fill + one_sessions
+    rate = TUTOR_HOUR.get(country)
+    cost = hubs * rate if rate else None
+    margin = value - cost if cost is not None else None
+    return {"Target fill": fill, "Hubs needed a week": hubs, "Tutor cost": cost,
+            "Tutor cost %": cost / value * 100 if cost is not None and value else None,
+            "Margin a week": margin,
+            "Margin per member a week": margin / members if margin is not None and members
+            else None}
+
+
 # ── Group overview ────────────────────────────────────────────────────────────
 def group_table(week, vl, table):
     """One row per centre: members, ARPM, revenue per session, % of RRP and ARPM vs the
@@ -314,12 +347,16 @@ def group_table(week, vl, table):
         at = sum(m * rrp_price(rrp, t, s) for m, t, s in
                  zip(priced["Members"], priced["Type"], priced["Sessions/week"])) if rrp else 0
         paid = float((priced["Members"] * priced["Weekly price"]).sum())
+        one = g["Type"] == "1:1"
+        one_sess = float((g.loc[one, "Members"] * g.loc[one, "Sessions/week"]).sum())
         rows.append({"Location": loc, "Centre": loc.removeprefix(ingest.PREFIX),
                      "Country": cc, "Currency": CURRENCY.get(cc, ""),
                      "RRP used": rrp["label"] if rrp else "No RRP set", "Members": n,
                      "Total sessions/week": sessions,
+                     "Sessions per member": sessions / n if n else None,
                      "ARPM": value / n if n else None,
                      "Revenue per session": value / sessions if sessions else None,
+                     **scheduling(n, sessions - one_sess, one_sess, value, cc),
                      "% of RRP": paid / at * 100 if at else None})
     t = pd.DataFrame(rows)
     if t.empty:
