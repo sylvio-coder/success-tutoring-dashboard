@@ -341,3 +341,22 @@ def test_composition_upload_rejects_other_files(ss):
     at = run_page("page_composition_upload", ss, Upload("x.csv", b"a,b\n1,2\n"))
     assert any("Membership Composition export" in e.value for e in at.error)
     assert not [b for b in at.button if b.label.startswith("✅ Confirm")]
+
+
+def test_composition_remove_a_week_needs_the_tick(ss):
+    ws = ss.add_worksheet("Membership Composition", 10, 10)
+    ws.append_rows([["Week ending", "Location", "Country", "Type", "Sessions/week", "Members",
+                     "Weekly price", "Export name"]] +
+                   [[wk, "Success Tutoring - Auburn", "AU", "Group", 2, 3, 70, "x"]
+                    for wk in ("2026-11-08", "2026-11-15", "2026-11-08")])
+    at = run_page("page_composition_upload", ss)
+    assert not at.exception, at.exception
+    assert at.selectbox(key="comp_rm_week").options == ["15/11/2026", "08/11/2026"]
+    at.selectbox(key="comp_rm_week").set_value("2026-11-08").run()
+    assert at.button(key="comp_rm_btn").disabled                    # tick first
+    at.checkbox(key="comp_rm_ok").check().run()
+    at.button(key="comp_rm_btn").click().run()
+    assert not at.exception, at.exception
+    assert any("removed (2 rows)" in s.value for s in at.success)
+    left = ss.worksheet("Membership Composition").get_all_records()
+    assert [r["Week ending"] for r in left] == ["2026-11-15"]

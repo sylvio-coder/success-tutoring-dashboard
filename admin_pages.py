@@ -786,12 +786,49 @@ def ensure_rrp_tab(spreadsheet):
         return True
 
 
+def _remove_composition_week(spreadsheet, clear_cache):
+    """Delete one week from the Membership Composition tab, after a confirmation tick."""
+    import gspread
+    try:
+        ws = spreadsheet.worksheet(mc.TAB)
+        headers, existing = sw.read_tab(ws)
+    except gspread.WorksheetNotFound:
+        return
+    if "Week ending" not in headers or not existing:
+        return
+    wi, li = headers.index("Week ending"), headers.index("Location")
+    weeks = {}
+    for n, r in enumerate(existing, start=2):            # sheet row numbers (row 1 = headers)
+        label = r[wi].strip().lstrip("'") if len(r) > wi else ""
+        if label:
+            weeks.setdefault(label, []).append((n, r[li] if len(r) > li else ""))
+    with st.expander("🗑 Remove a week"):
+        st.caption("Deletes every centre's rows for one week from the 'Membership Composition' "
+                   "tab, e.g. a week uploaded from an incomplete export. This can't be undone; "
+                   "upload the export again to put it back.")
+        pick = st.selectbox("Week ending", sorted(weeks, reverse=True), key="comp_rm_week",
+                            format_func=lambda d: pd.Timestamp(d).strftime("%d/%m/%Y"))
+        rows = weeks[pick]
+        st.caption(f"{len(rows)} plan rows for {len({loc for _, loc in rows})} centres.")
+        ok = st.checkbox(f"Yes, permanently delete week ending "
+                         f"{pd.Timestamp(pick):%d/%m/%Y}", key="comp_rm_ok")
+        if st.button("Delete this week", disabled=not ok, key="comp_rm_btn"):
+            try:
+                sw.delete_rows(ws, [n for n, _ in rows])
+                clear_cache()
+                st.success(f"Week ending {pd.Timestamp(pick):%d/%m/%Y} removed "
+                           f"({len(rows)} rows).")
+            except Exception as e:
+                st.error(f"Deleting from the Sheet failed: {e}\n\n{WRITE_HINT}")
+
+
 def page_composition_upload(spreadsheet, df_wm, df_rv, clear_cache):
     st.markdown('<div class="report-title">Membership Composition Upload</div>',
                 unsafe_allow_html=True)
     _subtitle("Drop in the portal's Membership Composition export (CSV, all centres) each "
               "week. Each centre's plans are saved to the 'Membership Composition' tab.")
 
+    _remove_composition_week(spreadsheet, clear_cache)
     f = st.file_uploader("Membership Composition CSV", type=["csv"], key="comp_file")
     if not f:
         st.info("Upload the week's export to see a preview. Nothing is written to the Sheet "
