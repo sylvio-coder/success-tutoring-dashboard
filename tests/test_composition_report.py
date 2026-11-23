@@ -30,11 +30,12 @@ def test_group_overview():
     at = run()
     assert not at.exception, at.exception
     g = at.dataframe[0].value
-    assert list(g.columns) == ["Centre", "Country", "RRP used", "Members",
-                               "Total sessions/week", "ARPM", "Revenue per session",
-                               "% of RRP", "ARPM vs country median"]
+    assert list(g.columns) == ["Centre", "Country", "Members", "Total sessions/week",
+                               "Sessions per member", "ARPM", "Revenue per session",
+                               "% of RRP", "ARPM vs country median", "RRP used"]
     alpha = g.set_index("Centre").loc["Alpha"]          # 1x1 + 1x2 + 6x2 + 1x4 + 1x4 + 2x1
     assert alpha["Members"] == 12 and alpha["Total sessions/week"] == 25
+    assert alpha["Sessions per member"] == 25 / 12
     assert list(g["% of RRP"]) == sorted(g["% of RRP"])
     at.selectbox(key="comp_country").set_value("NZ").run()
     assert list(at.dataframe[0].value["Centre"]) == ["Kiwi"]
@@ -53,8 +54,19 @@ def test_centre_tables():
               "Revenue per session", "RRP variance", "Variance from median"]:
         assert f"<th>{h}</th>" in html
     assert "% of members" in html and "Current %" in html and "Ideal %" in html
+    heads = ["Plan", "No. members", "Total sessions/week", "Membership price",
+             "Revenue per session", "Total value", "RRP variance", "Variance from median"]
+    assert "".join(f"<th>{h}</th>" for h in heads) in html
     top = html.split("<th>Plan</th><th>No. members</th>")[1].split("</table>")[0]
     assert ">Group 4×</td>" in top and ">1:1 (1×)</td>" in top
+    assert "2.08 sessions" in top and "$116.67 ARPM" in top       # per member: 25 / 12
+    assert "<th>Composition</th><th>No. members</th><th>% of members</th><th>Total sessions/week" \
+           "</th><th>Average membership price</th><th>Revenue per session</th><th>Total value" \
+           "</th>" in html
+    ideal_t = html.split("Ideal composition to achieve RRP")[1].split("</table>")[0]
+    assert "<th>Plan</th><th>No. members</th><th>Total sessions/week</th><th>Membership price" \
+           "</th><th>Revenue per session</th><th>Total value</th>" in ideal_t
+    assert ">Group 2×</td>" in ideal_t and "Per member" in ideal_t and " sessions</td>" in ideal_t
     comp = html.split("<th>Composition</th>")[1].split("</table>")[0]
     for h in ["Total sessions/week", "Average membership price", "Total value",
               "Revenue per session"]:
