@@ -22,7 +22,7 @@ CSV = """Date,Centre,Country,Row,Type,No. members,Sessions/week,Membership price
 2026-11-08,Success Tutoring – Kiwi,NZ,Plan,Group,18,1,40.00,720.00
 2026-11-08,Success Tutoring – Kiwi,NZ,Plan,Group,6,2,70.00,420.00
 2026-11-08,Success Tutoring – Kiwi,NZ,Plan,Group,1,2,4.97,4.97
-2026-11-08,Success Tutoring Tex,US,Plan,Group,2,2,280.00,560.00
+2026-11-08,Success Tutoring Tex,US,Plan,Group,2,2,70.00,140.00
 2026-11-08,Success Tutoring - Empty,AU,Total,,0,,,0.00
 """
 
@@ -42,12 +42,16 @@ def plans(name):
 
 
 # ── Reading the export ────────────────────────────────────────────────────────
-def test_read_export_plans_only_and_us_monthly_to_weekly():
+def test_read_export_plans_only_and_us_prices_as_weekly():
     x = mc.read_export(CSV.encode())
     assert x["week_end"] == date(2026, 11, 8) and x["empty"] == ["Success Tutoring - Empty"]
     assert len(x["rows"]) == 12
     tex = x["rows"][x["rows"]["Centre"] == "Success Tutoring Tex"].iloc[0]
-    assert tex["Weekly price"] == 70.0                           # US$280 a month / 4
+    assert tex["Weekly price"] == 70.0                           # exported weekly now
+    assert mc.looks_monthly(x["rows"]).empty
+    old = mc.read_export(CSV.replace("Tex,US,Plan,Group,2,2,70.00,140.00",
+                                     "Tex,US,Plan,Group,2,2,280.00,560.00").encode())["rows"]
+    assert list(mc.looks_monthly(old)["Centre"]) == ["Success Tutoring Tex"]   # $140 a session
 
 
 def test_read_export_rejects_other_files():
@@ -203,3 +207,25 @@ def test_weekly_totals_and_trend_measures():
     assert r["Margin"] == 708 - (14 / 3.0 + 2) * 37.90
     m = mc.trend_measures(w).iloc[0]
     assert m["Sessions per member"] == 1.6 and m["ARPM"] == 70.8 and m["2×"] == 60
+
+
+def test_where_the_money_is_adds_up():
+    plans = mc.prepare(pd.DataFrame({
+        "Week ending": "'2026-11-22", "Location": "X", "Country": "AU",
+        "Type": ["Group", "Group", "1:1"], "Sessions/week": [1, 2, 1], "Members": [10, 20, 2],
+        "Weekly price": [35.0, 60.0, 90.0]}))
+    rrp = mc.rrp_for(mc.rrp_table(None), "AU", None)
+    ideal = mc.ideal_table(plans, rrp)
+    r = mc.where_the_money_is(plans, rrp, ideal, "AU", run=(30, 32))
+    t, a = r["today"], r["ideal"]
+    assert r["target"] == 3.3 and abs(r["measured_fill"] - 50 / 28) < 1e-9
+    assert r["fill"] == 3.3                                   # target beats measured 1.7
+    need = 50 / 3.3 + 2
+    assert abs(r["hubs_needed"] - need) < 1e-9 and t["Hubs a week"] == 30
+    gains = dict((g[0], g[1]) for g in r["gains"])
+    assert gains["Price"] == 10 * (42 - 35) + 20 * (74 - 60)  # up to RRP
+    assert abs(gains["Scheduling"] - (30 - need) * 37.90) < 1e-9
+    assert abs(t["Margin a week"] + sum(gains.values()) - a["Margin a week"]) < 1e-6
+    nz = mc.where_the_money_is(plans, rrp, ideal, "NZ", run=(30, 32))
+    assert nz["today"]["Margin a week"] is None and "Scheduling" not in dict(
+        (g[0], g[1]) for g in nz["gains"])

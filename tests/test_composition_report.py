@@ -32,9 +32,10 @@ def test_group_overview():
     g = at.dataframe[0].value
     assert list(g.columns) == ["Centre", "Country", "Members", "Total sessions/week",
                                "Sessions per member", "ARPM", "Revenue per session",
-                               "Target fill", "Hubs needed a week", "Tutor cost %",
+                               "Target fill", "Hubs needed a week", "Hubs run a week",
+                               "Students per hub", "Extra hubs a week", "Tutor cost %",
                                "Margin per member a week", "% of RRP",
-                               "ARPM vs country median", "RRP used"]
+                               "ARPM vs country median", "RRP used", "Check"]
     alpha = g.set_index("Centre").loc["Alpha"]          # 1x1 + 1x2 + 6x2 + 1x4 + 1x4 + 2x1
     assert alpha["Members"] == 12 and alpha["Total sessions/week"] == 25
     assert alpha["Sessions per member"] == 25 / 12
@@ -45,6 +46,7 @@ def test_group_overview():
     assert pd.isna(kiwi["Tutor cost %"]) and pd.isna(kiwi["Margin per member a week"])
     chart = at.get("plotly_chart")[0].proto.spec
     assert "Discount trap" in chart and "Efficient" in chart and "Alpha" in chart
+    assert alpha["Check"] == "No sessions-run data" and pd.isna(alpha["Hubs run a week"])
     assert list(g["% of RRP"]) == sorted(g["% of RRP"])
     at.selectbox(key="comp_country").set_value("NZ").run()
     assert list(at.dataframe[0].value["Centre"]) == ["Kiwi"]
@@ -93,7 +95,12 @@ def test_centre_tables():
     assert "own average price" in html
     assert not at.dataframe                                           # tables, then trends
     keys = [c.key for c in at.get("plotly_chart")]
-    assert "trend_c_Members" in keys and len(keys) == 6 + 3            # 6 trends + 3 pies
+    assert "trend_c_Members" in keys and len(keys) == 1 + 6 + 3        # chart, trends, pies
+    money = at.get("plotly_chart")[0].proto.spec                       # today -> achievable
+    assert "achievable" in money and "Achievable" in money
+    assert "Today vs achievable: where the money is" in html
+    assert "Where the gain comes from" in html and "Price:" in html and "Mix:" in html
+    assert "keep it" in html                    # Alpha's mix already beats the ideal
     pies = [c.proto.spec for c in at.get("plotly_chart") if "_mix_" in c.key]
     assert "08 Nov 2026" in pies[0] and "Latest" in pies[1] and "Ideal mix" in pies[2]
     assert all('"type":"pie"' in p.replace(" ", "") for p in pies)
@@ -180,3 +187,25 @@ def test_holiday_periods_from_iso_weeks():
     assert p[0] == (pd.Timestamp("2026-06-29"), pd.Timestamp("2026-07-12"))
     assert p[1] == (pd.Timestamp("2026-12-14"), pd.Timestamp("2027-02-07"))  # into next year
     assert cr.holiday_periods(h, None) == [] and cr.holiday_periods(None, "NSW") == []
+
+
+def test_group_overview_measured_hubs_from_sessions_run():
+    def script():
+        import pandas as pd
+        import streamlit as st
+        import composition_report as cr
+        from test_composition_report import COMP, VL, P
+        st.session_state["access_level"] = "admin"
+        rev = pd.DataFrame({"Success Tutoring - Business name": [P + "Alpha", P + "Beta"],
+                            "Date": pd.to_datetime(["2026-11-15", "2026-11-15"]),
+                            "Total Sessions": [8, 4], "# Active Students": [12, 9]})
+        cr.report_composition(COMP, VL, pd.DataFrame(), revenue=rev)
+    at = AppTest.from_function(script, default_timeout=60).run()
+    assert not at.exception, at.exception
+    g = at.dataframe[0].value.set_index("Centre")
+    a = g.loc["Alpha"]                     # 25 sessions, 2 of them 1:1; 8 hubs run
+    assert a["Hubs run a week"] == 8 and a["Check"] == ""
+    assert abs(a["Students per hub"] - 23 / 6) < 1e-9
+    assert abs(a["Extra hubs a week"] - (8 - (23 / 3.0 + 2))) < 1e-9
+    b = g.loc["Beta"]                      # 5 members vs 9 CRM students: data check
+    assert pd.isna(b["Hubs run a week"]) and b["Check"] == "Members 5 vs CRM students 9"
