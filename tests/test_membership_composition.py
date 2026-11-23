@@ -99,6 +99,7 @@ def test_current_table_rows_totals_and_variances():
     rows = t["rows"]
     assert list(rows["Type"]) == ["Group"] * 5 + ["1:1"]            # every visit count shown
     assert list(rows["Sessions/week"]) == [1, 2, 2, 4, 4, 1]
+    assert list(rows["Total sessions"]) == [1, 2, 12, 4, 4, 2] and t["sessions"] == 25
     two = rows.iloc[2]
     assert two["Revenue per session"] == 40 and two["RRP variance"] == 6
     assert two["RRP variance %"] == pytest.approx(8.1, abs=0.1)
@@ -166,7 +167,39 @@ def test_composition_columns_mix_1to1_sessions():
                           "Weekly price": [100.0, 180.0, 70.0], "Freeze": False})
     comp = mc.current_table(plans, None, {})["composition"].set_index("Plan")
     one = comp.loc["1:1"]                       # 3 x 1 session + 1 x 2 sessions
-    assert one["Members"] == 4 and one["Sessions/week"] == 1.25
+    assert one["Members"] == 4 and one["Total sessions"] == 5
     assert one["Total value"] == 480 and one["Average price"] == 120
     assert one["Revenue per session"] == 480 / 5
     assert comp.loc["Group 2×", "Revenue per session"] == 35
+
+
+def test_target_fill_rises_smoothly_with_members():
+    got = {m: mc.target_fill(m) for m in (5, 20, 30, 40, 60, 80, 100, 120, 135, 150, 165,
+                                           180, 300)}
+    assert got == {5: 3.0, 20: 3.0, 30: 3.3, 40: 3.5, 60: 3.9, 80: 4.3, 100: 4.6, 120: 5.0,
+                   135: 5.3, 150: 5.5, 165: 5.8, 180: 6.0, 300: 6.0}
+
+
+def test_scheduling_hubs_tutor_cost_and_margin():
+    r = mc.scheduling(120, 200, 10, 8000, "AU")          # 200 group sessions at 5.0 + 10 x 1:1
+    assert r["Target fill"] == 5.0 and r["Hubs needed a week"] == 50
+    assert r["Tutor cost"] == 50 * 37.90 and r["Margin a week"] == 8000 - 50 * 37.90
+    assert r["Margin per member a week"] == (8000 - 50 * 37.90) / 120
+    assert r["Tutor cost %"] == 50 * 37.90 / 8000 * 100
+    nz = mc.scheduling(120, 200, 10, 8000, "NZ")         # no NZ tutor rate yet
+    assert nz["Hubs needed a week"] == 50 and nz["Tutor cost"] is None
+    assert nz["Margin per member a week"] is None
+
+
+def test_weekly_totals_and_trend_measures():
+    comp = pd.DataFrame({"Week ending": pd.to_datetime(["2026-11-08"] * 3),
+                         "Location": "X", "Country": "AU", "Type": ["Group", "Group", "1:1"],
+                         "Sessions/week": [1, 2, 1], "Members": [2, 6, 2],
+                         "Weekly price": [42.0, 74.0, 90.0], "Freeze": False})
+    w = mc.weekly_totals(comp)
+    r = w.iloc[0]
+    assert (r["Members"], r["Sessions"], r["One"], r["Value"]) == (10, 16, 2, 708)
+    assert (r["1×"], r["2×"], r["3+"], r["1:1"]) == (2, 6, 0, 2)
+    assert r["Margin"] == 708 - (14 / 3.0 + 2) * 37.90
+    m = mc.trend_measures(w).iloc[0]
+    assert m["Sessions per member"] == 1.6 and m["ARPM"] == 70.8 and m["2×"] == 60

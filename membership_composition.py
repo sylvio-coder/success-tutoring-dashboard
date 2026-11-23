@@ -12,6 +12,7 @@ Rules agreed with HQ:
 """
 import csv
 import io
+import math
 import statistics
 
 import pandas as pd
@@ -33,6 +34,11 @@ REGIONAL = {"US", "CA"}        # countries priced by region (others: national RR
 TARGET_MIX = {"1×": 15, "2×": 80, "3+": 1, "1:1": 4}
 IDEAL_GROUPS = [("Group", "1×", 1, 1, 1), ("Group", "2×", 2, 2, 2),
                 ("Group", "3+", 3, 99, 3), ("1:1", "1:1", 1, 99, 1)]   # type, plan, min, max, sessions
+# Scheduling: the target students per study hub rises with members, in straight lines
+# between these points (CRM: young centres ~3.1-3.4; the best centres over 150 members
+# 5.5-6). A hub holds at most 6. 1:1 sessions need a tutor each.
+FILL_POINTS = [(20, 3.0), (40, 3.5), (120, 5.0), (150, 5.5), (180, 6.0)]
+TUTOR_HOUR = {"AU": 37.90}     # tutor cost an hour incl. super ($33.85 + 12%); one per hub
 CURRENCY = {"AU": "AUD", "NZ": "NZD", "US": "USD", "CA": "CAD", "GB": "GBP"}
 COUNTRY_CODE = {"australia": "AU", "new zealand": "NZ", "united states": "US", "usa": "US",
                 "united states of america": "US", "canada": "CA", "united kingdom": "GB",
@@ -231,6 +237,7 @@ def current_table(plans, rrp, medians):
         rv, rp = _variance(price, r)
         mv, mp = _variance(price, med) if cnt > 1 else (None, None)
         rows.append({"Type": kind, "Members": int(p["Members"]), "Sessions/week": s,
+                     "Total sessions": p["Members"] * s,
                      "Membership price": price, "Total value": p["Members"] * price,
                      "Revenue per session": price / s, "RRP": r, "RRP variance": rv,
                      "RRP variance %": rp, "Median": med if cnt > 1 else None,
@@ -246,14 +253,14 @@ def current_table(plans, rrp, medians):
             .sort_values("order").reset_index())
     members = comp["Members"].where(comp["Members"] > 0)
     comp["% of members"] = comp["Members"] / n * 100 if n else 0
-    comp["Sessions/week"] = comp["Sess"] / members          # 1:1 can mix 1×, 2×, ...
+    comp["Total sessions"] = comp["Sess"]                   # members × sessions a week
     comp["Average price"] = comp["Total value"] / members
     comp["Revenue per session"] = comp["Total value"] / comp["Sess"].where(comp["Sess"] > 0)
     frozen = plans[plans["Freeze"]]
     return {"rows": pd.DataFrame(rows), "members": n, "total": value,
             "per_session": value / sessions if sessions else None,
-            "arpm": value / n if n else None,
-            "composition": comp[["Plan", "Members", "% of members", "Sessions/week",
+            "arpm": value / n if n else None, "sessions": sessions,
+            "composition": comp[["Plan", "Members", "% of members", "Total sessions",
                                  "Average price", "Total value", "Revenue per session"]],
             "freeze_members": int(frozen["Members"].sum()),
             "freeze_value": float((frozen["Members"] * frozen["Weekly price"]).sum())}
@@ -278,6 +285,7 @@ def ideal_table(plans, rrp, target=None):
         price = max(x for x in (r, own) if x is not None) if (r or own) else None
         m = n * target[plan] / 100
         rows.append({"Type": kind, "Plan": plan, "Members": m, "Sessions/week": s,
+                     "Total sessions": m * s,
                      "Membership price": price, "Total value": m * price if price else None,
                      "Revenue per session": price / s if price else None,
                      "Own price used": bool(own and r and own > r + 0.005)})
@@ -287,11 +295,82 @@ def ideal_table(plans, rrp, target=None):
                      "Variance": cur - target[plan]})
     t = pd.DataFrame(rows)
     total = float(t["Total value"].sum())
-    sessions = float((t["Members"] * t["Sessions/week"]).sum())
-    return {"rows": t, "members": n, "total": total,
+    sessions = float(t["Total sessions"].sum())
+    return {"rows": t, "members": n, "total": total, "sessions": sessions,
             "per_session": total / sessions if sessions else None,
             "arpm": total / n if n else None, "vs_today": total - current_value,
             "composition": pd.DataFrame(comp)}
+
+
+# ── Scheduling ────────────────────────────────────────────────────────────────
+def target_fill(members):
+    """Target students per study hub for a centre this size (1 decimal)."""
+    pts = FILL_POINTS
+    if members <= pts[0][0]:
+        return pts[0][1]
+    for (m0, f0), (m1, f1) in zip(pts, pts[1:]):
+        if members <= m1:
+            return math.floor((f0 + (f1 - f0) * (members - m0) / (m1 - m0)) * 10 + 0.5 + 1e-9) / 10
+    return pts[-1][1]
+
+
+def scheduling(members, group_sessions, one_sessions, value, country, fill=None):
+    """Hubs needed a week at the target fill, tutor cost, and the margin after tutor cost.
+    Tutor cost and margin are None where no tutor rate is set for the country."""
+    fill = fill or target_fill(members)
+    hubs = group_sessions / fill + one_sessions
+    rate = TUTOR_HOUR.get(country)
+    cost = hubs * rate if rate else None
+    margin = value - cost if cost is not None else None
+    return {"Target fill": fill, "Hubs needed a week": hubs, "Tutor cost": cost,
+            "Tutor cost %": cost / value * 100 if cost is not None and value else None,
+            "Margin a week": margin,
+            "Margin per member a week": margin / members if margin is not None and members
+            else None}
+
+
+# ── Trends ────────────────────────────────────────────────────────────────────
+MIX = ["1×", "2×", "3+", "1:1"]
+
+
+def _bucket(kind, sessions):
+    return "1:1" if kind == "1:1" else "1×" if sessions <= 1 else "2×" if sessions == 2 \
+        else "3+"
+
+
+def weekly_totals(comp):
+    """One row per (week, centre): members, sessions, 1:1 sessions, total value, margin a
+    week after tutor cost at the centre's target fill, and members on each plan type."""
+    if comp is None or comp.empty:
+        return pd.DataFrame()
+    c = comp.assign(Value=comp["Members"] * comp["Weekly price"],
+                    Sess=comp["Members"] * comp["Sessions/week"],
+                    Bucket=[_bucket(k, s) for k, s in zip(comp["Type"], comp["Sessions/week"])])
+    c["One"] = c["Sess"].where(c["Type"] == "1:1", 0)
+    keys = ["Week ending", "Location", "Country"]
+    out = c.groupby(keys).agg(Members=("Members", "sum"), Sessions=("Sess", "sum"),
+                              One=("One", "sum"), Value=("Value", "sum")).reset_index()
+    mix = c.pivot_table(index=keys, columns="Bucket", values="Members", aggfunc="sum",
+                        fill_value=0).reindex(columns=MIX, fill_value=0).reset_index()
+    out = out.merge(mix, on=keys)
+    out["Margin"] = [scheduling(n, s - o, o, v, cc)["Margin a week"] for n, s, o, v, cc in
+                     zip(out["Members"], out["Sessions"], out["One"], out["Value"],
+                         out["Country"])]
+    return out
+
+
+def trend_measures(t):
+    """Per-row measures from (summed) weekly totals: members, sessions, sessions per member,
+    ARPM, revenue per session, margin per member and the plan mix in %."""
+    n = t["Members"].where(t["Members"] > 0)
+    out = pd.DataFrame({"Members": t["Members"], "Total sessions/week": t["Sessions"],
+                        "Sessions per member": t["Sessions"] / n, "ARPM": t["Value"] / n,
+                        "Revenue per session": t["Value"] / t["Sessions"].where(
+                            t["Sessions"] > 0),
+                        "Margin per member a week": t["Margin"] / n}, index=t.index)
+    for k in MIX:
+        out[k] = t[k] / n * 100
+    return out
 
 
 # ── Group overview ────────────────────────────────────────────────────────────
@@ -312,11 +391,16 @@ def group_table(week, vl, table):
         at = sum(m * rrp_price(rrp, t, s) for m, t, s in
                  zip(priced["Members"], priced["Type"], priced["Sessions/week"])) if rrp else 0
         paid = float((priced["Members"] * priced["Weekly price"]).sum())
+        one = g["Type"] == "1:1"
+        one_sess = float((g.loc[one, "Members"] * g.loc[one, "Sessions/week"]).sum())
         rows.append({"Location": loc, "Centre": loc.removeprefix(ingest.PREFIX),
                      "Country": cc, "Currency": CURRENCY.get(cc, ""),
                      "RRP used": rrp["label"] if rrp else "No RRP set", "Members": n,
+                     "Total sessions/week": sessions,
+                     "Sessions per member": sessions / n if n else None,
                      "ARPM": value / n if n else None,
                      "Revenue per session": value / sessions if sessions else None,
+                     **scheduling(n, sessions - one_sess, one_sess, value, cc),
                      "% of RRP": paid / at * 100 if at else None})
     t = pd.DataFrame(rows)
     if t.empty:

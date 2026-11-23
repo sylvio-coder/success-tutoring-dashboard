@@ -39,24 +39,43 @@ HOW = f"""
 - **Variance from median** = membership price − the median price members pay for the same
   plan (type and sessions a week) across every centre in the same country. "–" when no other
   centre in the country has that plan.
+- **Total sessions/week** = no. members × sessions a week each, added up (group overview: all
+  the centre's members). In the ideal table, members are fractions, so sessions are too.
+- **Sessions per member** = total sessions a week ÷ members: how often the average member
+  comes. ARPM = revenue per session × sessions per member.
 - **Revenue per session** = membership price ÷ sessions a week (totals: total value ÷ all
   weekly sessions).
 - **Prices under ${mc.FREEZE_BELOW}** (a freeze fee or discretionary amount) are left out of the
   rows but kept in the totals, ARPM and composition.
 - **Composition table:** every member on each plan, including prices under ${mc.FREEZE_BELOW}.
   Average membership price = the plan's total value ÷ its members; revenue per session =
-  total value ÷ all its weekly sessions. For 1:1, sessions a week is the average across its
-  members.
+  total value ÷ all its weekly sessions.
 - **Ideal composition:** the centre's members spread {mc.TARGET_MIX['1×']}% 1×,
   {mc.TARGET_MIX['2×']}% 2×, {mc.TARGET_MIX['3+']}% 3 or more and {mc.TARGET_MIX['1:1']}% 1:1,
   each at RRP, or at the centre's own average price per session where that is higher.
   Composition variance = current % − ideal %.
+- **Trends:** one point per uploaded week (gaps = no upload); school holidays shaded for the
+  centre's state. Group trends add up the centres in view (one country at a time) and work
+  out prices from the totals. The dashed typical-centre line is the median of the other
+  centres in the country, shown in weeks with at least 5 of them, and not for
+  centres trading 12 months or less.
+- **Margin per member a week** = (total value − hubs needed × tutor cost an hour) ÷ members,
+  with hubs needed = group sessions ÷ the target fill for the centre's size, plus 1:1
+  sessions. Tutor cost: AU $37.90 an hour ($33.85 + 12% super); other countries to come.
 - **% of RRP** (group overview) = what members pay ÷ what the same members would pay at RRP.
 """
 
 
 def _m(v, cur=""):
     return "–" if v is None or pd.isna(v) else f"${v:,.2f}"
+
+
+def _n(v, dp=0):
+    """A count of sessions: whole numbers, or dp decimals (the ideal table's members are
+    fractions)."""
+    if v is None or pd.isna(v):
+        return "–"
+    return f"{v:,.{dp}f}"
 
 
 def _var(v, p):
@@ -88,43 +107,55 @@ def _card(title, sub, inner):
                 f'<span>{sub}</span></div>{inner}</div>', unsafe_allow_html=True)
 
 
+def _per_member(t):
+    return t["sessions"] / t["members"] if t["members"] else None
+
+
 def current_html(t):
-    rows = [[r["Type"], f'{r["Members"]:,}', f'{r["Sessions/week"]}',
-             _m(r["Membership price"]), _m(r["Total value"]), _m(r["Revenue per session"]),
+    rows = [[mc.plan_label(r["Type"], r["Sessions/week"]) +
+             (f' ({r["Sessions/week"]}×)' if r["Type"] == "1:1" else ""),
+             f'{r["Members"]:,}', _n(r["Total sessions"]),
+             _m(r["Membership price"]), _m(r["Revenue per session"]), _m(r["Total value"]),
              _var(r["RRP variance"], r["RRP variance %"]),
              _var(r["Median variance"], r["Median variance %"])]
             for _, r in t["rows"].iterrows()]
     k = len(rows)
-    rows.append(["Total", f'{t["members"]:,}', "", "", _m(t["total"]), _m(t["per_session"]),
-                 "", ""])
-    rows.append(["ARPM", "", "", "", _m(t["arpm"]), "", "", ""])
-    return _table(["Type", "No. members", "Sessions/week", "Membership price", "Total value",
-                   "Revenue per session", "RRP variance", "Variance from median"],
-                  rows, {k: "total", k + 1: "arpm"})
+    rows.append(["Total", f'{t["members"]:,}', _n(t["sessions"]), "", _m(t["per_session"]),
+                 _m(t["total"]), "", ""])
+    rows.append(["Per member", "", f'{_n(_per_member(t), 2)} sessions',
+                 f'{_m(t["arpm"])} ARPM', "", "", "", ""])
+    return _table(["Plan", "No. members", "Total sessions/week", "Membership price",
+                   "Revenue per session", "Total value", "RRP variance",
+                   "Variance from median"], rows, {k: "total", k + 1: "arpm"})
 
 
 def composition_html(comp):
-    return _table(["Composition", "No. members", "% of members", "Sessions/week",
-                   "Average membership price", "Total value", "Revenue per session"],
-                  [[html.escape(r["Plan"]), f'{int(r["Members"]):,}',
-                    f'{r["% of members"]:.0f}%', f'{r["Sessions/week"]:.1f}'.removesuffix(".0"),
-                    _m(r["Average price"]), _m(r["Total value"]),
-                    _m(r["Revenue per session"])] for _, r in comp.iterrows()])
+    rows = [[html.escape(r["Plan"]), f'{int(r["Members"]):,}', f'{r["% of members"]:.0f}%',
+             _n(r["Total sessions"]), _m(r["Average price"]), _m(r["Revenue per session"]),
+             _m(r["Total value"])] for _, r in comp.iterrows()]
+    n, sess, value = comp["Members"].sum(), comp["Total sessions"].sum(), comp["Total value"].sum()
+    rows.append(["Total", f"{int(n):,}", "100%" if n else "–", _n(sess),
+                 _m(value / n if n else None), _m(value / sess if sess else None), _m(value)])
+    return _table(["Composition", "No. members", "% of members", "Total sessions/week",
+                   "Average membership price", "Revenue per session", "Total value"],
+                  rows, {len(rows) - 1: "total"})
 
 
 def ideal_html(t):
-    rows = [[r["Type"], r["Plan"], f'{r["Members"]:.1f}', f'{r["Sessions/week"]}',
+    rows = [[f'Group {r["Plan"]}' if r["Type"] == "Group" else r["Plan"],
+             f'{r["Members"]:.1f}', _n(r["Total sessions"], 1),
              _m(r["Membership price"]) + (" ¹" if r["Own price used"] else ""),
-             _m(r["Total value"]), _m(r["Revenue per session"])]
+             _m(r["Revenue per session"]), _m(r["Total value"])]
             for _, r in t["rows"].iterrows()]
     k = len(rows)
     sign = "+" if t["vs_today"] >= 0 else "−"
-    rows.append(["Total", "", f'{t["members"]:,}', "", "", _m(t["total"]),
-                 _m(t["per_session"])])
-    rows.append(["ARPM", "", "", "", "", _m(t["arpm"]),
+    rows.append(["Total", f'{t["members"]:,}', _n(t["sessions"], 1), "",
+                 _m(t["per_session"]), _m(t["total"])])
+    rows.append(["Per member", "", f'{_n(_per_member(t), 2)} sessions',
+                 f'{_m(t["arpm"])} ARPM', "",
                  f'{sign}${abs(t["vs_today"]):,.2f} a week vs today'])
-    return _table(["Type", "Plan", "No. members", "Sessions/week", "Membership price",
-                   "Total value", "Revenue per session"], rows, {k: "total", k + 1: "arpm"})
+    return _table(["Plan", "No. members", "Total sessions/week", "Membership price",
+                   "Revenue per session", "Total value"], rows, {k: "total", k + 1: "arpm"})
 
 
 def ideal_composition_html(comp):
@@ -149,7 +180,207 @@ def _visible(week, vl, table, allowed):
     return t[t["Location"].isin(allowed)].reset_index(drop=True)
 
 
-def _group(week, vl, table, allowed):
+SMALL = 15            # centres under this many members are faded on the chart
+QUADRANTS = [("Efficient", "fewer sessions, higher price", "left", "top"),
+             ("Premium", "more sessions, higher price", "right", "top"),
+             ("Underpriced", "fewer sessions, lower price", "left", "bottom"),
+             ("Discount trap", "more sessions, lower price", "right", "bottom")]
+
+
+def country_medians(full, country, allowed):
+    """(sessions per member, revenue per session) medians for a country, from every centre.
+    None for a non-admin where the country has too few centres to stay anonymous."""
+    c = full[(full["Country"] == country) & (full["Members"] > 0)]
+    if len(c) < 2 or (allowed is not None and len(c) < MIN_FOR_MEDIAN):
+        return None
+    return float(c["Sessions per member"].median()), float(c["Revenue per session"].median())
+
+
+def price_frequency_chart(t, med, country, title, highlight=None, ideal=None):
+    """Sessions per member (across) vs revenue per session (up), one dot per centre in t,
+    dashed country medians and the four quarters. highlight: a centre to draw strongly;
+    ideal: (sessions per member, revenue per session) to point an arrow to."""
+    import plotly.graph_objects as go
+    fig = go.Figure()
+    cur = mc.CURRENCY.get(country, "")
+    for small in (False, True):
+        d = t[(t["Members"] < SMALL) == small]
+        if d.empty:
+            continue
+        strong = d["Location"] == highlight if highlight else pd.Series(True, index=d.index)
+        fig.add_scatter(
+            x=d["Sessions per member"], y=d["Revenue per session"], mode="markers+text",
+            text=d["Centre"] if highlight is None else
+            [c if s_ else "" for c, s_ in zip(d["Centre"], strong)],
+            textposition="top center", textfont=dict(size=11, color="#1c2a30"),
+            marker=dict(size=[max(10, min(40, m ** 0.5 * 4)) for m in d["Members"]],
+                        color=["#1f9a9a" if s_ else "#c9d3d6" for s_ in strong],
+                        opacity=0.35 if small else 0.85, line=dict(width=1, color="#fff")),
+            customdata=d[["Members", "ARPM", "% of RRP"]].to_numpy(),
+            hovertemplate=("<b>%{text}</b><br>" if highlight is None else "") +
+            "Sessions per member: %{x:.2f}<br>Revenue per session: $%{y:.2f}<br>"
+            "Members: %{customdata[0]:.0f}<br>ARPM: $%{customdata[1]:.2f}<extra></extra>",
+            name=f"Under {SMALL} members" if small else "Centres", showlegend=False)
+    if ideal is not None and highlight is not None and (t["Location"] == highlight).any():
+        r = t[t["Location"] == highlight].iloc[0]
+        fig.add_annotation(x=ideal[0], y=ideal[1], ax=r["Sessions per member"],
+                           ay=r["Revenue per session"], xref="x", yref="y", axref="x",
+                           ayref="y", showarrow=True, arrowhead=3, arrowwidth=2,
+                           arrowcolor="#2e8540")
+        fig.add_scatter(x=[ideal[0]], y=[ideal[1]], mode="markers+text", text=["Ideal"],
+                        textposition="bottom center", showlegend=False, hoverinfo="skip",
+                        marker=dict(size=14, color="#2e8540", symbol="star"))
+    if med:
+        fig.add_vline(x=med[0], line=dict(dash="dash", color="#8a9a9f", width=1))
+        fig.add_hline(y=med[1], line=dict(dash="dash", color="#8a9a9f", width=1))
+        for name, sub, xa, ya in QUADRANTS:
+            fig.add_annotation(
+                text=f"<b>{name}</b><br><span style='font-size:10px'>{sub}</span>",
+                xref="x domain", yref="y domain", x=0.01 if xa == "left" else 0.99,
+                y=0.99 if ya == "top" else 0.01, xanchor=xa, yanchor=ya, showarrow=False,
+                font=dict(size=11, color={"Efficient": GREEN, "Discount trap": RED}.get(
+                    name, "#5d6d73")), align=xa)
+    fig.update_layout(title=title, height=460, margin=dict(l=10, r=10, t=50, b=10),
+                      plot_bgcolor="#fff", paper_bgcolor="#fff",
+                      xaxis=dict(title="Sessions per member a week", gridcolor="#eef1f3",
+                                 zeroline=False),
+                      yaxis=dict(title=f"Revenue per session ({cur})", gridcolor="#eef1f3",
+                                 tickprefix="$", zeroline=False))
+    st.plotly_chart(fig, width="stretch")
+
+
+# ── Trends ────────────────────────────────────────────────────────────────────
+SPANS = {"Last 12 weeks": 12, "Last 26 weeks": 26, "Last 52 weeks": 52, "All uploads": None}
+TRENDS = [("Members", "{:,.0f}", ""), ("Total sessions/week", "{:,.0f}", ""),
+          ("Sessions per member", "{:.2f}", ""), ("ARPM", "${:,.2f}", "$"),
+          ("Revenue per session", "${:,.2f}", "$"), ("Margin per member a week", "${:,.2f}", "$")]
+MIX_COLOURS = {"1×": "#8fcfcf", "2×": "#1f9a9a", "3+": "#1f3b57", "1:1": "#e0a100"}
+
+
+def holiday_periods(holidays, state):
+    """[(first day, last day)] of school holidays for a state (School Holidays tab: State,
+    Year, Start_Week, End_Week as ISO weeks; an end week below the start runs into the
+    next year)."""
+    if holidays is None or holidays.empty or not state or "State" not in holidays:
+        return []
+    out = []
+    for _, h in holidays[holidays["State"] == state].iterrows():
+        try:
+            y, a, b = int(h["Year"]), int(h["Start_Week"]), int(h["End_Week"])
+            d0 = pd.Timestamp.fromisocalendar(y, a, 1)
+            d1 = pd.Timestamp.fromisocalendar(y + (b < a), b, 7)
+        except (ValueError, TypeError):
+            continue
+        out.append((d0, d1))
+    return out
+
+
+def _weeks(comp, span_key):
+    """Every week from the first upload to the last (weeks with no upload included, so they
+    show as gaps), cut to the chosen span."""
+    up = comp["Week ending"].dropna()
+    if up.empty:
+        return []
+    weeks = list(pd.date_range(up.max() - pd.Timedelta(weeks=int(
+        (up.max() - up.min()).days // 7)), up.max(), freq="7D"))
+    n = SPANS[st.session_state.get(span_key, "Last 26 weeks")]
+    return weeks[-n:] if n else weeks
+
+
+def trend_charts(series, weeks, typical=None, periods=(), cur="", note=None, key="t"):
+    """Six small trend charts and the plan mix. series / typical: measures (trend_measures)
+    indexed by week ending; weeks with no upload are left as gaps."""
+    import plotly.graph_objects as go
+    s = series.reindex(weeks)
+    ty = typical.reindex(weeks) if typical is not None else None
+    lo, hi = (weeks[0] - pd.Timedelta(days=4), weeks[-1] + pd.Timedelta(days=4)) \
+        if weeks else (None, None)
+
+    def frame(fig, title, prefix="", pct=False, height=250):
+        for d0, d1 in periods:
+            if lo is not None and d1 >= lo and d0 <= hi:
+                fig.add_vrect(x0=max(d0, lo), x1=min(d1, hi), fillcolor="#e0a100",
+                              opacity=0.10, layer="below", line_width=0)
+        fig.update_layout(title=dict(text=title, font=dict(size=13)), height=height,
+                          margin=dict(l=10, r=10, t=40, b=10), plot_bgcolor="#fff",
+                          paper_bgcolor="#fff", showlegend=False, hovermode="x unified",
+                          xaxis=dict(gridcolor="#eef1f3", tickformat="%d %b", range=[lo, hi]),
+                          yaxis=dict(gridcolor="#eef1f3", tickprefix=prefix,
+                                     ticksuffix="%" if pct else "", zeroline=False))
+        return fig
+
+    cols = st.columns(3)
+    for i, (name, fmt, prefix) in enumerate(TRENDS):
+        fig = go.Figure()
+        if ty is not None and ty[name].notna().any():
+            fig.add_scatter(x=weeks, y=ty[name], mode="lines", name="Typical centre",
+                            line=dict(color="#8a9a9f", dash="dash", width=1.5),
+                            connectgaps=False)
+        fig.add_scatter(x=weeks, y=s[name], mode="lines+markers", name="This view",
+                        line=dict(color="#1f9a9a", width=2.5), marker=dict(size=5),
+                        connectgaps=False)
+        vals = pd.concat([s[name], ty[name] if ty is not None else pd.Series(dtype=float)])
+        vals = vals.dropna()
+        if len(vals):                                   # at least ±10%, so small wobbles
+            mid, half = (vals.max() + vals.min()) / 2, (vals.max() - vals.min()) / 2
+            half = max(half * 1.15, abs(mid) * 0.10, 1e-6)  # don't look like big swings
+            fig.update_yaxes(range=[max(mid - half, 0) if vals.min() >= 0 else mid - half,
+                                    mid + half])
+        last = s[name].dropna()
+        title = f"{name}" + (f" · {fmt.format(last.iloc[-1])}" if len(last) else "")
+        with cols[i % 3]:
+            if name == "Margin per member a week" and not s[name].notna().any():
+                st.caption(f"**{name}**: no tutor rate set for this country yet.")
+            else:
+                st.plotly_chart(frame(fig, title, prefix), width="stretch",
+                                key=f"trend_{key}_{name}")
+    # Plan mix: the first week shown, the latest week and the ideal mix, as pies.
+    have = s[mc.MIX].dropna(how="all")
+    have = have[have.sum(axis=1) > 0]
+    pies = []
+    if len(have):
+        if len(have) > 1:
+            pies.append((f"{have.index[0]:%d %b %Y}", have.iloc[0]))
+        pies.append((f"Latest · {have.index[-1]:%d %b %Y}", have.iloc[-1]))
+    pies.append(("Ideal mix", pd.Series(mc.TARGET_MIX)))
+    st.markdown("**Plan mix · % of members**")
+    for n, (col, (title, mix)) in enumerate(zip(st.columns(3), pies)):
+        fig = go.Figure(go.Pie(
+            labels=list(mc.MIX), values=[float(mix.get(k, 0) or 0) for k in mc.MIX],
+            sort=False, hole=0.45, marker=dict(colors=[MIX_COLOURS[k] for k in mc.MIX],
+                                               line=dict(color="#fff", width=2)),
+            texttemplate="%{label}<br>%{percent:.0%}", textposition="inside",
+            hovertemplate="%{label}: %{percent:.0%}<extra></extra>"))
+        fig.update_layout(title=dict(text=title, font=dict(size=13)), height=280,
+                          margin=dict(l=10, r=10, t=40, b=10), paper_bgcolor="#fff",
+                          legend=dict(orientation="h", yanchor="top", y=-0.02, x=0.5,
+                                      xanchor="center"), uniformtext_minsize=10,
+                          uniformtext_mode="hide")
+        with col:
+            st.plotly_chart(fig, width="stretch", key=f"trend_{key}_mix_{n}")
+    st.caption((note + " " if note else "") +
+               "Gaps = weeks with no upload. Shaded = school holidays. Plan mix compares the first and "
+               "latest week shown with the ideal mix. Amounts weekly, in the "
+               f"centre's own currency{f' ({cur})' if cur else ''}. Margin per member is after "
+               "tutor cost at the target fill for the centre's size.")
+
+
+def _trend_controls(key):
+    st.selectbox("Weeks shown", list(SPANS), index=1, key=key)
+
+
+def _state(vl, locs, state_of):
+    """The (most common) state of these centres, for school holiday shading."""
+    if state_of is None or vl is None or vl.empty or mc.LOC not in vl.columns or \
+            "Region" not in vl.columns:
+        return None
+    states = [state_of(r) for r in vl.loc[vl[mc.LOC].isin(locs), "Region"]]
+    states = [x for x in states if x]
+    return max(set(states), key=states.count) if states else None
+
+
+def _group(comp, week, vl, table, allowed, holidays=None, state_of=None):
+    full = mc.group_table(week, vl, table)
     t = _visible(week, vl, table, allowed)
     countries = sorted(t["Country"].unique())
     pick = st.selectbox("Country", ["All countries"] + countries, key="comp_country")
@@ -158,22 +389,96 @@ def _group(week, vl, table, allowed):
     st.caption("Lowest % of RRP first. Amounts weekly, in each centre's own currency. "
                "ARPM vs country median: \"–\" where the country has one centre"
                + ("." if allowed is None else
-                  f" or fewer than {MIN_FOR_MEDIAN} centres."))
-    show = t[["Centre", "Country", "RRP used", "Members", "ARPM", "Revenue per session",
-              "% of RRP", "ARPM vs country median"]]
+                  f" or fewer than {MIN_FOR_MEDIAN} centres.") +
+               " Target fill rises with members (3.0 up to 20, 5.0 at 120, 6.0 from 180); "
+               "tutor cost and margin are AU only for now.")
+    show = t[["Centre", "Country", "Members", "Total sessions/week", "Sessions per member",
+              "ARPM", "Revenue per session", "Target fill", "Hubs needed a week",
+              "Tutor cost %", "Margin per member a week", "% of RRP",
+              "ARPM vs country median", "RRP used"]]
+    money = lambda: st.column_config.NumberColumn(format="$%.2f")
     st.dataframe(show.style.map(lambda v: "" if pd.isna(v) else
                                 f"color:{GREEN if v >= 99.5 else RED};font-weight:600",
                                 subset=["% of RRP"]),
                  hide_index=True, width="stretch", key="comp_group",
-                 column_config={"ARPM": st.column_config.NumberColumn(format="$%.2f"),
-                                "Revenue per session": st.column_config.NumberColumn(
-                                    format="$%.2f"),
+                 column_config={"ARPM": money(), "Revenue per session": money(),
+                                "Margin per member a week": money(),
+                                "Total sessions/week": st.column_config.NumberColumn(
+                                    format="%d"),
+                                "Sessions per member": st.column_config.NumberColumn(
+                                    format="%.2f"),
+                                "Target fill": st.column_config.NumberColumn(
+                                    format="%.1f", help="Target students per study hub for "
+                                    "a centre this size"),
+                                "Hubs needed a week": st.column_config.NumberColumn(
+                                    format="%.0f", help="Group sessions ÷ target fill, plus "
+                                    "1:1 sessions"),
+                                "Tutor cost %": st.column_config.NumberColumn(
+                                    format="%.0f%%", help="Hubs needed × tutor cost an hour, "
+                                    "as a % of total value"),
                                 "% of RRP": st.column_config.NumberColumn(format="%.0f%%"),
                                 "ARPM vs country median": st.column_config.NumberColumn(
                                     format="$%+.2f")})
+    chart_country = pick if pick != "All countries" else (
+        "AU" if "AU" in countries else (countries[0] if countries else None))
+    if chart_country:
+        c = t[(t["Country"] == chart_country) & (t["Members"] > 0)]
+        st.markdown(f"**Price vs frequency · {chart_country}**")
+        st.caption("Each dot is a centre (bigger = more members; faded = under "
+                   f"{SMALL} members). Dashed lines: the country's medians. Top-left is the "
+                   "strongest position: members come less often and each session earns more.")
+        price_frequency_chart(c, country_medians(full, chart_country, allowed),
+                              chart_country, None)
+        w = mc.weekly_totals(comp)
+        w = w[(w["Country"] == chart_country) &
+              (w["Location"].isin(allowed) if allowed is not None else True)]
+        if not w.empty:
+            st.markdown(f"**Group trends · {chart_country}**" +
+                        ("" if allowed is None else " · your centres"))
+            _trend_controls("comp_trend_g")
+            cols = ["Members", "Sessions", "One", "Value"] + mc.MIX
+            g = w.groupby("Week ending")[cols].sum()
+            g["Margin"] = w.groupby("Week ending")["Margin"].sum(min_count=1)
+            locs = sorted(w["Location"].unique())
+            trend_charts(mc.trend_measures(g), _weeks(comp, "comp_trend_g"),
+                         periods=holiday_periods(holidays, _state(vl, locs, state_of)),
+                         cur=mc.CURRENCY.get(chart_country, ""),
+                         note=f"All {len(locs)} centres added together; prices worked out "
+                              "from the totals, so bigger centres count more.", key="g")
 
 
-def _centre(comp, week, vl, table, allowed):
+def _centre_trends(comp, vl, loc, pick, country, allowed, holidays, state_of):
+    import pnl_share
+    w = mc.weekly_totals(comp)
+    w = w[w["Country"] == country]
+    mine = w[w["Location"] == loc].set_index("Week ending")
+    if mine.empty:
+        return
+    st.markdown(f"**Trends · {pick}**")
+    _trend_controls("comp_trend_c")
+    weeks = _weeks(comp, "comp_trend_c")
+    latest = pd.Timestamp(max(comp["Week ending"])).strftime("%Y-%m")
+    months = pnl_share.months_trading(vl, loc, latest)
+    too_new = months is not None and months <= pnl_share.NEW_MONTHS
+    typical, note = None, None
+    if too_new:
+        note = (f"No typical-centre line: {pick} has been trading {months} months "
+                f"({pnl_share.NEW_MONTHS} or less).")
+    else:
+        others = w[(w["Location"] != loc) & (w["Members"] > 0)]
+        if len(others):
+            m = mc.trend_measures(others).assign(**{"Week ending": others["Week ending"]})
+            count = m.groupby("Week ending")["Members"].count()
+            typical = m.groupby("Week ending").median(numeric_only=True)
+            typical = typical[count.reindex(typical.index) >= MIN_FOR_MEDIAN]
+            note = (f"Dashed line: the typical (median) {country} centre, shown in weeks with "
+                    f"at least {MIN_FOR_MEDIAN} other centres.")
+    trend_charts(mc.trend_measures(mine), weeks, typical,
+                 holiday_periods(holidays, _state(vl, [loc], state_of)),
+                 mc.CURRENCY.get(country, ""), note, key="c")
+
+
+def _centre(comp, week, vl, table, allowed, holidays=None, state_of=None):
     g = _visible(week, vl, table, allowed)
     names = dict(sorted(zip(g["Centre"], g["Location"]), key=lambda kv: kv[0].lower()))
     pick = st.selectbox("Centre", list(names), key="comp_centre")
@@ -205,9 +510,10 @@ def _centre(comp, week, vl, table, allowed):
           + ideal_composition_html(ideal["composition"])
           + ('<div class="mc-note">¹ The centre\'s own average price is used where it is '
              'higher than RRP.</div>' if own else ""))
+    _centre_trends(comp, vl, loc, pick, row["Country"], allowed, holidays, state_of)
 
 
-def report_composition(df_comp, vl, df_rrp, allowed=None):
+def report_composition(df_comp, vl, df_rrp, allowed=None, holidays=None, state_of=None):
     """allowed: None for admins (every centre), else the locations this viewer may see."""
     st.markdown('<div class="report-title">Membership Composition</div>',
                 unsafe_allow_html=True)
@@ -235,8 +541,8 @@ def report_composition(df_comp, vl, df_rrp, allowed=None):
         st.info("None of your centres is in this week's Membership Composition data.")
         return
     if view == VIEWS[0]:
-        _group(week, vl, table, allowed)
+        _group(comp, week, vl, table, allowed, holidays, state_of)
     else:
-        _centre(comp, week, vl, table, allowed)
+        _centre(comp, week, vl, table, allowed, holidays, state_of)
     with st.expander("How this is worked out"):
         st.markdown(HOW)
