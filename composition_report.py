@@ -54,6 +54,14 @@ HOW = f"""
   {mc.TARGET_MIX['2×']}% 2×, {mc.TARGET_MIX['3+']}% 3 or more and {mc.TARGET_MIX['1:1']}% 1:1,
   each at RRP, or at the centre's own average price per session where that is higher.
   Composition variance = current % − ideal %.
+- **Trends:** one point per uploaded week (gaps = no upload); school holidays shaded for the
+  centre's state. Group trends add up the centres in view (one country at a time) and work
+  out prices from the totals. The dashed typical-centre line is the median of the other
+  centres in the country, shown in weeks with at least 5 of them, and not for
+  centres trading 12 months or less.
+- **Margin per member a week** = (total value − hubs needed × tutor cost an hour) ÷ members,
+  with hubs needed = group sessions ÷ the target fill for the centre's size, plus 1:1
+  sessions. Tutor cost: AU $37.90 an hour ($33.85 + 12% super); other countries to come.
 - **% of RRP** (group overview) = what members pay ÷ what the same members would pay at RRP.
 """
 
@@ -241,7 +249,121 @@ def price_frequency_chart(t, med, country, title, highlight=None, ideal=None):
     st.plotly_chart(fig, width="stretch")
 
 
-def _group(week, vl, table, allowed):
+# ── Trends ────────────────────────────────────────────────────────────────────
+SPANS = {"Last 12 weeks": 12, "Last 26 weeks": 26, "Last 52 weeks": 52, "All uploads": None}
+TRENDS = [("Members", "{:,.0f}", ""), ("Total sessions/week", "{:,.0f}", ""),
+          ("Sessions per member", "{:.2f}", ""), ("ARPM", "${:,.2f}", "$"),
+          ("Revenue per session", "${:,.2f}", "$"), ("Margin per member a week", "${:,.2f}", "$")]
+MIX_COLOURS = {"1×": "#8fcfcf", "2×": "#1f9a9a", "3+": "#1f3b57", "1:1": "#e0a100"}
+
+
+def holiday_periods(holidays, state):
+    """[(first day, last day)] of school holidays for a state (School Holidays tab: State,
+    Year, Start_Week, End_Week as ISO weeks; an end week below the start runs into the
+    next year)."""
+    if holidays is None or holidays.empty or not state or "State" not in holidays:
+        return []
+    out = []
+    for _, h in holidays[holidays["State"] == state].iterrows():
+        try:
+            y, a, b = int(h["Year"]), int(h["Start_Week"]), int(h["End_Week"])
+            d0 = pd.Timestamp.fromisocalendar(y, a, 1)
+            d1 = pd.Timestamp.fromisocalendar(y + (b < a), b, 7)
+        except (ValueError, TypeError):
+            continue
+        out.append((d0, d1))
+    return out
+
+
+def _weeks(comp, span_key):
+    """Every week from the first upload to the last (weeks with no upload included, so they
+    show as gaps), cut to the chosen span."""
+    up = comp["Week ending"].dropna()
+    if up.empty:
+        return []
+    weeks = list(pd.date_range(up.max() - pd.Timedelta(weeks=int(
+        (up.max() - up.min()).days // 7)), up.max(), freq="7D"))
+    n = SPANS[st.session_state.get(span_key, "Last 26 weeks")]
+    return weeks[-n:] if n else weeks
+
+
+def trend_charts(series, weeks, typical=None, periods=(), cur="", note=None, key="t"):
+    """Six small trend charts and the plan mix. series / typical: measures (trend_measures)
+    indexed by week ending; weeks with no upload are left as gaps."""
+    import plotly.graph_objects as go
+    s = series.reindex(weeks)
+    ty = typical.reindex(weeks) if typical is not None else None
+    lo, hi = (weeks[0] - pd.Timedelta(days=4), weeks[-1] + pd.Timedelta(days=4)) \
+        if weeks else (None, None)
+
+    def frame(fig, title, prefix="", pct=False, height=250):
+        for d0, d1 in periods:
+            if lo is not None and d1 >= lo and d0 <= hi:
+                fig.add_vrect(x0=max(d0, lo), x1=min(d1, hi), fillcolor="#e0a100",
+                              opacity=0.10, layer="below", line_width=0)
+        fig.update_layout(title=dict(text=title, font=dict(size=13)), height=height,
+                          margin=dict(l=10, r=10, t=40, b=10), plot_bgcolor="#fff",
+                          paper_bgcolor="#fff", showlegend=False, hovermode="x unified",
+                          xaxis=dict(gridcolor="#eef1f3", tickformat="%d %b", range=[lo, hi]),
+                          yaxis=dict(gridcolor="#eef1f3", tickprefix=prefix,
+                                     ticksuffix="%" if pct else "", zeroline=False))
+        return fig
+
+    cols = st.columns(3)
+    for i, (name, fmt, prefix) in enumerate(TRENDS):
+        fig = go.Figure()
+        if ty is not None and ty[name].notna().any():
+            fig.add_scatter(x=weeks, y=ty[name], mode="lines", name="Typical centre",
+                            line=dict(color="#8a9a9f", dash="dash", width=1.5),
+                            connectgaps=False)
+        fig.add_scatter(x=weeks, y=s[name], mode="lines+markers", name="This view",
+                        line=dict(color="#1f9a9a", width=2.5), marker=dict(size=5),
+                        connectgaps=False)
+        vals = pd.concat([s[name], ty[name] if ty is not None else pd.Series(dtype=float)])
+        vals = vals.dropna()
+        if len(vals):                                   # at least ±10%, so small wobbles
+            mid, half = (vals.max() + vals.min()) / 2, (vals.max() - vals.min()) / 2
+            half = max(half * 1.15, abs(mid) * 0.10, 1e-6)  # don't look like big swings
+            fig.update_yaxes(range=[max(mid - half, 0) if vals.min() >= 0 else mid - half,
+                                    mid + half])
+        last = s[name].dropna()
+        title = f"{name}" + (f" · {fmt.format(last.iloc[-1])}" if len(last) else "")
+        with cols[i % 3]:
+            if name == "Margin per member a week" and not s[name].notna().any():
+                st.caption(f"**{name}**: no tutor rate set for this country yet.")
+            else:
+                st.plotly_chart(frame(fig, title, prefix), width="stretch",
+                                key=f"trend_{key}_{name}")
+    fig = go.Figure()
+    for k in mc.MIX:
+        fig.add_bar(x=weeks, y=s[k], name=k, marker_color=MIX_COLOURS[k],
+                    hovertemplate=f"{k}: %{{y:.0f}}%<extra></extra>")
+    fig = frame(fig, "Plan mix · % of members", pct=True, height=280)
+    fig.update_layout(barmode="stack", showlegend=True, bargap=0.15,
+                      legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right",
+                                  x=1), yaxis_range=[0, 100])
+    st.plotly_chart(fig, width="stretch", key=f"trend_{key}_mix")
+    st.caption((note + " " if note else "") +
+               "Gaps = weeks with no upload. Shaded = school holidays. Amounts weekly, in the "
+               f"centre's own currency{f' ({cur})' if cur else ''}. Margin per member is after "
+               "tutor cost at the target fill for the centre's size.")
+
+
+def _trend_controls(key):
+    st.selectbox("Weeks shown", list(SPANS), index=1, key=key)
+
+
+def _state(vl, locs, state_of):
+    """The (most common) state of these centres, for school holiday shading."""
+    if state_of is None or vl is None or vl.empty or mc.LOC not in vl.columns or \
+            "Region" not in vl.columns:
+        return None
+    states = [state_of(r) for r in vl.loc[vl[mc.LOC].isin(locs), "Region"]]
+    states = [x for x in states if x]
+    return max(set(states), key=states.count) if states else None
+
+
+def _group(comp, week, vl, table, allowed, holidays=None, state_of=None):
     full = mc.group_table(week, vl, table)
     t = _visible(week, vl, table, allowed)
     countries = sorted(t["Country"].unique())
@@ -291,9 +413,56 @@ def _group(week, vl, table, allowed):
                    "strongest position: members come less often and each session earns more.")
         price_frequency_chart(c, country_medians(full, chart_country, allowed),
                               chart_country, None)
+        w = mc.weekly_totals(comp)
+        w = w[(w["Country"] == chart_country) &
+              (w["Location"].isin(allowed) if allowed is not None else True)]
+        if not w.empty:
+            st.markdown(f"**Group trends · {chart_country}**" +
+                        ("" if allowed is None else " · your centres"))
+            _trend_controls("comp_trend_g")
+            cols = ["Members", "Sessions", "One", "Value"] + mc.MIX
+            g = w.groupby("Week ending")[cols].sum()
+            g["Margin"] = w.groupby("Week ending")["Margin"].sum(min_count=1)
+            locs = sorted(w["Location"].unique())
+            trend_charts(mc.trend_measures(g), _weeks(comp, "comp_trend_g"),
+                         periods=holiday_periods(holidays, _state(vl, locs, state_of)),
+                         cur=mc.CURRENCY.get(chart_country, ""),
+                         note=f"All {len(locs)} centres added together; prices worked out "
+                              "from the totals, so bigger centres count more.", key="g")
 
 
-def _centre(comp, week, vl, table, allowed):
+def _centre_trends(comp, vl, loc, pick, country, allowed, holidays, state_of):
+    import pnl_share
+    w = mc.weekly_totals(comp)
+    w = w[w["Country"] == country]
+    mine = w[w["Location"] == loc].set_index("Week ending")
+    if mine.empty:
+        return
+    st.markdown(f"**Trends · {pick}**")
+    _trend_controls("comp_trend_c")
+    weeks = _weeks(comp, "comp_trend_c")
+    latest = pd.Timestamp(max(comp["Week ending"])).strftime("%Y-%m")
+    months = pnl_share.months_trading(vl, loc, latest)
+    too_new = months is not None and months <= pnl_share.NEW_MONTHS
+    typical, note = None, None
+    if too_new:
+        note = (f"No typical-centre line: {pick} has been trading {months} months "
+                f"({pnl_share.NEW_MONTHS} or less).")
+    else:
+        others = w[(w["Location"] != loc) & (w["Members"] > 0)]
+        if len(others):
+            m = mc.trend_measures(others).assign(**{"Week ending": others["Week ending"]})
+            count = m.groupby("Week ending")["Members"].count()
+            typical = m.groupby("Week ending").median(numeric_only=True)
+            typical = typical[count.reindex(typical.index) >= MIN_FOR_MEDIAN]
+            note = (f"Dashed line: the typical (median) {country} centre, shown in weeks with "
+                    f"at least {MIN_FOR_MEDIAN} other centres.")
+    trend_charts(mc.trend_measures(mine), weeks, typical,
+                 holiday_periods(holidays, _state(vl, [loc], state_of)),
+                 mc.CURRENCY.get(country, ""), note, key="c")
+
+
+def _centre(comp, week, vl, table, allowed, holidays=None, state_of=None):
     g = _visible(week, vl, table, allowed)
     names = dict(sorted(zip(g["Centre"], g["Location"]), key=lambda kv: kv[0].lower()))
     pick = st.selectbox("Centre", list(names), key="comp_centre")
@@ -325,9 +494,10 @@ def _centre(comp, week, vl, table, allowed):
           + ideal_composition_html(ideal["composition"])
           + ('<div class="mc-note">¹ The centre\'s own average price is used where it is '
              'higher than RRP.</div>' if own else ""))
+    _centre_trends(comp, vl, loc, pick, row["Country"], allowed, holidays, state_of)
 
 
-def report_composition(df_comp, vl, df_rrp, allowed=None):
+def report_composition(df_comp, vl, df_rrp, allowed=None, holidays=None, state_of=None):
     """allowed: None for admins (every centre), else the locations this viewer may see."""
     st.markdown('<div class="report-title">Membership Composition</div>',
                 unsafe_allow_html=True)
@@ -355,8 +525,8 @@ def report_composition(df_comp, vl, df_rrp, allowed=None):
         st.info("None of your centres is in this week's Membership Composition data.")
         return
     if view == VIEWS[0]:
-        _group(week, vl, table, allowed)
+        _group(comp, week, vl, table, allowed, holidays, state_of)
     else:
-        _centre(comp, week, vl, table, allowed)
+        _centre(comp, week, vl, table, allowed, holidays, state_of)
     with st.expander("How this is worked out"):
         st.markdown(HOW)

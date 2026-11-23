@@ -91,7 +91,12 @@ def test_centre_tables():
     assert "−$455" not in html or "vs today" in html
     assert "+167 pts" not in html and "+13 pts" in html              # 1:1: 17% - 4%
     assert "own average price" in html
-    assert not at.dataframe and not at.get("plotly_chart")            # tables only
+    assert not at.dataframe                                           # tables, then trends
+    keys = [c.key for c in at.get("plotly_chart")]
+    assert len(keys) == 7 and "trend_c_mix" in keys and "trend_c_Members" in keys
+    text = " ".join([m.value for m in at.markdown] + [c.value for c in at.caption])
+    assert "Trends · Alpha" in text and "Typical centre" not in str(
+        [c.proto.spec for c in at.get("plotly_chart")])                # too few centres
 
 
 def test_centre_note_for_prices_under_10():
@@ -145,3 +150,30 @@ def test_menu_entry_and_upload_page():
     assert "allowed=None if st.session_state.get(\"access_level\") == \"admin\"" in src
     assert 'selected_report=="17 · Membership Composition"' in src
     assert '"⚙ Composition Upload": admin_pages.page_composition_upload' in src
+
+
+def test_group_trends_for_a_gpm_add_up_only_their_centres():
+    at = run("gpm", allowed=[P + "Alpha", P + "Beta"])
+    assert not at.exception, at.exception
+    keys = [c.key for c in at.get("plotly_chart")]
+    assert "trend_g_Members" in keys and "trend_g_mix" in keys
+    members = next(c for c in at.get("plotly_chart") if c.key == "trend_g_Members")
+    import base64, json
+    import numpy as np
+    def values(y):
+        return list(np.frombuffer(base64.b64decode(y["bdata"]), dtype=y["dtype"])) \
+            if isinstance(y, dict) else list(y)
+    ys = [values(t["y"]) for t in json.loads(members.proto.spec)["data"]]
+    assert [17.0, 17.0] in ys                                        # Alpha 12 + Beta 5
+    text = " ".join([m.value for m in at.markdown] + [c.value for c in at.caption])
+    assert "Group trends · AU" in text and "your centres" in text and "All 2 centres" in text
+
+
+def test_holiday_periods_from_iso_weeks():
+    import composition_report as cr
+    h = pd.DataFrame({"State": ["NSW", "NSW", "VIC"], "Year": [2026, 2026, 2026],
+                      "Start_Week": [27, 51, 27], "End_Week": [28, 5, 28]})
+    p = cr.holiday_periods(h, "NSW")
+    assert p[0] == (pd.Timestamp("2026-06-29"), pd.Timestamp("2026-07-12"))
+    assert p[1] == (pd.Timestamp("2026-12-14"), pd.Timestamp("2027-02-07"))  # into next year
+    assert cr.holiday_periods(h, None) == [] and cr.holiday_periods(None, "NSW") == []

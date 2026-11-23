@@ -329,6 +329,50 @@ def scheduling(members, group_sessions, one_sessions, value, country, fill=None)
             else None}
 
 
+# ── Trends ────────────────────────────────────────────────────────────────────
+MIX = ["1×", "2×", "3+", "1:1"]
+
+
+def _bucket(kind, sessions):
+    return "1:1" if kind == "1:1" else "1×" if sessions <= 1 else "2×" if sessions == 2 \
+        else "3+"
+
+
+def weekly_totals(comp):
+    """One row per (week, centre): members, sessions, 1:1 sessions, total value, margin a
+    week after tutor cost at the centre's target fill, and members on each plan type."""
+    if comp is None or comp.empty:
+        return pd.DataFrame()
+    c = comp.assign(Value=comp["Members"] * comp["Weekly price"],
+                    Sess=comp["Members"] * comp["Sessions/week"],
+                    Bucket=[_bucket(k, s) for k, s in zip(comp["Type"], comp["Sessions/week"])])
+    c["One"] = c["Sess"].where(c["Type"] == "1:1", 0)
+    keys = ["Week ending", "Location", "Country"]
+    out = c.groupby(keys).agg(Members=("Members", "sum"), Sessions=("Sess", "sum"),
+                              One=("One", "sum"), Value=("Value", "sum")).reset_index()
+    mix = c.pivot_table(index=keys, columns="Bucket", values="Members", aggfunc="sum",
+                        fill_value=0).reindex(columns=MIX, fill_value=0).reset_index()
+    out = out.merge(mix, on=keys)
+    out["Margin"] = [scheduling(n, s - o, o, v, cc)["Margin a week"] for n, s, o, v, cc in
+                     zip(out["Members"], out["Sessions"], out["One"], out["Value"],
+                         out["Country"])]
+    return out
+
+
+def trend_measures(t):
+    """Per-row measures from (summed) weekly totals: members, sessions, sessions per member,
+    ARPM, revenue per session, margin per member and the plan mix in %."""
+    n = t["Members"].where(t["Members"] > 0)
+    out = pd.DataFrame({"Members": t["Members"], "Total sessions/week": t["Sessions"],
+                        "Sessions per member": t["Sessions"] / n, "ARPM": t["Value"] / n,
+                        "Revenue per session": t["Value"] / t["Sessions"].where(
+                            t["Sessions"] > 0),
+                        "Margin per member a week": t["Margin"] / n}, index=t.index)
+    for k in MIX:
+        out[k] = t[k] / n * 100
+    return out
+
+
 # ── Group overview ────────────────────────────────────────────────────────────
 def group_table(week, vl, table):
     """One row per centre: members, ARPM, revenue per session, % of RRP and ARPM vs the

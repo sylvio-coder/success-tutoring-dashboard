@@ -331,7 +331,10 @@ def report_composition():
         _load_tab_or_empty(membership_composition.TAB), load_vlookup(),
         _load_tab_or_empty(membership_composition.RRP_TAB),
         allowed=None if st.session_state.get("access_level") == "admin"
-        else list(st.session_state.get("allowed_locations", [])))
+        else list(st.session_state.get("allowed_locations", [])),
+        holidays=load_school_holidays(),
+        state_of=lambda r: REGION_TO_STATE.get(r, r) if isinstance(r, str) and r.strip()
+        else None)
 
 def report_pnl(df_wm, page=None):
     """P&L reports. Admins see every centre; anyone else only their own (none if not set).

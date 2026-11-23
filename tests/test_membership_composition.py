@@ -189,3 +189,17 @@ def test_scheduling_hubs_tutor_cost_and_margin():
     nz = mc.scheduling(120, 200, 10, 8000, "NZ")         # no NZ tutor rate yet
     assert nz["Hubs needed a week"] == 50 and nz["Tutor cost"] is None
     assert nz["Margin per member a week"] is None
+
+
+def test_weekly_totals_and_trend_measures():
+    comp = pd.DataFrame({"Week ending": pd.to_datetime(["2026-11-08"] * 3),
+                         "Location": "X", "Country": "AU", "Type": ["Group", "Group", "1:1"],
+                         "Sessions/week": [1, 2, 1], "Members": [2, 6, 2],
+                         "Weekly price": [42.0, 74.0, 90.0], "Freeze": False})
+    w = mc.weekly_totals(comp)
+    r = w.iloc[0]
+    assert (r["Members"], r["Sessions"], r["One"], r["Value"]) == (10, 16, 2, 708)
+    assert (r["1×"], r["2×"], r["3+"], r["1:1"]) == (2, 6, 0, 2)
+    assert r["Margin"] == 708 - (14 / 3.0 + 2) * 37.90
+    m = mc.trend_measures(w).iloc[0]
+    assert m["Sessions per member"] == 1.6 and m["ARPM"] == 70.8 and m["2×"] == 60
