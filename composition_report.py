@@ -30,8 +30,8 @@ CSS = """<style>
 
 HOW = f"""
 - **Source:** the portal's Membership Composition export, uploaded weekly by an admin
-  (⚙ Composition Upload). Prices are weekly, in the centre's own currency; US prices are
-  billed monthly and divided by 4.
+  (⚙ Composition Upload). Prices are weekly, in the centre's own currency (the CRM exports
+  every country, including the US, at weekly prices).
 - **RRP:** HQ's national RRP from 1 July 2026 for Australia, New Zealand and Canada; the US by
   region (e.g. Texas = Austin & Houston). Kept in the Sheet's 'RRP' tab.
   1:1 = RRP per session × sessions. 4 or more a week = the 3× rate per session × sessions.

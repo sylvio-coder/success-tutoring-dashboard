@@ -5,7 +5,8 @@ Rules agreed with HQ:
 - RRP is national for Australia, New Zealand and Canada; the US is priced by region.
 - Prices under $10 a week (a freeze fee or discretionary amount) are left out of the plan
   rows but kept in totals, ARPM and composition, with a note.
-- US prices are exported per month; weekly = monthly / 4 (as in the RRP guide).
+- Prices are exported per week for every country (the US was monthly until 22 Nov 2026;
+  a group price over $100 a session is flagged on upload as probably monthly).
 - 4+ sessions a week: RRP = the 3x rate per session x sessions. 1:1: RRP per session.
 - Ideal composition: 15% 1x, 80% 2x, 1% 3+ and 4% 1:1 of the centre's members, at RRP or
   the centre's own price where that is higher.
@@ -29,7 +30,7 @@ CRM = "Composition"            # alias scope: names matched for these uploads on
 LOC = "Success Tutoring - Business name"
 
 FREEZE_BELOW = 10              # weekly price under this = freeze fee / discretionary
-MONTHLY_BILLED = {"US"}        # exported per month; weekly = monthly / 4
+LOOKS_MONTHLY = 100            # a group price per session above this is probably monthly
 REGIONAL = {"US", "CA"}        # countries priced by region (others: national RRP only)
 TARGET_MIX = {"1×": 15, "2×": 80, "3+": 1, "1:1": 4}
 IDEAL_GROUPS = [("Group", "1×", 1, 1, 1), ("Group", "2×", 2, 2, 2),
@@ -149,7 +150,7 @@ def read_export(data):
         rows.append({"Centre": centre, "Country": cc,
                      "Type": "1:1" if get(r, "type").replace(" ", "") == "1:1" else "Group",
                      "Sessions/week": int(sessions), "Members": int(members),
-                     "Weekly price": round(price / 4 if cc in MONTHLY_BILLED else price, 2)})
+                     "Weekly price": round(price, 2)})
     if not centres:
         raise CompositionError("The file has no centres in it.")
     week = None
@@ -162,6 +163,15 @@ def read_export(data):
                                      "Weekly price"])
     return {"week_end": None if week is None or pd.isna(week) else week.date(),
             "rows": df, "empty": sorted(centres - set(df["Centre"]))}
+
+
+def looks_monthly(rows):
+    """Group plans priced above LOOKS_MONTHLY a session: the export was probably monthly
+    (the old US export). Rows from read_export."""
+    if rows is None or rows.empty:
+        return rows
+    per = rows["Weekly price"] / rows["Sessions/week"]
+    return rows[(rows["Type"] == "Group") & (per > LOOKS_MONTHLY)]
 
 
 def match_centres(names, master, aliases):

@@ -22,7 +22,7 @@ CSV = """Date,Centre,Country,Row,Type,No. members,Sessions/week,Membership price
 2026-11-08,Success Tutoring – Kiwi,NZ,Plan,Group,18,1,40.00,720.00
 2026-11-08,Success Tutoring – Kiwi,NZ,Plan,Group,6,2,70.00,420.00
 2026-11-08,Success Tutoring – Kiwi,NZ,Plan,Group,1,2,4.97,4.97
-2026-11-08,Success Tutoring Tex,US,Plan,Group,2,2,280.00,560.00
+2026-11-08,Success Tutoring Tex,US,Plan,Group,2,2,70.00,140.00
 2026-11-08,Success Tutoring - Empty,AU,Total,,0,,,0.00
 """
 
@@ -42,12 +42,16 @@ def plans(name):
 
 
 # ── Reading the export ────────────────────────────────────────────────────────
-def test_read_export_plans_only_and_us_monthly_to_weekly():
+def test_read_export_plans_only_and_us_prices_as_weekly():
     x = mc.read_export(CSV.encode())
     assert x["week_end"] == date(2026, 11, 8) and x["empty"] == ["Success Tutoring - Empty"]
     assert len(x["rows"]) == 12
     tex = x["rows"][x["rows"]["Centre"] == "Success Tutoring Tex"].iloc[0]
-    assert tex["Weekly price"] == 70.0                           # US$280 a month / 4
+    assert tex["Weekly price"] == 70.0                           # exported weekly now
+    assert mc.looks_monthly(x["rows"]).empty
+    old = mc.read_export(CSV.replace("Tex,US,Plan,Group,2,2,70.00,140.00",
+                                     "Tex,US,Plan,Group,2,2,280.00,560.00").encode())["rows"]
+    assert list(mc.looks_monthly(old)["Centre"]) == ["Success Tutoring Tex"]   # $140 a session
 
 
 def test_read_export_rejects_other_files():

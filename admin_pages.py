@@ -848,6 +848,11 @@ def page_composition_upload(spreadsheet, df_wm, df_rv, clear_cache):
         st.error(f"{' and '.join(ns)} both map to {loc}. Map one of them to another location.")
 
     st.markdown("#### Preview")
+    monthly = mc.looks_monthly(rows)
+    if monthly is not None and not monthly.empty:
+        st.warning("Some group prices are over $" + f"{mc.LOOKS_MONTHLY} a session, so they look "
+                   "like monthly prices: " + ", ".join(sorted(monthly["Centre"].unique())) +
+                   ". The export should be weekly; check it with the CRM team before saving.")
     prev = mc.prepare(pd.DataFrame(mc.records(rows, found, week)))
     if not prev.empty:
         view = mc.group_table(prev, None, mc.rrp_table())
@@ -858,7 +863,7 @@ def page_composition_upload(spreadsheet, df_wm, df_rv, clear_cache):
                      width="stretch",
                      column_config={c: st.column_config.NumberColumn(c, format="%.2f")
                                     for c in ["ARPM", "Revenue per session"]})
-        st.caption("Weekly prices in each centre's own currency (US monthly prices ÷ 4). "
+        st.caption("Weekly prices in each centre's own currency. "
                    f"'Under ${mc.FREEZE_BELOW}' = freeze fee or discretionary amount: kept in "
                    "totals, left out of the plan rows.")
         odd = prev[prev["Freeze"]]
