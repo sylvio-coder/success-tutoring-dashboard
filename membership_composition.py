@@ -383,6 +383,117 @@ def trend_measures(t):
     return out
 
 
+# ── Measured: study hubs run (CRM weekly Revenue export) ───────────────────────
+CHECK_GAP = 0.20     # members vs CRM active students differ by more than this: data check
+
+
+def hubs_run(revenue, week_end):
+    """{location: (sessions run, active students)} for the week ending week_end, from the
+    Revenue tab (Date = week ending; 'Total Sessions'; '# Active Students')."""
+    if revenue is None or revenue.empty or "Date" not in revenue or LOC not in revenue:
+        return {}
+    r = revenue[pd.to_datetime(revenue["Date"]).dt.normalize() ==
+                pd.Timestamp(week_end).normalize()]
+    return {loc: (float(s), float(a)) for loc, s, a in
+            zip(r[LOC], r["Total Sessions"], r["# Active Students"])}
+
+
+def measured(row, run):
+    """Hubs run, students per hub and extra hubs vs the target, for one group_table row.
+    run: (sessions run, active students) or None. Measured figures are None (and Check
+    says why) where the Revenue row is missing or its students don't match the members."""
+    out = {"Hubs run a week": None, "Students per hub": None, "Extra hubs a week": None,
+           "Check": ""}
+    if not run:
+        out["Check"] = "No sessions-run data"
+        return out
+    hubs, active = run
+    members, one = row["Members"], row.get("1:1 sessions", 0) or 0
+    if active and abs(members - active) / active > CHECK_GAP:
+        out["Check"] = f"Members {members:.0f} vs CRM students {active:.0f}"
+        return out
+    out["Hubs run a week"] = hubs
+    if hubs > one:
+        out["Students per hub"] = (row["Total sessions/week"] - one) / (hubs - one)
+    out["Extra hubs a week"] = hubs - row["Hubs needed a week"]
+    return out
+
+
+def add_measured(t, revenue, week_end):
+    """group_table plus the measured columns for that week."""
+    if t is None or t.empty:
+        return t
+    runs = hubs_run(revenue, week_end)
+    m = pd.DataFrame([measured(r, runs.get(r["Location"])) for _, r in t.iterrows()],
+                     index=t.index)
+    return pd.concat([t, m], axis=1)
+
+
+# ── Today vs ideal: where the money is ───────────────────────────────────────
+def where_the_money_is(plans, rrp, ideal, country, run=None):
+    """Today vs the ideal composition, after tutor cost, and the gain split into price, mix
+    and scheduling (weekly, in the centre's currency).
+
+    Fill: the target for the centre's size, or the centre's measured students per hub where
+    that is higher (a centre already beating the target isn't asked to do worse).
+    Today's tutor cost uses the hubs actually run where measured, else the hubs needed.
+    - price: today's members, each plan priced at least at RRP (prices under $10 kept);
+    - mix: moving to the ideal composition, less the change in tutor cost;
+    - scheduling: hubs run above those needed at that fill (never negative).
+    Tutor cost and margins are None where the country has no tutor rate."""
+    n = int(plans["Members"].sum())
+    one_t = plans["Type"] == "1:1"
+    sess = float((plans["Members"] * plans["Sessions/week"]).sum())
+    one = float((plans.loc[one_t, "Members"] * plans.loc[one_t, "Sessions/week"]).sum())
+    v0 = float((plans["Members"] * plans["Weekly price"]).sum())
+    v1 = 0.0
+    for _, p in plans.iterrows():
+        r = rrp_price(rrp, p["Type"], int(p["Sessions/week"])) if not p["Freeze"] else None
+        v1 += p["Members"] * max(p["Weekly price"], r or 0)
+    rows = ideal["rows"]
+    v2 = float(ideal["total"])
+    sess2 = float(rows["Total sessions"].sum())
+    one2 = float(rows.loc[rows["Type"] == "1:1", "Total sessions"].sum())
+    target = target_fill(n)
+    hubs_run = run[0] if run else None
+    measured = (sess - one) / (hubs_run - one) if hubs_run and hubs_run > one else None
+    fill = max(target, measured or 0)
+    need0 = (sess - one) / fill + one if fill else 0.0
+    need2 = (sess2 - one2) / fill + one2 if fill else 0.0
+    hubs0 = hubs_run if hubs_run else need0
+    rate = TUTOR_HOUR.get(country)
+    cost0 = hubs0 * rate if rate else None
+    cost2 = need2 * rate if rate else None
+
+    def side(v, s, hubs, cost):
+        return {"Revenue per session": v / s if s else None,
+                "Sessions per member": s / n if n else None, "ARPM": v / n if n else None,
+                "Hubs a week": hubs, "Tutor cost %": cost / v * 100 if cost and v else None,
+                "Margin a week": v - cost if cost is not None else None,
+                "Margin per member a week": (v - cost) / n if cost is not None and n
+                else None, "Total value": v}
+    mix = (v2 - v1) - ((need2 - need0) * rate if rate else 0)
+    use_mix = mix > 0.5
+    gains = [("Price", v1 - v0,
+              "Bring every plan up to at least RRP (today's members and plans)."),
+             ("Mix", mix if use_mix else 0.0,
+              ("Move members towards the ideal mix"
+               + (", after the change in tutor time." if rate else "."))
+              if use_mix else "Today's mix already earns more than the ideal mix: keep it.")]
+    if hubs_run is not None and rate:
+        extra = max(hubs_run - need0, 0)
+        gains.append(("Scheduling", extra * rate,
+                      f"Run about {need0:.0f} hubs a week instead of {hubs_run:.0f} "
+                      f"({fill:.1f} students a hub)." if extra >= 0.5 else
+                      f"Already at or under the hubs needed at {fill:.1f} students a hub."))
+    best = side(v2, sess2, need2, cost2) if use_mix else \
+        side(v1, sess, need0, need0 * rate if rate else None)
+    return {"today": side(v0, sess, hubs0, cost0), "ideal": best, "use_mix": use_mix,
+            "gains": sorted(gains, key=lambda g: -g[1]), "fill": fill, "target": target,
+            "measured_fill": measured, "hubs_needed": need0, "hubs_run": hubs_run,
+            "rate": rate}
+
+
 # ── Group overview ────────────────────────────────────────────────────────────
 def group_table(week, vl, table):
     """One row per centre: members, ARPM, revenue per session, % of RRP and ARPM vs the
@@ -406,7 +517,7 @@ def group_table(week, vl, table):
         rows.append({"Location": loc, "Centre": loc.removeprefix(ingest.PREFIX),
                      "Country": cc, "Currency": CURRENCY.get(cc, ""),
                      "RRP used": rrp["label"] if rrp else "No RRP set", "Members": n,
-                     "Total sessions/week": sessions,
+                     "Total sessions/week": sessions, "1:1 sessions": one_sess,
                      "Sessions per member": sessions / n if n else None,
                      "ARPM": value / n if n else None,
                      "Revenue per session": value / sessions if sessions else None,

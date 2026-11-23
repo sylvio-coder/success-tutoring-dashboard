@@ -196,7 +196,7 @@ def country_medians(full, country, allowed):
     return float(c["Sessions per member"].median()), float(c["Revenue per session"].median())
 
 
-def price_frequency_chart(t, med, country, title, highlight=None, ideal=None):
+def price_frequency_chart(t, med, country, title, highlight=None, ideal=None, key="pf"):
     """Sessions per member (across) vs revenue per session (up), one dot per centre in t,
     dashed country medians and the four quarters. highlight: a centre to draw strongly;
     ideal: (sessions per member, revenue per session) to point an arrow to."""
@@ -212,7 +212,8 @@ def price_frequency_chart(t, med, country, title, highlight=None, ideal=None):
             x=d["Sessions per member"], y=d["Revenue per session"], mode="markers+text",
             text=d["Centre"] if highlight is None else
             [c if s_ else "" for c, s_ in zip(d["Centre"], strong)],
-            textposition="top center", textfont=dict(size=11, color="#1c2a30"),
+            textposition="bottom center" if ideal is not None else "top center",
+            textfont=dict(size=11, color="#1c2a30"),
             marker=dict(size=[max(10, min(40, m ** 0.5 * 4)) for m in d["Members"]],
                         color=["#1f9a9a" if s_ else "#c9d3d6" for s_ in strong],
                         opacity=0.35 if small else 0.85, line=dict(width=1, color="#fff")),
@@ -227,8 +228,9 @@ def price_frequency_chart(t, med, country, title, highlight=None, ideal=None):
                            ay=r["Revenue per session"], xref="x", yref="y", axref="x",
                            ayref="y", showarrow=True, arrowhead=3, arrowwidth=2,
                            arrowcolor="#2e8540")
-        fig.add_scatter(x=[ideal[0]], y=[ideal[1]], mode="markers+text", text=["Ideal"],
-                        textposition="bottom center", showlegend=False, hoverinfo="skip",
+        fig.add_scatter(x=[ideal[0]], y=[ideal[1]], mode="markers+text", text=["Achievable"],
+                        textposition="middle right", showlegend=False, hoverinfo="skip",
+                        textfont=dict(size=11, color="#2e8540"),
                         marker=dict(size=14, color="#2e8540", symbol="star"))
     if med:
         fig.add_vline(x=med[0], line=dict(dash="dash", color="#8a9a9f", width=1))
@@ -246,7 +248,7 @@ def price_frequency_chart(t, med, country, title, highlight=None, ideal=None):
                                  zeroline=False),
                       yaxis=dict(title=f"Revenue per session ({cur})", gridcolor="#eef1f3",
                                  tickprefix="$", zeroline=False))
-    st.plotly_chart(fig, width="stretch")
+    st.plotly_chart(fig, width="stretch", key=key)
 
 
 # ── Trends ────────────────────────────────────────────────────────────────────
@@ -379,9 +381,11 @@ def _state(vl, locs, state_of):
     return max(set(states), key=states.count) if states else None
 
 
-def _group(comp, week, vl, table, allowed, holidays=None, state_of=None):
+def _group(comp, week, vl, table, allowed, holidays=None, state_of=None, revenue=None):
     full = mc.group_table(week, vl, table)
     t = _visible(week, vl, table, allowed)
+    if not t.empty:
+        t = mc.add_measured(t, revenue, week["Week ending"].iloc[0])
     countries = sorted(t["Country"].unique())
     pick = st.selectbox("Country", ["All countries"] + countries, key="comp_country")
     if pick != "All countries":
@@ -391,11 +395,14 @@ def _group(comp, week, vl, table, allowed, holidays=None, state_of=None):
                + ("." if allowed is None else
                   f" or fewer than {MIN_FOR_MEDIAN} centres.") +
                " Target fill rises with members (3.0 up to 20, 5.0 at 120, 6.0 from 180); "
-               "tutor cost and margin are AU only for now.")
+               "tutor cost and margin are AU only for now. Hubs run come from the CRM's "
+               "weekly export; left blank where its students differ from the members by "
+               "more than 20% (see Check).")
     show = t[["Centre", "Country", "Members", "Total sessions/week", "Sessions per member",
               "ARPM", "Revenue per session", "Target fill", "Hubs needed a week",
+              "Hubs run a week", "Students per hub", "Extra hubs a week",
               "Tutor cost %", "Margin per member a week", "% of RRP",
-              "ARPM vs country median", "RRP used"]]
+              "ARPM vs country median", "RRP used", "Check"]]
     money = lambda: st.column_config.NumberColumn(format="$%.2f")
     st.dataframe(show.style.map(lambda v: "" if pd.isna(v) else
                                 f"color:{GREEN if v >= 99.5 else RED};font-weight:600",
@@ -413,6 +420,18 @@ def _group(comp, week, vl, table, allowed, holidays=None, state_of=None):
                                 "Hubs needed a week": st.column_config.NumberColumn(
                                     format="%.0f", help="Group sessions ÷ target fill, plus "
                                     "1:1 sessions"),
+                                "Hubs run a week": st.column_config.NumberColumn(
+                                    format="%.0f", help="Sessions run that week (CRM, "
+                                    "weekly Revenue export)"),
+                                "Students per hub": st.column_config.NumberColumn(
+                                    format="%.1f", help="Group sessions booked ÷ group hubs "
+                                    "run (1:1 left out). Booked, not attended: actual is a "
+                                    "little lower."),
+                                "Extra hubs a week": st.column_config.NumberColumn(
+                                    format="%+.0f", help="Hubs run − hubs needed at the "
+                                    "target fill. + = more hubs than needed"),
+                                "Check": st.column_config.TextColumn(
+                                    help="Why measured figures are missing"),
                                 "Tutor cost %": st.column_config.NumberColumn(
                                     format="%.0f%%", help="Hubs needed × tutor cost an hour, "
                                     "as a % of total value"),
@@ -447,6 +466,87 @@ def _group(comp, week, vl, table, allowed, holidays=None, state_of=None):
                               "from the totals, so bigger centres count more.", key="g")
 
 
+def _money_section(plans, rrp, ideal, row, week, vl, table, allowed, revenue):
+    """Today vs achievable after tutor cost, the gain split into price / mix / scheduling,
+    and this centre on the price vs frequency chart with an arrow to where it could be."""
+    import pnl_share
+    loc, country = row["Location"], row["Country"]
+    run = mc.hubs_run(revenue, week["Week ending"].iloc[0]).get(loc)
+    check = mc.measured(row, run)["Check"] if run else "No sessions-run data"
+    r = mc.where_the_money_is(plans, rrp, ideal, country, None if check else run)
+    t, a = r["today"], r["ideal"]
+    cur = mc.CURRENCY.get(country, "")
+
+    def m(v):
+        return _m(v)
+
+    def n(v, dp=1):
+        return "–" if v is None or pd.isna(v) else f"{v:,.{dp}f}"
+
+    def change(x, y, money=True, dp=1):
+        if x is None or y is None or pd.isna(x) or pd.isna(y):
+            return ""
+        d = y - x
+        txt = (f"{'+' if d >= 0 else '−'}${abs(d):,.2f}" if money else
+               f"{'+' if d >= 0 else '−'}{abs(d):,.{dp}f}")
+        return txt
+    lines = [("Revenue per session", m(t["Revenue per session"]), m(a["Revenue per session"]),
+              change(t["Revenue per session"], a["Revenue per session"])),
+             ("Sessions per member", n(t["Sessions per member"], 2),
+              n(a["Sessions per member"], 2),
+              change(t["Sessions per member"], a["Sessions per member"], False, 2)),
+             ("ARPM", m(t["ARPM"]), m(a["ARPM"]), change(t["ARPM"], a["ARPM"])),
+             ("Study hubs a week", n(t["Hubs a week"], 0) + ("" if r["hubs_run"] else
+                                                             " (needed)"),
+              n(a["Hubs a week"], 0), change(t["Hubs a week"], a["Hubs a week"], False, 0)),
+             ("Tutor cost % of fees", n(t["Tutor cost %"], 0) + "%" if t["Tutor cost %"]
+              else "–", n(a["Tutor cost %"], 0) + "%" if a["Tutor cost %"] else "–", ""),
+             ("Margin per member a week", m(t["Margin per member a week"]),
+              m(a["Margin per member a week"]),
+              change(t["Margin per member a week"], a["Margin per member a week"])),
+             ("Margin a week (after tutor cost)", m(t["Margin a week"]),
+              m(a["Margin a week"]), change(t["Margin a week"], a["Margin a week"]))]
+    k = len(lines) - 1
+    table_html = _table(["", "Today", "Achievable", "Change"],
+                        [list(x) for x in lines], {k: "total"})
+    gains = [g for g in r["gains"]]
+    total = sum(g[1] for g in gains)
+    items = "".join(
+        f'<li><b>{html.escape(name)}: {"+" if v >= 0.5 else ""}{_m(v) if v >= 0.5 else "$0"} '
+        f'a week</b> · {html.escape(why)}</li>' for name, v, why in gains)
+    sub = (f"Gain about {_m(total)} a week ({cur})" if total >= 0.5 else
+           "Already at or above the achievable position")
+    _card("Today vs achievable: where the money is", sub,
+          table_html + '<div style="height:10px"></div>'
+          '<div class="mc-note" style="font-size:13px;color:#1c2a30"><b>Where the gain comes '
+          f'from (biggest first)</b><ul style="margin:6px 0 0 18px">{items}</ul></div>')
+    notes = [f"Fill used: {r['fill']:.1f} students a hub (target for {row['Members']:.0f} "
+             f"members: {r['target']:.1f}"
+             + (f"; measured {r['measured_fill']:.1f}" if r["measured_fill"] else "") + ")."]
+    if check:
+        notes.append(f"Hubs run not used: {check}.")
+    if r["rate"] is None:
+        notes.append("No tutor rate for this country yet: tutor cost and margins show –, and "
+                     "the gains are fees only.")
+    if not r["use_mix"]:
+        notes.append("Achievable keeps today's mix, because it already earns more than the "
+                     "ideal mix.")
+    months = pnl_share.months_trading(vl, loc, pd.Timestamp(
+        week["Week ending"].iloc[0]).strftime("%Y-%m"))
+    if months is not None and months <= pnl_share.NEW_MONTHS:
+        notes.append(f"Trading {months} months: treat the hubs figure as guidance while "
+                     "groups are still forming.")
+    st.caption(" ".join(notes))
+    full = mc.group_table(week, vl, table)
+    vis = _visible(week, vl, table, allowed)
+    pool = full if allowed is None else vis
+    c = pool[(pool["Country"] == country) & (pool["Members"] > 0)]
+    price_frequency_chart(c, country_medians(full, country, allowed), country,
+                          "Today → achievable", highlight=loc,
+                          ideal=(a["Sessions per member"], a["Revenue per session"]),
+                          key="pf_centre")
+
+
 def _centre_trends(comp, vl, loc, pick, country, allowed, holidays, state_of):
     import pnl_share
     w = mc.weekly_totals(comp)
@@ -478,7 +578,7 @@ def _centre_trends(comp, vl, loc, pick, country, allowed, holidays, state_of):
                  mc.CURRENCY.get(country, ""), note, key="c")
 
 
-def _centre(comp, week, vl, table, allowed, holidays=None, state_of=None):
+def _centre(comp, week, vl, table, allowed, holidays=None, state_of=None, revenue=None):
     g = _visible(week, vl, table, allowed)
     names = dict(sorted(zip(g["Centre"], g["Location"]), key=lambda kv: kv[0].lower()))
     pick = st.selectbox("Centre", list(names), key="comp_centre")
@@ -510,10 +610,12 @@ def _centre(comp, week, vl, table, allowed, holidays=None, state_of=None):
           + ideal_composition_html(ideal["composition"])
           + ('<div class="mc-note">¹ The centre\'s own average price is used where it is '
              'higher than RRP.</div>' if own else ""))
+    _money_section(plans, rrp, ideal, row, week, vl, table, allowed, revenue)
     _centre_trends(comp, vl, loc, pick, row["Country"], allowed, holidays, state_of)
 
 
-def report_composition(df_comp, vl, df_rrp, allowed=None, holidays=None, state_of=None):
+def report_composition(df_comp, vl, df_rrp, allowed=None, holidays=None, state_of=None,
+                       revenue=None):
     """allowed: None for admins (every centre), else the locations this viewer may see."""
     st.markdown('<div class="report-title">Membership Composition</div>',
                 unsafe_allow_html=True)
@@ -541,8 +643,8 @@ def report_composition(df_comp, vl, df_rrp, allowed=None, holidays=None, state_o
         st.info("None of your centres is in this week's Membership Composition data.")
         return
     if view == VIEWS[0]:
-        _group(comp, week, vl, table, allowed, holidays, state_of)
+        _group(comp, week, vl, table, allowed, holidays, state_of, revenue)
     else:
-        _centre(comp, week, vl, table, allowed, holidays, state_of)
+        _centre(comp, week, vl, table, allowed, holidays, state_of, revenue)
     with st.expander("How this is worked out"):
         st.markdown(HOW)
