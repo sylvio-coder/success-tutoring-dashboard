@@ -43,6 +43,10 @@ HOW = f"""
   weekly sessions).
 - **Prices under ${mc.FREEZE_BELOW}** (a freeze fee or discretionary amount) are left out of the
   rows but kept in the totals, ARPM and composition.
+- **Composition table:** every member on each plan, including prices under ${mc.FREEZE_BELOW}.
+  Average membership price = the plan's total value ÷ its members; revenue per session =
+  total value ÷ all its weekly sessions. For 1:1, sessions a week is the average across its
+  members.
 - **Ideal composition:** the centre's members spread {mc.TARGET_MIX['1×']}% 1×,
   {mc.TARGET_MIX['2×']}% 2×, {mc.TARGET_MIX['3+']}% 3 or more and {mc.TARGET_MIX['1:1']}% 1:1,
   each at RRP, or at the centre's own average price per session where that is higher.
@@ -100,9 +104,12 @@ def current_html(t):
 
 
 def composition_html(comp):
-    return _table(["Composition", "No. members", "% of members"],
+    return _table(["Composition", "No. members", "% of members", "Sessions/week",
+                   "Average membership price", "Total value", "Revenue per session"],
                   [[html.escape(r["Plan"]), f'{int(r["Members"]):,}',
-                    f'{r["% of members"]:.0f}%'] for _, r in comp.iterrows()])
+                    f'{r["% of members"]:.0f}%', f'{r["Sessions/week"]:.1f}'.removesuffix(".0"),
+                    _m(r["Average price"]), _m(r["Total value"]),
+                    _m(r["Revenue per session"])] for _, r in comp.iterrows()])
 
 
 def ideal_html(t):

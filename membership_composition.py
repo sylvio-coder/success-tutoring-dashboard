@@ -239,14 +239,22 @@ def current_table(plans, rrp, medians):
                                zip(plans["Type"], plans["Sessions/week"])],
                          order=[(t == "1:1", s) for t, s in
                                 zip(plans["Type"], plans["Sessions/week"])])
-            .groupby("Plan").agg(Members=("Members", "sum"), order=("order", "min"))
+            .assign(Value=plans["Members"] * plans["Weekly price"],
+                    Sess=plans["Members"] * plans["Sessions/week"])
+            .groupby("Plan").agg(Members=("Members", "sum"), order=("order", "min"),
+                                 Sess=("Sess", "sum"), **{"Total value": ("Value", "sum")})
             .sort_values("order").reset_index())
+    members = comp["Members"].where(comp["Members"] > 0)
     comp["% of members"] = comp["Members"] / n * 100 if n else 0
+    comp["Sessions/week"] = comp["Sess"] / members          # 1:1 can mix 1×, 2×, ...
+    comp["Average price"] = comp["Total value"] / members
+    comp["Revenue per session"] = comp["Total value"] / comp["Sess"].where(comp["Sess"] > 0)
     frozen = plans[plans["Freeze"]]
     return {"rows": pd.DataFrame(rows), "members": n, "total": value,
             "per_session": value / sessions if sessions else None,
             "arpm": value / n if n else None,
-            "composition": comp[["Plan", "Members", "% of members"]],
+            "composition": comp[["Plan", "Members", "% of members", "Sessions/week",
+                                 "Average price", "Total value", "Revenue per session"]],
             "freeze_members": int(frozen["Members"].sum()),
             "freeze_value": float((frozen["Members"] * frozen["Weekly price"]).sum())}
 

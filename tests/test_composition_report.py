@@ -50,6 +50,11 @@ def test_centre_tables():
               "Revenue per session", "RRP variance", "Variance from median"]:
         assert f"<th>{h}</th>" in html
     assert "% of members" in html and "Current %" in html and "Ideal %" in html
+    comp = html.split("<th>Composition</th>")[1].split("</table>")[0]
+    for h in ["Sessions/week", "Average membership price", "Total value", "Revenue per session"]:
+        assert f"<th>{h}</th>" in comp
+    g2 = comp.split(">Group 2×</td>")[1].split("</tr>")[0]   # 1 at $40 + 6 at $80
+    assert all(v in g2 for v in [">7<", ">2<", "$74.29", "$520.00", "$37.14"])
     assert "$1,400.00" in html and "$116.67" in html and "$56.00" in html
     assert "+$6.00 (+8%)" in html and "−$40.00 (−50%)" in html
     assert "−$455" not in html or "vs today" in html
