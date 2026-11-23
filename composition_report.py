@@ -334,17 +334,33 @@ def trend_charts(series, weeks, typical=None, periods=(), cur="", note=None, key
             else:
                 st.plotly_chart(frame(fig, title, prefix), width="stretch",
                                 key=f"trend_{key}_{name}")
-    fig = go.Figure()
-    for k in mc.MIX:
-        fig.add_bar(x=weeks, y=s[k], name=k, marker_color=MIX_COLOURS[k],
-                    hovertemplate=f"{k}: %{{y:.0f}}%<extra></extra>")
-    fig = frame(fig, "Plan mix · % of members", pct=True, height=280)
-    fig.update_layout(barmode="stack", showlegend=True, bargap=0.15,
-                      legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right",
-                                  x=1), yaxis_range=[0, 100])
-    st.plotly_chart(fig, width="stretch", key=f"trend_{key}_mix")
+    # Plan mix: the first week shown, the latest week and the ideal mix, as pies.
+    have = s[mc.MIX].dropna(how="all")
+    have = have[have.sum(axis=1) > 0]
+    pies = []
+    if len(have):
+        if len(have) > 1:
+            pies.append((f"{have.index[0]:%d %b %Y}", have.iloc[0]))
+        pies.append((f"Latest · {have.index[-1]:%d %b %Y}", have.iloc[-1]))
+    pies.append(("Ideal mix", pd.Series(mc.TARGET_MIX)))
+    st.markdown("**Plan mix · % of members**")
+    for n, (col, (title, mix)) in enumerate(zip(st.columns(3), pies)):
+        fig = go.Figure(go.Pie(
+            labels=list(mc.MIX), values=[float(mix.get(k, 0) or 0) for k in mc.MIX],
+            sort=False, hole=0.45, marker=dict(colors=[MIX_COLOURS[k] for k in mc.MIX],
+                                               line=dict(color="#fff", width=2)),
+            texttemplate="%{label}<br>%{percent:.0%}", textposition="inside",
+            hovertemplate="%{label}: %{percent:.0%}<extra></extra>"))
+        fig.update_layout(title=dict(text=title, font=dict(size=13)), height=280,
+                          margin=dict(l=10, r=10, t=40, b=10), paper_bgcolor="#fff",
+                          legend=dict(orientation="h", yanchor="top", y=-0.02, x=0.5,
+                                      xanchor="center"), uniformtext_minsize=10,
+                          uniformtext_mode="hide")
+        with col:
+            st.plotly_chart(fig, width="stretch", key=f"trend_{key}_mix_{n}")
     st.caption((note + " " if note else "") +
-               "Gaps = weeks with no upload. Shaded = school holidays. Amounts weekly, in the "
+               "Gaps = weeks with no upload. Shaded = school holidays. Plan mix compares the first and "
+               "latest week shown with the ideal mix. Amounts weekly, in the "
                f"centre's own currency{f' ({cur})' if cur else ''}. Margin per member is after "
                "tutor cost at the target fill for the centre's size.")
 

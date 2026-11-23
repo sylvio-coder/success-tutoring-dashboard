@@ -93,7 +93,10 @@ def test_centre_tables():
     assert "own average price" in html
     assert not at.dataframe                                           # tables, then trends
     keys = [c.key for c in at.get("plotly_chart")]
-    assert len(keys) == 7 and "trend_c_mix" in keys and "trend_c_Members" in keys
+    assert "trend_c_Members" in keys and len(keys) == 6 + 3            # 6 trends + 3 pies
+    pies = [c.proto.spec for c in at.get("plotly_chart") if "_mix_" in c.key]
+    assert "08 Nov 2026" in pies[0] and "Latest" in pies[1] and "Ideal mix" in pies[2]
+    assert all('"type":"pie"' in p.replace(" ", "") for p in pies)
     text = " ".join([m.value for m in at.markdown] + [c.value for c in at.caption])
     assert "Trends · Alpha" in text and "Typical centre" not in str(
         [c.proto.spec for c in at.get("plotly_chart")])                # too few centres
@@ -156,7 +159,7 @@ def test_group_trends_for_a_gpm_add_up_only_their_centres():
     at = run("gpm", allowed=[P + "Alpha", P + "Beta"])
     assert not at.exception, at.exception
     keys = [c.key for c in at.get("plotly_chart")]
-    assert "trend_g_Members" in keys and "trend_g_mix" in keys
+    assert "trend_g_Members" in keys and "trend_g_mix_2" in keys
     members = next(c for c in at.get("plotly_chart") if c.key == "trend_g_Members")
     import base64, json
     import numpy as np
