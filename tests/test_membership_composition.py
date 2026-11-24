@@ -263,3 +263,16 @@ def test_whole_split_adds_up():
     assert mc.whole_split(56, mc.TARGET_MIX) == {"1×": 8, "2×": 45, "3+": 1, "1:1": 2}
     for n in range(0, 200):
         assert sum(mc.whole_split(n, mc.TARGET_MIX).values()) == n
+
+
+def test_gross_margin_and_extra_sessions():
+    assert mc.gross_margin("Group", 40, 10, 37.9) == pytest.approx(75)
+    assert mc.gross_margin("1:1", 90, 10, 37.9) == pytest.approx((1 - 37.9 / 90) * 100)
+    assert mc.gross_margin("Group", 40, 10, None) is None
+    e = mc.extra_sessions(plans("Alpha"), 74.0, 12.0)           # the two 4x members
+    assert list(e["Price"]) == [80, 160] and list(e["Extra sessions"]) == [2, 2]
+    low = e.iloc[0]                                             # worst first
+    assert low["Extra fees"] == 6 and low["Extra tutor cost"] == 24 and low["Net"] == -18
+    assert not low["Pays less than 2×"]
+    high = e.iloc[1]
+    assert high["Net"] == 86 - 24 and high["Margin"] == pytest.approx(62 / 86 * 100)

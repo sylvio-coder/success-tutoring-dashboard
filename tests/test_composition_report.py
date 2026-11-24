@@ -70,12 +70,19 @@ def test_centre_tables():
         assert f"<th>{h}</th>" in html
     assert "% of members" in html and "Current %" not in html          # old table gone
     heads = ["Plan", "No. members", "Total sessions/week", "Membership price",
-             "Revenue per session", "Total value", "RRP variance", "Variance from median"]
+             "Revenue per session", "Total value", "Gross margin", "RRP variance",
+             "Variance from median"]
     assert "".join(f"<th>{h}</th>" for h in heads) in html
     top = html.split("".join(f"<th>{h}</th>" for h in heads))[1].split("</table>")[0]
     assert ">Group 4×</td>" in top and ">1:1 (1×)</td>" in top
     assert "2.08 sessions" in top and "$116.67 ARPM" in top       # per member: 25 / 12
     assert top.count("Not recommended") == 2                      # the two 4x rows
+    # Gross margin: tutor cost $37.90 / 3.0 students a hub = $12.63 a student-session.
+    g2_plan = html.split("Plan mix")[1].split(">Group 2×</td>")[1].split("</tr>")[0]
+    assert "✓ 66%" in g2_plan                                      # 1 - 12.63 / 37.14
+    extra = html.split("Extra sessions on 4×+ plans")[1].split("</table>")[0]
+    assert "1 of 2 members" in extra and "lose money on their extra sessions" in extra
+    assert "⛔ loses money" in extra and "✓ 71% margin" in extra   # 4x @ $80 and @ $160
     assert at.expander[0].label == "Plan details (every price)"   # collapsed plan table
     assert "Plan mix" in html
     assert "<th>Plan</th><th>No. members</th><th>% of members</th><th>Total sessions/week" \

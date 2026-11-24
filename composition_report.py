@@ -78,6 +78,12 @@ HOW = f"""
 - **Margin per member a week** = (total value − hubs needed × tutor cost an hour) ÷ members,
   with hubs needed = group sessions ÷ the target fill for the centre's size, plus 1:1
   sessions. Tutor cost: AU $37.90 an hour ($33.85 + 12% super); other countries to come.
+- **Gross margin** = fees − tutor cost, as a % of fees. Tutor cost a student-session =
+  tutor cost an hour ÷ students a hub (a 1:1 session has its own tutor). ✓ 65% or more,
+  ⚠ 50–65%, ⛔ below 50% (the industry red flag is tutor cost above 50% of fees).
+- **Extra sessions on 4×+ plans:** the sessions beyond 2× a week, against what the member
+  would pay on a 2× plan at RRP. ⛔ where the extra sessions cost more in tutor time than
+  they bring in.
 - **4×+ group plans** (4 or more sessions a week) are not recommended: they are flagged, kept
   at today's price (no RRP uplift), left out of the ideal mix and out of % of RRP.
 - **% of RRP** (group overview) = what members pay ÷ what the same members would pay at RRP.
@@ -129,22 +135,35 @@ def _per_member(t):
     return t["sessions"] / t["members"] if t["members"] else None
 
 
-def current_html(t):
+def _gm_cell(v):
+    """Gross margin with its band: ✓ >= 65%, ⚠ 50-65%, ⛔ below 50%."""
+    if v is None or pd.isna(v):
+        return "–"
+    if v >= mc.GM_GOOD:
+        return f'<span class="pos">✓ {v:.0f}%</span>'
+    if v >= mc.GM_LOW:
+        return f'<span class="mc-nr">⚠ {v:.0f}%</span>'
+    return f'<span class="neg">⛔ {v:.0f}%</span>'
+
+
+def current_html(t, gm=None):
+    gm = gm or (lambda kind, rps: None)
     rows = [[mc.plan_label(r["Type"], r["Sessions/week"]) +
              (f' ({r["Sessions/week"]}×)' if r["Type"] == "1:1" else ""),
              f'{r["Members"]:,}', _n(r["Total sessions"]),
              _m(r["Membership price"]), _m(r["Revenue per session"]), _m(r["Total value"]),
+             _gm_cell(gm(r["Type"], r["Revenue per session"])),
              '<span class="mc-nr">Not recommended</span>' if r.get("Not recommended")
              else _var(r["RRP variance"], r["RRP variance %"]),
              _var(r["Median variance"], r["Median variance %"])]
             for _, r in t["rows"].iterrows()]
     k = len(rows)
     rows.append(["Total", f'{t["members"]:,}', _n(t["sessions"]), "", _m(t["per_session"]),
-                 _m(t["total"]), "", ""])
+                 _m(t["total"]), _gm_cell(t.get("gm")), "", ""])
     rows.append(["Per member", "", f'{_n(_per_member(t), 2)} sessions',
-                 f'{_m(t["arpm"])} ARPM', "", "", "", ""])
+                 f'{_m(t["arpm"])} ARPM', "", "", "", "", ""])
     return _table(["Plan", "No. members", "Total sessions/week", "Membership price",
-                   "Revenue per session", "Total value", "RRP variance",
+                   "Revenue per session", "Total value", "Gross margin", "RRP variance",
                    "Variance from median"], rows, {k: "total", k + 1: "arpm"})
 
 
@@ -153,21 +172,24 @@ def _is_nr_plan(label):
     return bool(m) and int(m.group(1)) >= mc.NOT_RECOMMENDED_FROM
 
 
-def composition_html(comp):
+def composition_html(comp, gm=None, gm_total=None):
+    gm = gm or (lambda kind, rps: None)
     rows = [[html.escape(r["Plan"]) + (' <span class="mc-nr">⚠ not recommended</span>'
                                        if _is_nr_plan(r["Plan"]) else ""),
              f'{int(r["Members"]):,}', f'{r["% of members"]:.0f}%',
              _n(r["Total sessions"]),
              _n(r["Sessions per member"], 2) if r["Plan"] == "1:1" else "–",
              _m(r["Average price"]),
-             _m(r["Revenue per session"]), _m(r["Total value"])] for _, r in comp.iterrows()]
+             _m(r["Revenue per session"]), _m(r["Total value"]),
+             _gm_cell(gm("1:1" if r["Plan"] == "1:1" else "Group", r["Revenue per session"]))]
+            for _, r in comp.iterrows()]
     n, sess, value = comp["Members"].sum(), comp["Total sessions"].sum(), comp["Total value"].sum()
     rows.append(["Total", f"{int(n):,}", "100%" if n else "–", _n(sess),
                  _n(sess / n if n else None, 2), _m(value / n if n else None),
-                 _m(value / sess if sess else None), _m(value)])
+                 _m(value / sess if sess else None), _m(value), _gm_cell(gm_total)])
     return _table(["Plan", "No. members", "% of members", "Total sessions/week",
                    "Sessions per member", "Average membership price", "Revenue per session",
-                   "Total value"], rows, {len(rows) - 1: "total"})
+                   "Total value", "Gross margin"], rows, {len(rows) - 1: "total"})
 
 
 def current_vs_ideal_html(plans, ideal):
@@ -530,14 +552,77 @@ def _group(comp, week, vl, table, allowed, holidays=None, state_of=None, revenue
                               "from the totals, so bigger centres count more.", key="g")
 
 
-def _money_section(plans, rrp, ideal, row, week, vl, table, allowed, revenue):
-    """Today vs achievable after tutor cost, the gain split into price / mix / scheduling,
-    and this centre on the price vs frequency chart with an arrow to where it could be."""
+def _money_calc(plans, rrp, ideal, row, week, revenue):
+    """where_the_money_is for the centre, using its hubs run where the data checks out."""
+    run = mc.hubs_run(revenue, week["Week ending"].iloc[0]).get(row["Location"])
+    check = mc.measured(row, run)["Check"] if run else "No sessions-run data"
+    return mc.where_the_money_is(plans, rrp, ideal, row["Country"],
+                                 None if check else run), check
+
+
+def _extra_sessions_card(plans, r):
+    """Members on 4x+ plans: what their sessions beyond 2x a week earn against the tutor
+    time they use. Shown only where the centre has such members and a tutor rate."""
+    if not r["not_recommended"]["members"]:
+        return
+    if not r["cost_ss"] or not r["price_2x"]:
+        st.caption(f"{r['not_recommended']['members']} members on "
+                   f"{mc.NOT_RECOMMENDED_FROM}×+ plans: extra-session margins need a tutor "
+                   "rate for this country.")
+        return
+    e = mc.extra_sessions(plans, r["price_2x"], r["cost_ss"])
+    lose = e[e["Net"] < -0.5]
+    gain = e[e["Net"] >= -0.5]
+    tot_fees, tot_cost = e["Extra fees"].sum(), e["Extra tutor cost"].sum()
+    margin = (tot_fees - tot_cost) / tot_fees * 100 if tot_fees > 0 else None
+    head = (f'<b>{int(lose["Members"].sum())} of {int(e["Members"].sum())} members</b> on '
+            f'{mc.NOT_RECOMMENDED_FROM}×+ plans lose money on their extra sessions: '
+            f'<b class="neg">−${abs(lose["Net"].sum()):,.0f} a week</b>. ' if len(lose) else "")
+    head += (f'The other {int(gain["Members"].sum())} make +${gain["Net"].sum():,.0f}. '
+             if len(gain) and len(lose) else "")
+    head += (f'Overall, the {e["Extra sessions"].sum():.0f} extra sessions earn '
+             f'${tot_fees:,.0f} for ${tot_cost:,.0f} of tutor time'
+             + (f': about a <b>{margin:.0f}% margin</b>.' if margin is not None else "."))
+
+    def flag(x):
+        if x["Pays less than 2×"]:
+            return '<span class="neg">⛔ pays less than a 2× plan</span>'
+        if x["Net"] < -0.5:
+            return '<span class="neg">⛔ loses money</span>'
+        return _gm_cell(x["Margin"]).replace("✓ ", "✓ ").replace("%", "% margin")
+    rows = [[f'{x["Plan"]} @ {_m(x["Price"])}', f'{x["Members"]:,}',
+             f'{x["Extra sessions"]:.0f}', _var_money(x["Extra fees"]),
+             _m(x["Extra tutor cost"]), f'<b>{_var_money(x["Net"])}</b>', flag(x)]
+            for _, x in e.iterrows()]
+    rows.append(["Total", f'{int(e["Members"].sum())}', f'{e["Extra sessions"].sum():.0f}',
+                 _var_money(tot_fees), _m(tot_cost),
+                 _var_money(tot_fees - tot_cost),
+                 f"{margin:.0f}% margin" if margin is not None else ""])
+    _card(f"Extra sessions on {mc.NOT_RECOMMENDED_FROM}×+ plans",
+          f"Sessions beyond 2× a week, against a 2× plan at {_m(r['price_2x'])}",
+          f'<div class="mc-total" style="font-size:14px">{head}</div>'
+          + _table(["Plan @ price", "Members", "Extra sessions a week",
+                    f"Extra fees vs 2× ({_m(r['price_2x'])})", "Extra tutor cost",
+                    "Net a week", ""], rows, {len(rows) - 1: "total"})
+          + f'<div class="mc-note">Extra tutor cost = extra sessions × {_m(r["cost_ss"])} a '
+            f'student-session (tutor cost an hour ÷ {r["fill"]:.1f} students a hub).</div>')
+
+
+def _var_money(v):
+    if v is None or pd.isna(v):
+        return "–"
+    return (f'<span class="{"neg" if v < -0.5 else ""}">'
+            f'{"+" if v >= 0.5 else "−" if v <= -0.5 else ""}${abs(v):,.0f}</span>')
+
+
+def _money_section(plans, rrp, ideal, row, week, vl, table, allowed, revenue, r=None,
+                   check=""):
+    """Where the money is: the gain tiles, today vs theoretical after tutor cost, and this
+    centre on the price vs frequency chart with an arrow to the theoretical position."""
     import pnl_share
     loc, country = row["Location"], row["Country"]
-    run = mc.hubs_run(revenue, week["Week ending"].iloc[0]).get(loc)
-    check = mc.measured(row, run)["Check"] if run else "No sessions-run data"
-    r = mc.where_the_money_is(plans, rrp, ideal, country, None if check else run)
+    if r is None:
+        r, check = _money_calc(plans, rrp, ideal, row, week, revenue)
     t, a = r["today"], r["ideal"]
     cur = mc.CURRENCY.get(country, "")
 
@@ -709,12 +794,27 @@ def _centre(comp, week, vl, table, allowed, holidays=None, state_of=None, revenu
     nr_note = (f' {int(nr["Members"].sum())} members are on group plans with '
                f'{mc.NOT_RECOMMENDED_FROM}+ sessions a week (not recommended): they are kept at '
                "today's price and left out of the ideal mix and % of RRP." if len(nr) else "")
+    money, check = _money_calc(plans, rrp, ideal, row, week, revenue)
+    rate, css = money["rate"], money["cost_ss"]
+    gm = lambda kind, rps: mc.gross_margin(kind, rps, css, rate) if css else None
+    gm_total = None
+    if css and cur["total"]:
+        one = plans["Type"] == "1:1"
+        sess = plans["Members"] * plans["Sessions/week"]
+        cost = float(sess[~one].sum()) * css + float(sess[one].sum()) * rate
+        gm_total = (1 - cost / cur["total"]) * 100
+    cur["gm"] = gm_total
+    gm_note = (f" Gross margin = fees − tutor cost ({_m(css)} a student-session in a group, "
+               f"{_m(rate)} a 1:1 session): ✓ {mc.GM_GOOD}%+, ⚠ {mc.GM_LOW}–{mc.GM_GOOD}%, "
+               f"⛔ below {mc.GM_LOW}%." if css else "")
     _card(title, f'{cur["members"]} members · {_m(cur["total"])} · ARPM {_m(cur["arpm"])}',
-          '<div class="mc-sub">Plan mix</div>' + composition_html(cur["composition"])
-          + f'<div class="mc-note">{note}{nr_note}</div>')
+          '<div class="mc-sub">Plan mix</div>'
+          + composition_html(cur["composition"], gm, gm_total)
+          + f'<div class="mc-note">{note}{nr_note}{gm_note}</div>')
+    _extra_sessions_card(plans, money)
     with st.expander("Plan details (every price)"):
-        st.markdown(f'<div class="mc-card">{current_html(cur)}</div>'.replace("$", "&#36;"),
-                    unsafe_allow_html=True)
+        st.markdown(f'<div class="mc-card">{current_html(cur, gm)}</div>'
+                    .replace("$", "&#36;"), unsafe_allow_html=True)
     own = ideal["rows"]["Own price used"].any()
     diff = ideal["total"] - cur["total"]
     _card("Ideal plan mix at RRP",
@@ -724,7 +824,7 @@ def _centre(comp, week, vl, table, allowed, holidays=None, state_of=None, revenu
                                        "higher than RRP. " if own else "")
           + "Fees only, before tutor cost. See 'Where the money is' for the best achievable "
             "after tutor cost.</div>")
-    _money_section(plans, rrp, ideal, row, week, vl, table, allowed, revenue)
+    _money_section(plans, rrp, ideal, row, week, vl, table, allowed, revenue, money, check)
     _centre_trends(comp, vl, loc, pick, row["Country"], allowed, holidays, state_of)
 
 

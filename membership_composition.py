@@ -536,13 +536,19 @@ def where_the_money_is(plans, rrp, ideal, country, run=None):
         freed = saved / fill if fill else 0.0                  # group hubs a week freed
         net = fees + (freed * rate if rate else 0)
         plans_gain = {"net": net, "fees": fees, "sessions": saved, "hubs": freed}
+        cost_x = freed * rate if rate else None
+        earn = -fees                                  # what the extra sessions bring in today
+        margin_x = (earn - cost_x) / earn * 100 if cost_x is not None and earn > 0 else None
         gains.append(("Plans", max(net, 0.0),
                       f"Move the {nrs['members']} members on {NOT_RECOMMENDED_FROM}×+ plans onto "
                       f"2× at ${p2:,.2f}: {saved:.0f} fewer sessions (~{freed:.0f} hubs freed), "
                       f"fees {'+' if fees >= 0 else '−'}${abs(fees):,.0f}"
                       + (f", tutor cost −${freed * rate:,.0f}" if rate else "")
                       + ("." if net > 0.5 else f". Net {'+' if net >= 0 else '−'}"
-                         f"${abs(net):,.0f}: worth it for the capacity, not the fees.")))
+                         f"${abs(net):,.0f}: worth it for the capacity, not the fees.")
+                      + (f" Today the extra {saved:.0f} sessions earn ${-fees:,.0f} for "
+                         f"${cost_x:,.0f} of tutor time: about a {margin_x:.0f}% margin."
+                         if margin_x is not None else "")))
     use_plans = bool(plans_gain and plans_gain["net"] > 0.5)
     if use_mix:
         bv, bs, bh = v2, sess2, need2
@@ -568,7 +574,41 @@ def where_the_money_is(plans, rrp, ideal, country, run=None):
             "gains": sorted(gains, key=lambda g: -g[1]), "fill": fill, "target": target,
             "measured_fill": measured, "hubs_needed": need0, "hubs_run": hubs_run,
             "rate": rate, "not_recommended": nrs,
-            "total_sessions": sess, "total_value": v0}
+            "total_sessions": sess, "total_value": v0, "price_2x": p2,
+            "cost_ss": rate / fill if rate and fill else None}
+
+
+GM_GOOD, GM_LOW = 65, 50       # gross margin bands: >= 65% healthy, < 50% too low
+
+
+def gross_margin(kind, revenue_per_session, cost_per_student_session, rate):
+    """Fees minus tutor cost, as a % of fees, for one plan. Group sessions share a tutor
+    (cost per student-session = tutor cost an hour / students a hub); 1:1 has one each."""
+    if not revenue_per_session or rate is None:
+        return None
+    cost = rate if kind == "1:1" else cost_per_student_session
+    return (1 - cost / revenue_per_session) * 100
+
+
+def extra_sessions(plans, price_2x, cost_per_student_session):
+    """Members on 4x+ group plans, one row per price: the sessions beyond 2x a week, what
+    they pay above a 2x plan at price_2x, the tutor cost of those extra sessions, the net
+    and its margin. Worst net first."""
+    rows = []
+    for _, p in plans.iterrows():
+        s, m = int(p["Sessions/week"]), int(p["Members"])
+        if not not_recommended(p["Type"], s):
+            continue
+        extra = (s - 2) * m
+        fees = (p["Weekly price"] - price_2x) * m
+        cost = extra * cost_per_student_session
+        rows.append({"Plan": f"{s}×", "Price": p["Weekly price"], "Members": m,
+                     "Extra sessions": extra, "Extra fees": fees, "Extra tutor cost": cost,
+                     "Net": fees - cost,
+                     "Margin": (fees - cost) / fees * 100 if fees > 0 else None,
+                     "Pays less than 2×": p["Weekly price"] < price_2x})
+    t = pd.DataFrame(rows)
+    return t.sort_values("Net").reset_index(drop=True) if len(t) else t
 
 
 def _nr_summary(plans, n):
