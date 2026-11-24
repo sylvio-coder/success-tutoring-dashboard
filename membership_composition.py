@@ -34,7 +34,26 @@ LOOKS_MONTHLY = 100            # a group price per session above this is probabl
 REGIONAL = {"US", "CA"}        # countries priced by region (others: national RRP only)
 TARGET_MIX = {"1×": 15, "2×": 80, "3+": 1, "1:1": 4}
 IDEAL_GROUPS = [("Group", "1×", 1, 1, 1), ("Group", "2×", 2, 2, 2),
-                ("Group", "3+", 3, 99, 3), ("1:1", "1:1", 1, 99, 1)]   # type, plan, min, max, sessions
+                ("Group", "3+", 3, 3, 3), ("1:1", "1:1", 1, 99, 1)]    # type, plan, min, max, sessions
+NOT_RECOMMENDED_FROM = 4       # group plans with this many sessions a week or more
+NOT_RECOMMENDED = "4×+ (not recommended)"
+
+
+def whole_split(total, shares):
+    """Split `total` members into whole numbers in proportion to `shares` (a dict of %),
+    largest remainders first, so the parts add up to the total exactly."""
+    raw = {k: total * v / 100 for k, v in shares.items()}
+    out = {k: math.floor(x) for k, x in raw.items()}
+    left = int(round(total - sum(out.values())))
+    for k in sorted(raw, key=lambda k: -(raw[k] - out[k]))[:max(left, 0)]:
+        out[k] += 1
+    return out
+
+
+def not_recommended(kind, sessions):
+    """Group plans with 4+ sessions a week: outside the recommended plans, so they are
+    kept at today's price (no RRP uplift) and left out of the ideal mix and % of RRP."""
+    return kind == "Group" and sessions >= NOT_RECOMMENDED_FROM
 # Scheduling: the target students per study hub rises with members, in straight lines
 # between these points (CRM: young centres ~3.1-3.4; the best centres over 150 members
 # 5.5-6). A hub holds at most 6. 1:1 sessions need a tutor each.
@@ -248,6 +267,7 @@ def current_table(plans, rrp, medians):
         mv, mp = _variance(price, med) if cnt > 1 else (None, None)
         rows.append({"Type": kind, "Members": int(p["Members"]), "Sessions/week": s,
                      "Total sessions": p["Members"] * s,
+                     "Not recommended": not_recommended(kind, s),
                      "Membership price": price, "Total value": p["Members"] * price,
                      "Revenue per session": price / s, "RRP": r, "RRP variance": rv,
                      "RRP variance %": rp, "Median": med if cnt > 1 else None,
@@ -266,11 +286,13 @@ def current_table(plans, rrp, medians):
     comp["Total sessions"] = comp["Sess"]                   # members × sessions a week
     comp["Average price"] = comp["Total value"] / members
     comp["Revenue per session"] = comp["Total value"] / comp["Sess"].where(comp["Sess"] > 0)
+    comp["Sessions per member"] = comp["Sess"] / members
     frozen = plans[plans["Freeze"]]
     return {"rows": pd.DataFrame(rows), "members": n, "total": value,
             "per_session": value / sessions if sessions else None,
             "arpm": value / n if n else None, "sessions": sessions,
             "composition": comp[["Plan", "Members", "% of members", "Total sessions",
+                                 "Sessions per member",
                                  "Average price", "Total value", "Revenue per session"]],
             "freeze_members": int(frozen["Members"].sum()),
             "freeze_value": float((frozen["Members"] * frozen["Weekly price"]).sum())}
@@ -283,7 +305,10 @@ def ideal_table(plans, rrp, target=None):
     target = target or TARGET_MIX
     n = int(plans["Members"].sum())
     current_value = float((plans["Members"] * plans["Weekly price"]).sum())
+    nr = plans[[not_recommended(k, s) for k, s in zip(plans["Type"], plans["Sessions/week"])]]
+    n_rec = n - int(nr["Members"].sum())             # only these are spread to the ideal mix
     rows, comp = [], []
+    whole = whole_split(n_rec, target)               # whole members, adding up to n_rec
     for kind, plan, lo, hi, s in IDEAL_GROUPS:
         g = plans[(plans["Type"] == kind) & plans["Sessions/week"].between(lo, hi)]
         priced = g[~g["Freeze"]]
@@ -293,16 +318,29 @@ def ideal_table(plans, rrp, target=None):
                 (priced["Members"] * priced["Sessions/week"]).sum() * s
         r = rrp_price(rrp, kind, s)
         price = max(x for x in (r, own) if x is not None) if (r or own) else None
-        m = n * target[plan] / 100
+        m = whole[plan]
         rows.append({"Type": kind, "Plan": plan, "Members": m, "Sessions/week": s,
                      "Total sessions": m * s,
                      "Membership price": price, "Total value": m * price if price else None,
                      "Revenue per session": price / s if price else None,
-                     "Own price used": bool(own and r and own > r + 0.005)})
+                     "Own price used": bool(own and r and own > r + 0.005),
+                     "Not recommended": False})
         cur = g["Members"].sum() / n * 100 if n else 0
+        ideal_pct = m / n * 100 if n else target[plan]
         comp.append({"Plan": f"Group {plan}" if kind == "Group" else plan,
-                     "Current %": cur, "Ideal %": target[plan],
-                     "Variance": cur - target[plan]})
+                     "Current %": cur, "Ideal %": ideal_pct, "Variance": cur - ideal_pct})
+    if len(nr):                                      # kept as they are, at today's price
+        m_nr = float(nr["Members"].sum())
+        v_nr = float((nr["Members"] * nr["Weekly price"]).sum())
+        s_nr = float((nr["Members"] * nr["Sessions/week"]).sum())
+        rows.append({"Type": "Group", "Plan": NOT_RECOMMENDED, "Members": m_nr,
+                     "Sessions/week": s_nr / m_nr, "Total sessions": s_nr,
+                     "Membership price": v_nr / m_nr, "Total value": v_nr,
+                     "Revenue per session": v_nr / s_nr if s_nr else None,
+                     "Own price used": False, "Not recommended": True})
+        cur = m_nr / n * 100 if n else 0
+        comp.append({"Plan": f"Group {NOT_RECOMMENDED}", "Current %": cur, "Ideal %": cur,
+                     "Variance": 0.0})
     t = pd.DataFrame(rows)
     total = float(t["Total value"].sum())
     sessions = float(t["Total sessions"].sum())
@@ -448,7 +486,8 @@ def where_the_money_is(plans, rrp, ideal, country, run=None):
     v0 = float((plans["Members"] * plans["Weekly price"]).sum())
     v1 = 0.0
     for _, p in plans.iterrows():
-        r = rrp_price(rrp, p["Type"], int(p["Sessions/week"])) if not p["Freeze"] else None
+        r = rrp_price(rrp, p["Type"], int(p["Sessions/week"])) \
+            if not p["Freeze"] and not not_recommended(p["Type"], p["Sessions/week"]) else None
         v1 += p["Members"] * max(p["Weekly price"], r or 0)
     rows = ideal["rows"]
     v2 = float(ideal["total"])
@@ -486,12 +525,98 @@ def where_the_money_is(plans, rrp, ideal, country, run=None):
                       f"Run about {need0:.0f} hubs a week instead of {hubs_run:.0f} "
                       f"({fill:.1f} students a hub)." if extra >= 0.5 else
                       f"Already at or under the hubs needed at {fill:.1f} students a hub."))
-    best = side(v2, sess2, need2, cost2) if use_mix else \
-        side(v1, sess, need0, need0 * rate if rate else None)
+    # Plans: members on 4x+ group plans moved onto 2x at the ideal 2x price.
+    nrs = _nr_summary(plans, n)
+    p2 = rows.loc[rows["Plan"] == "2×", "Membership price"]
+    p2 = float(p2.iloc[0]) if len(p2) and pd.notna(p2.iloc[0]) else None
+    plans_gain = None
+    if nrs["members"] and p2:
+        fees = nrs["members"] * p2 - nrs["value"]
+        saved = nrs["sessions"] - 2 * nrs["members"]          # sessions a week saved
+        freed = saved / fill if fill else 0.0                  # group hubs a week freed
+        net = fees + (freed * rate if rate else 0)
+        plans_gain = {"net": net, "fees": fees, "sessions": saved, "hubs": freed}
+        cost_x = freed * rate if rate else None
+        earn = -fees                                  # what the extra sessions bring in today
+        margin_x = (earn - cost_x) / earn * 100 if cost_x is not None and earn > 0 else None
+        gains.append(("Plans", max(net, 0.0),
+                      f"Move the {nrs['members']} members on {NOT_RECOMMENDED_FROM}×+ plans onto "
+                      f"2× at ${p2:,.2f}: {saved:.0f} fewer sessions (~{freed:.0f} hubs freed), "
+                      f"fees {'+' if fees >= 0 else '−'}${abs(fees):,.0f}"
+                      + (f", tutor cost −${freed * rate:,.0f}" if rate else "")
+                      + ("." if net > 0.5 else f". Net {'+' if net >= 0 else '−'}"
+                         f"${abs(net):,.0f}: worth it for the capacity, not the fees.")
+                      + (f" Today the extra {saved:.0f} sessions earn ${-fees:,.0f} for "
+                         f"${cost_x:,.0f} of tutor time: about a {margin_x:.0f}% margin."
+                         if margin_x is not None else "")))
+    use_plans = bool(plans_gain and plans_gain["net"] > 0.5)
+    if use_mix:
+        bv, bs, bh = v2, sess2, need2
+    else:
+        bv, bs, bh = v1, sess, need0
+    if use_plans:
+        bv += plans_gain["fees"]
+        bs -= plans_gain["sessions"]
+        bh -= plans_gain["hubs"]
+    best = side(bv, bs, bh, bh * rate if rate else None)
+    # Theoretical: every member on the recommended mix, at the ideal prices and target fill.
+    shares = {"1×": (1, 0.15), "2×": (2, 0.80), "3+": (3, 0.01), "1:1": (1, 0.04)}
+    shares = {k: (s_, TARGET_MIX[k] / 100) for k, (s_, _) in shares.items()}
+    price = dict(zip(rows["Plan"], rows["Membership price"]))
+    tm = whole_split(n, TARGET_MIX)                  # whole members, adding up to n
+    tv = sum(tm[k] * float(price.get(k) or 0) for k in shares)
+    ts = sum(tm[k] * s_ for k, (s_, _) in shares.items())
+    t_one = tm["1:1"] * shares["1:1"][0]
+    th = (ts - t_one) / target + t_one if target else 0.0
+    theory = side(tv, ts, th, th * rate if rate else None)
     return {"today": side(v0, sess, hubs0, cost0), "ideal": best, "use_mix": use_mix,
+            "use_plans": use_plans, "plans": plans_gain, "theory": theory,
             "gains": sorted(gains, key=lambda g: -g[1]), "fill": fill, "target": target,
             "measured_fill": measured, "hubs_needed": need0, "hubs_run": hubs_run,
-            "rate": rate}
+            "rate": rate, "not_recommended": nrs,
+            "total_sessions": sess, "total_value": v0, "price_2x": p2,
+            "cost_ss": rate / fill if rate and fill else None}
+
+
+GM_GOOD, GM_LOW = 65, 50       # gross margin bands: >= 65% healthy, < 50% too low
+
+
+def gross_margin(kind, revenue_per_session, cost_per_student_session, rate):
+    """Fees minus tutor cost, as a % of fees, for one plan. Group sessions share a tutor
+    (cost per student-session = tutor cost an hour / students a hub); 1:1 has one each."""
+    if not revenue_per_session or rate is None:
+        return None
+    cost = rate if kind == "1:1" else cost_per_student_session
+    return (1 - cost / revenue_per_session) * 100
+
+
+def extra_sessions(plans, price_2x, cost_per_student_session):
+    """Members on 4x+ group plans, one row per price: the sessions beyond 2x a week, what
+    they pay above a 2x plan at price_2x, the tutor cost of those extra sessions, the net
+    and its margin. Worst net first."""
+    rows = []
+    for _, p in plans.iterrows():
+        s, m = int(p["Sessions/week"]), int(p["Members"])
+        if not not_recommended(p["Type"], s):
+            continue
+        extra = (s - 2) * m
+        fees = (p["Weekly price"] - price_2x) * m
+        cost = extra * cost_per_student_session
+        rows.append({"Plan": f"{s}×", "Price": p["Weekly price"], "Members": m,
+                     "Extra sessions": extra, "Extra fees": fees, "Extra tutor cost": cost,
+                     "Net": fees - cost,
+                     "Margin": (fees - cost) / fees * 100 if fees > 0 else None,
+                     "Pays less than 2×": p["Weekly price"] < price_2x})
+    t = pd.DataFrame(rows)
+    return t.sort_values("Net").reset_index(drop=True) if len(t) else t
+
+
+def _nr_summary(plans, n):
+    nr = plans[[not_recommended(k, s) for k, s in zip(plans["Type"], plans["Sessions/week"])]]
+    m = int(nr["Members"].sum())
+    return {"members": m, "share": m / n * 100 if n else 0,
+            "value": float((nr["Members"] * nr["Weekly price"]).sum()),
+            "sessions": float((nr["Members"] * nr["Sessions/week"]).sum())}
 
 
 # ── Group overview ────────────────────────────────────────────────────────────
@@ -508,7 +633,8 @@ def group_table(week, vl, table):
         n = int(g["Members"].sum())
         value = float((g["Members"] * g["Weekly price"]).sum())
         sessions = float((g["Members"] * g["Sessions/week"]).sum())
-        priced = g[~g["Freeze"]]
+        nr = [not_recommended(k, s) for k, s in zip(g["Type"], g["Sessions/week"])]
+        priced = g[~g["Freeze"] & ~pd.Series(nr, index=g.index)]
         at = sum(m * rrp_price(rrp, t, s) for m, t, s in
                  zip(priced["Members"], priced["Type"], priced["Sessions/week"])) if rrp else 0
         paid = float((priced["Members"] * priced["Weekly price"]).sum())
@@ -522,7 +648,8 @@ def group_table(week, vl, table):
                      "ARPM": value / n if n else None,
                      "Revenue per session": value / sessions if sessions else None,
                      **scheduling(n, sessions - one_sess, one_sess, value, cc),
-                     "% of RRP": paid / at * 100 if at else None})
+                     "% of RRP": paid / at * 100 if at else None,
+                     "Members on 4×+": int(g.loc[nr, "Members"].sum()) if any(nr) else 0})
     t = pd.DataFrame(rows)
     if t.empty:
         return t

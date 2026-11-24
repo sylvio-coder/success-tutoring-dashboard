@@ -29,13 +29,17 @@ def run(level="admin", comp=COMP, allowed=None):
 def test_group_overview():
     at = run()
     assert not at.exception, at.exception
-    g = at.dataframe[0].value
-    assert list(g.columns) == ["Centre", "Country", "Members", "Total sessions/week",
-                               "Sessions per member", "ARPM", "Revenue per session",
-                               "Target fill", "Hubs needed a week", "Hubs run a week",
-                               "Students per hub", "Extra hubs a week", "Tutor cost %",
-                               "Margin per member a week", "% of RRP",
-                               "ARPM vs country median", "RRP used", "Check"]
+    import composition_report as cr
+    views = {}
+    for v in cr.GROUP_VIEWS:                            # Summary, Pricing, Scheduling, Margin
+        at.radio(key="comp_group_view").set_value(v).run()
+        assert not at.exception, (v, at.exception)
+        views[v] = at.dataframe[0].value
+        assert list(views[v].columns) == cr.GROUP_VIEWS[v]
+        assert len(cr.GROUP_VIEWS[v]) <= 11
+    assert at.radio(key="comp_group_view").options[0] == "Summary"
+    g = pd.concat([views[v].set_index("Centre") for v in cr.GROUP_VIEWS], axis=1)
+    g = g.loc[:, ~g.columns.duplicated()].reset_index()
     alpha = g.set_index("Centre").loc["Alpha"]          # 1x1 + 1x2 + 6x2 + 1x4 + 1x4 + 2x1
     assert alpha["Members"] == 12 and alpha["Total sessions/week"] == 25
     assert alpha["Sessions per member"] == 25 / 12
@@ -47,7 +51,7 @@ def test_group_overview():
     chart = at.get("plotly_chart")[0].proto.spec
     assert "Discount trap" in chart and "Efficient" in chart and "Alpha" in chart
     assert alpha["Check"] == "No sessions-run data" and pd.isna(alpha["Hubs run a week"])
-    assert list(g["% of RRP"]) == sorted(g["% of RRP"])
+    assert list(views["Pricing"]["% of RRP"]) == sorted(views["Pricing"]["% of RRP"])
     at.selectbox(key="comp_country").set_value("NZ").run()
     assert list(at.dataframe[0].value["Centre"]) == ["Kiwi"]
     at.selectbox(key="comp_week_pick").set_value("2026-11-08").run()
@@ -59,47 +63,69 @@ def test_centre_tables():
     at.radio(key="comp_view").set_value("Centre deep dive").run()
     at.selectbox(key="comp_centre").set_value("Alpha").run()
     assert not at.exception, at.exception
-    html = " ".join(m.value for m in at.markdown)
-    assert "Success Tutoring - Alpha" in html and "Ideal composition to achieve RRP" in html
+    html = " ".join(m.value for m in at.markdown).replace("&#36;", "$")
+    assert "Success Tutoring - Alpha" in html and "Ideal plan mix at RRP" in html
     for h in ["No. members", "Total sessions/week", "Membership price", "Total value",
               "Revenue per session", "RRP variance", "Variance from median"]:
         assert f"<th>{h}</th>" in html
-    assert "% of members" in html and "Current %" in html and "Ideal %" in html
+    assert "% of members" in html and "Current %" not in html          # old table gone
     heads = ["Plan", "No. members", "Total sessions/week", "Membership price",
-             "Revenue per session", "Total value", "RRP variance", "Variance from median"]
+             "Revenue per session", "Total value", "Gross margin", "RRP variance",
+             "Variance from median"]
     assert "".join(f"<th>{h}</th>" for h in heads) in html
-    top = html.split("<th>Plan</th><th>No. members</th>")[1].split("</table>")[0]
+    top = html.split("".join(f"<th>{h}</th>" for h in heads))[1].split("</table>")[0]
     assert ">Group 4×</td>" in top and ">1:1 (1×)</td>" in top
     assert "2.08 sessions" in top and "$116.67 ARPM" in top       # per member: 25 / 12
-    assert "<th>Composition</th><th>No. members</th><th>% of members</th><th>Total sessions/week" \
-           "</th><th>Average membership price</th><th>Revenue per session</th><th>Total value" \
-           "</th>" in html
-    ideal_t = html.split("Ideal composition to achieve RRP")[1].split("</table>")[0]
-    assert "<th>Plan</th><th>No. members</th><th>Total sessions/week</th><th>Membership price" \
-           "</th><th>Revenue per session</th><th>Total value</th>" in ideal_t
-    assert ">Group 2×</td>" in ideal_t and "Per member" in ideal_t and " sessions</td>" in ideal_t
-    comp = html.split("<th>Composition</th>")[1].split("</table>")[0]
-    for h in ["Total sessions/week", "Average membership price", "Total value",
-              "Revenue per session"]:
+    assert top.count("Not recommended") == 2                      # the two 4x rows
+    # Gross margin: tutor cost $37.90 / 3.0 students a hub = $12.63 a student-session.
+    g2_plan = html.split("Plan mix")[1].split(">Group 2×</td>")[1].split("</tr>")[0]
+    assert "✓ 66%" in g2_plan                                      # 1 - 12.63 / 37.14
+    extra = html.split("Extra sessions on 4×+ plans")[1].split("</table>")[0]
+    assert "1 of 2 members" in extra and "lose money on their extra sessions" in extra
+    assert "⛔ loses money" in extra and "✓ 71% margin" in extra   # 4x @ $80 and @ $160
+    assert at.expander[0].label == "Plan details (every price)"   # collapsed plan table
+    assert "Plan mix" in html
+    assert "<th>Plan</th><th>No. members</th><th>% of members</th><th>Total sessions/week" \
+           "</th><th>Sessions per member</th><th>Average membership price</th><th>Revenue per " \
+           "session</th><th>Total value</th>" in html
+    ideal_t = html.split("Ideal plan mix at RRP")[1].split("</table>")[0]
+    assert "<th>Plan</th><th>Members: now → ideal</th><th>Weekly price: now → ideal</th>" \
+           "<th>Value a week: now → ideal</th>" in ideal_t
+    g2 = ideal_t.split(">Group 2×</td>")[1].split("</tr>")[0]      # 7 now, 8 of 10 ideal
+    assert "7 (58%) → <b>8 (67%)</b>" in g2 and "$520 → <b>$594</b>" in g2
+    assert "unchanged" in ideal_t and "not recommended" in ideal_t   # the two 4x members
+    assert ">Group 3×</td>" not in ideal_t                         # 0 now, 0 ideal: hidden
+    assert "Fees only, before tutor cost" in html
+    comp = html.split("<th>Sessions per member</th>")[1].split("</table>")[0]
+    for h in ["Average membership price", "Total value", "Revenue per session"]:
         assert f"<th>{h}</th>" in comp
     g2 = comp.split(">Group 2×</td>")[1].split("</tr>")[0]   # 1 at $40 + 6 at $80
     assert all(v in g2 for v in [">7<", ">14<", "$74.29", "$520.00", "$37.14"])
     total = comp.split(">Total</td>")[1].split("</tr>")[0]
-    assert ">12<" in total and ">25<" in total and ">100%<" in total
-    ideal = html.split("Ideal composition to achieve RRP")[1]
-    assert "<th>Total sessions/week</th>" in ideal
+    assert ">12<" in total and ">25<" in total and ">100%<" in total and ">2.08<" in total
+    assert "⚠ not recommended" in comp.split(">Group 4×")[1].split("</td>")[0]
+    assert "Where the money is" in html and "mc-gain" in html
+    assert "2 members (17%) on 4×+ plans" in " ".join(c.value for c in at.caption)
     assert "$1,400.00" in html and "$116.67" in html and "$56.00" in html
     assert "+$6.00 (+8%)" in html and "−$40.00 (−50%)" in html
-    assert "−$455" not in html or "vs today" in html
-    assert "+167 pts" not in html and "+13 pts" in html              # 1:1: 17% - 4%
+    assert "a week vs today (fees)" in html
     assert "own average price" in html
     assert not at.dataframe                                           # tables, then trends
     keys = [c.key for c in at.get("plotly_chart")]
     assert "trend_c_Members" in keys and len(keys) == 1 + 6 + 3        # chart, trends, pies
-    money = at.get("plotly_chart")[0].proto.spec                       # today -> achievable
-    assert "achievable" in money and "Achievable" in money
-    assert "Today vs achievable: where the money is" in html
-    assert "Where the gain comes from" in html and "Price:" in html and "Mix:" in html
+    money = at.get("plotly_chart")[0].proto.spec                       # today -> theoretical
+    assert "theoretical" in money and "Theoretical" in money and "Achievable" not in money
+    assert "Today vs theoretical" in html and "Price" in html
+    assert "<th>Achievable</th>" not in html
+    assert "Scheduling" not in html and "Plans" in html     # Alpha has 2 members on 4x
+    tvt = html.split("Today vs theoretical</b>")[1].split("</table>")[0]
+    spm = tvt.split(">Sessions per member</td>")[1].split("</tr>")[0]
+    assert ">2.08<" in spm and ">1.83<" in spm              # theoretical: 22 sessions / 12
+    assert "⚠ +0.25 (+14%)" in spm                         # more than 10% above
+    assert "2 members on 4×+ plans use" in html and "8 of the 25 sessions" in html
+    plan_mix = html.split("Plan mix")[1].split("</table>")[0]
+    g2 = plan_mix.split(">Group 2×</td>")[1].split("</tr>")[0]
+    assert ">–<" in g2                                     # per member only on 1:1 and Total
     assert "keep it" in html                    # Alpha's mix already beats the ideal
     pies = [c.proto.spec for c in at.get("plotly_chart") if "_mix_" in c.key]
     assert "08 Nov 2026" in pies[0] and "Latest" in pies[1] and "Ideal mix" in pies[2]
@@ -121,6 +147,7 @@ def test_centre_note_for_prices_under_10():
 def test_gpm_sees_only_their_own_centres():
     at = run("gpm", allowed=[P + "Alpha"])
     assert not at.exception, at.exception
+    at.radio(key="comp_group_view").set_value("Pricing").run()
     g = at.dataframe[0].value
     assert list(g["Centre"]) == ["Alpha"]
     assert g["ARPM vs country median"].isna().all()          # AU has under 5 centres
@@ -202,6 +229,7 @@ def test_group_overview_measured_hubs_from_sessions_run():
         cr.report_composition(COMP, VL, pd.DataFrame(), revenue=rev)
     at = AppTest.from_function(script, default_timeout=60).run()
     assert not at.exception, at.exception
+    at.radio(key="comp_group_view").set_value("Scheduling").run()
     g = at.dataframe[0].value.set_index("Centre")
     a = g.loc["Alpha"]                     # 25 sessions, 2 of them 1:1; 8 hubs run
     assert a["Hubs run a week"] == 8 and a["Check"] == ""
