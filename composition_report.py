@@ -157,7 +157,9 @@ def composition_html(comp):
     rows = [[html.escape(r["Plan"]) + (' <span class="mc-nr">⚠ not recommended</span>'
                                        if _is_nr_plan(r["Plan"]) else ""),
              f'{int(r["Members"]):,}', f'{r["% of members"]:.0f}%',
-             _n(r["Total sessions"]), _n(r["Sessions per member"], 2), _m(r["Average price"]),
+             _n(r["Total sessions"]),
+             _n(r["Sessions per member"], 2) if r["Plan"] == "1:1" else "–",
+             _m(r["Average price"]),
              _m(r["Revenue per session"]), _m(r["Total value"])] for _, r in comp.iterrows()]
     n, sess, value = comp["Members"].sum(), comp["Total sessions"].sum(), comp["Total value"].sum()
     rows.append(["Total", f"{int(n):,}", "100%" if n else "–", _n(sess),
@@ -552,29 +554,66 @@ def _money_section(plans, rrp, ideal, row, week, vl, table, allowed, revenue):
         txt = (f"{'+' if d >= 0 else '−'}${abs(d):,.2f}" if money else
                f"{'+' if d >= 0 else '−'}{abs(d):,.{dp}f}")
         return txt
-    lines = [("Revenue per session", m(t["Revenue per session"]), m(a["Revenue per session"]),
-              change(t["Revenue per session"], a["Revenue per session"])),
-             ("Sessions per member", n(t["Sessions per member"], 2),
-              n(a["Sessions per member"], 2),
-              change(t["Sessions per member"], a["Sessions per member"], False, 2)),
+    th = r["theory"]
+
+    def gap(x, y, higher_is_worse, money=False, dp=2, pct_only=False):
+        """Today vs theoretical: ⚠ amber when more than 10% worse, ✓ green otherwise."""
+        if x is None or y is None or pd.isna(x) or pd.isna(y) or not y:
+            return ""
+        d, rel = x - y, (x - y) / abs(y)
+        worse = rel > 0.10 if higher_is_worse else rel < -0.10
+        size = (f"{'+' if d >= 0 else '−'}${abs(d):,.2f}" if money else
+                f"{'+' if d >= 0 else '−'}{abs(d):,.{dp}f}")
+        txt = f"{rel * 100:+.0f}%" if pct_only else f"{size} ({rel * 100:+.0f}%)"
+        return (f'<span class="mc-nr">⚠ {txt}</span>' if worse else
+                f'<span class="pos">✓ {txt}</span>')
+
+    pct = lambda v: n(v, 0) + "%" if v else "–"
+    lines = [("Sessions per member", n(t["Sessions per member"], 2),
+              n(th["Sessions per member"], 2),
+              gap(t["Sessions per member"], th["Sessions per member"], True),
+              n(a["Sessions per member"], 2)),
              ("Study hubs a week", n(t["Hubs a week"], 0) + ("" if r["hubs_run"] else
                                                              " (needed)"),
-              n(a["Hubs a week"], 0), change(t["Hubs a week"], a["Hubs a week"], False, 0)),
-             ("Tutor cost % of fees", n(t["Tutor cost %"], 0) + "%" if t["Tutor cost %"]
-              else "–", n(a["Tutor cost %"], 0) + "%" if a["Tutor cost %"] else "–", ""),
+              n(th["Hubs a week"], 0), gap(t["Hubs a week"], th["Hubs a week"], True, dp=0),
+              n(a["Hubs a week"], 0)),
+             ("Revenue per session", m(t["Revenue per session"]), m(th["Revenue per session"]),
+              gap(t["Revenue per session"], th["Revenue per session"], False, money=True),
+              m(a["Revenue per session"])),
+             ("Tutor cost % of fees", pct(t["Tutor cost %"]), pct(th["Tutor cost %"]),
+              gap(t["Tutor cost %"], th["Tutor cost %"], True, pct_only=True),
+              pct(a["Tutor cost %"])),
              ("Margin a week (after tutor cost)", m(t["Margin a week"]),
-              m(a["Margin a week"]), change(t["Margin a week"], a["Margin a week"]))]
+              m(th["Margin a week"]),
+              gap(t["Margin a week"], th["Margin a week"], False, money=True),
+              m(a["Margin a week"]))]
     k = len(lines) - 1
-    table_html = _table(["", "Today", "Achievable", "Change"],
+    table_html = _table(["", "Today", "Theoretical", "Today vs theoretical", "Achievable"],
                         [list(x) for x in lines], {k: "total"})
+    nrs = r["not_recommended"]
+    cause = ""
+    if nrs["members"] and r["total_sessions"]:
+        cause = (f'<div class="mc-note" style="font-size:13px;color:#1c2a30">⚠ '
+                 f'{nrs["members"]} members on {mc.NOT_RECOMMENDED_FROM}×+ plans use '
+                 f'<b>{nrs["sessions"]:.0f} of the {r["total_sessions"]:.0f} sessions</b> '
+                 f'({nrs["sessions"] / r["total_sessions"] * 100:.0f}%) for '
+                 f'{nrs["value"] / r["total_value"] * 100:.0f}% of fees.</div>')
+    table_html += ('<div class="mc-note">Theoretical: every member on the recommended mix '
+                   f'({mc.TARGET_MIX["1×"]}% 1×, {mc.TARGET_MIX["2×"]}% 2×, '
+                   f'{mc.TARGET_MIX["3+"]}% 3×, {mc.TARGET_MIX["1:1"]}% 1:1) at the ideal '
+                   f'prices and the target fill ({r["target"]:.1f} students a hub). ⚠ = more '
+                   'than 10% worse than theoretical.</div>' + cause)
     gains = [g for g in r["gains"]]
     total = sum(g[1] for g in gains)
-    colours = {"Price": "#1f9a9a", "Mix": "#1f3b57", "Scheduling": "#e0a100"}
+    colours = {"Price": "#1f9a9a", "Mix": "#1f3b57", "Scheduling": "#e0a100",
+               "Plans": "#8a5a00"}
+    extra = {"Plans": f' · ~{r["plans"]["hubs"]:.0f} hubs freed' if r["plans"] else ""}
     tiles = "".join(
         f'<div class="mc-gain{"" if v >= 0.5 else " zero"}" style="--c:'
         f'{colours.get(name, "#1f9a9a") if v >= 0.5 else "#c9d3d6"}">'
         f'<div class="k">{html.escape(name)}</div>'
-        f'<div class="v">{"+" + _m(v) if v >= 0.5 else "$0"} <small>a week</small></div>'
+        f'<div class="v">{"+" + _m(v) if v >= 0.5 else "$0"} <small>a week'
+        f'{html.escape(extra.get(name, ""))}</small></div>'
         f'<div class="w">{html.escape(why)}</div></div>' for name, v, why in gains)
     st.markdown('<div class="section-header">Where the money is</div>',
                 unsafe_allow_html=True)
@@ -585,7 +624,7 @@ def _money_section(plans, rrp, ideal, row, week, vl, table, allowed, revenue):
                 .replace("$", "&#36;"), unsafe_allow_html=True)
     sub = f"Margin a week: {_m(t['Margin a week'])} → {_m(a['Margin a week'])}" \
         if t["Margin a week"] is not None else "Fees only (no tutor rate for this country)"
-    _card("Today vs achievable", sub, table_html)
+    _card("Today vs theoretical vs achievable", sub, table_html)
     notes = [f"Fill used: {r['fill']:.1f} students a hub (target for {row['Members']:.0f} "
              f"members: {r['target']:.1f}"
              + (f"; measured {r['measured_fill']:.1f}" if r["measured_fill"] else "") + ")."]

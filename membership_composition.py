@@ -513,19 +513,57 @@ def where_the_money_is(plans, rrp, ideal, country, run=None):
                       f"Run about {need0:.0f} hubs a week instead of {hubs_run:.0f} "
                       f"({fill:.1f} students a hub)." if extra >= 0.5 else
                       f"Already at or under the hubs needed at {fill:.1f} students a hub."))
-    best = side(v2, sess2, need2, cost2) if use_mix else \
-        side(v1, sess, need0, need0 * rate if rate else None)
+    # Plans: members on 4x+ group plans moved onto 2x at the ideal 2x price.
+    nrs = _nr_summary(plans, n)
+    p2 = rows.loc[rows["Plan"] == "2×", "Membership price"]
+    p2 = float(p2.iloc[0]) if len(p2) and pd.notna(p2.iloc[0]) else None
+    plans_gain = None
+    if nrs["members"] and p2:
+        fees = nrs["members"] * p2 - nrs["value"]
+        saved = nrs["sessions"] - 2 * nrs["members"]          # sessions a week saved
+        freed = saved / fill if fill else 0.0                  # group hubs a week freed
+        net = fees + (freed * rate if rate else 0)
+        plans_gain = {"net": net, "fees": fees, "sessions": saved, "hubs": freed}
+        gains.append(("Plans", max(net, 0.0),
+                      f"Move the {nrs['members']} members on {NOT_RECOMMENDED_FROM}×+ plans onto "
+                      f"2× at ${p2:,.2f}: {saved:.0f} fewer sessions (~{freed:.0f} hubs freed), "
+                      f"fees {'+' if fees >= 0 else '−'}${abs(fees):,.0f}"
+                      + (f", tutor cost −${freed * rate:,.0f}" if rate else "")
+                      + ("." if net > 0.5 else f". Net {'+' if net >= 0 else '−'}"
+                         f"${abs(net):,.0f}: worth it for the capacity, not the fees.")))
+    use_plans = bool(plans_gain and plans_gain["net"] > 0.5)
+    if use_mix:
+        bv, bs, bh = v2, sess2, need2
+    else:
+        bv, bs, bh = v1, sess, need0
+    if use_plans:
+        bv += plans_gain["fees"]
+        bs -= plans_gain["sessions"]
+        bh -= plans_gain["hubs"]
+    best = side(bv, bs, bh, bh * rate if rate else None)
+    # Theoretical: every member on the recommended mix, at the ideal prices and target fill.
+    shares = {"1×": (1, 0.15), "2×": (2, 0.80), "3+": (3, 0.01), "1:1": (1, 0.04)}
+    shares = {k: (s_, TARGET_MIX[k] / 100) for k, (s_, _) in shares.items()}
+    price = dict(zip(rows["Plan"], rows["Membership price"]))
+    tv = sum(n * sh * float(price.get(k) or 0) for k, (_, sh) in shares.items())
+    ts = sum(n * sh * s_ for k, (s_, sh) in shares.items())
+    t_one = n * shares["1:1"][1]
+    th = (ts - t_one) / target + t_one if target else 0.0
+    theory = side(tv, ts, th, th * rate if rate else None)
     return {"today": side(v0, sess, hubs0, cost0), "ideal": best, "use_mix": use_mix,
+            "use_plans": use_plans, "plans": plans_gain, "theory": theory,
             "gains": sorted(gains, key=lambda g: -g[1]), "fill": fill, "target": target,
             "measured_fill": measured, "hubs_needed": need0, "hubs_run": hubs_run,
-            "rate": rate, "not_recommended": _nr_summary(plans, n)}
+            "rate": rate, "not_recommended": nrs,
+            "total_sessions": sess, "total_value": v0}
 
 
 def _nr_summary(plans, n):
     nr = plans[[not_recommended(k, s) for k, s in zip(plans["Type"], plans["Sessions/week"])]]
     m = int(nr["Members"].sum())
     return {"members": m, "share": m / n * 100 if n else 0,
-            "value": float((nr["Members"] * nr["Weekly price"]).sum())}
+            "value": float((nr["Members"] * nr["Weekly price"]).sum()),
+            "sessions": float((nr["Members"] * nr["Sessions/week"]).sum())}
 
 
 # ── Group overview ────────────────────────────────────────────────────────────

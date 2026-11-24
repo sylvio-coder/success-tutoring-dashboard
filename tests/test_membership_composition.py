@@ -242,7 +242,14 @@ def test_4x_plans_not_recommended_no_rrp_uplift_and_left_out_of_pct_rrp():
     price = dict((g[0], g[1]) for g in r["gains"])["Price"]
     assert price == pytest.approx(2 + 34)          # 1x $40->$42, 2x $40->$74; 4x untouched
     assert r["not_recommended"] == {"members": 2, "share": pytest.approx(2 / 12 * 100),
-                                    "value": 240}
+                                    "value": 240, "sessions": 8}
+    p2 = mc.ideal_table(p, AU)["rows"].set_index("Plan").loc["2×", "Membership price"]
+    pl = r["plans"]                                # 2 members: 8 sessions -> 4 on 2x
+    assert pl["sessions"] == 4 and pl["fees"] == pytest.approx(2 * p2 - 240)
+    assert pl["net"] == pytest.approx(pl["fees"] + pl["hubs"] * 37.90)
+    th = r["theory"]
+    assert th["Sessions per member"] == pytest.approx(1.82)
+    assert th["Hubs a week"] == pytest.approx(12 * 1.78 / 3.0 + 12 * 0.04)
     g = mc.group_table(W, None, mc.rrp_table()).set_index("Centre")
     assert g.loc["Alpha", "Members on 4×+"] == 2
     paid, at = 40 + 40 + 480 + 600, 42 + 74 + 6 * 74 + 2 * 90 * 1
