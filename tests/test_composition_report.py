@@ -106,11 +106,12 @@ def test_centre_tables():
     assert not at.dataframe                                           # tables, then trends
     keys = [c.key for c in at.get("plotly_chart")]
     assert "trend_c_Members" in keys and len(keys) == 1 + 6 + 3        # chart, trends, pies
-    money = at.get("plotly_chart")[0].proto.spec                       # today -> achievable
-    assert "achievable" in money and "Achievable" in money
-    assert "Today vs theoretical vs achievable" in html and "Price" in html
+    money = at.get("plotly_chart")[0].proto.spec                       # today -> theoretical
+    assert "theoretical" in money and "Theoretical" in money and "Achievable" not in money
+    assert "Today vs theoretical" in html and "Price" in html
+    assert "<th>Achievable</th>" not in html
     assert "Scheduling" not in html and "Plans" in html     # Alpha has 2 members on 4x
-    tvt = html.split("Today vs theoretical vs achievable")[1].split("</table>")[0]
+    tvt = html.split("Today vs theoretical</b>")[1].split("</table>")[0]
     spm = tvt.split(">Sessions per member</td>")[1].split("</tr>")[0]
     assert ">2.08<" in spm and ">1.82<" in spm and "✓ +0.26 (+14%)" not in spm
     assert "⚠ +0.26 (+14%)" in spm                         # more than 10% above

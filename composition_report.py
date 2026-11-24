@@ -277,7 +277,7 @@ def price_frequency_chart(t, med, country, title, highlight=None, ideal=None, ke
                            ay=r["Revenue per session"], xref="x", yref="y", axref="x",
                            ayref="y", showarrow=True, arrowhead=3, arrowwidth=2,
                            arrowcolor="#2e8540")
-        fig.add_scatter(x=[ideal[0]], y=[ideal[1]], mode="markers+text", text=["Achievable"],
+        fig.add_scatter(x=[ideal[0]], y=[ideal[1]], mode="markers+text", text=["Theoretical"],
                         textposition="middle right", showlegend=False, hoverinfo="skip",
                         textfont=dict(size=11, color="#2e8540"),
                         marker=dict(size=14, color="#2e8540", symbol="star"))
@@ -571,24 +571,19 @@ def _money_section(plans, rrp, ideal, row, week, vl, table, allowed, revenue):
     pct = lambda v: n(v, 0) + "%" if v else "–"
     lines = [("Sessions per member", n(t["Sessions per member"], 2),
               n(th["Sessions per member"], 2),
-              gap(t["Sessions per member"], th["Sessions per member"], True),
-              n(a["Sessions per member"], 2)),
+              gap(t["Sessions per member"], th["Sessions per member"], True)),
              ("Study hubs a week", n(t["Hubs a week"], 0) + ("" if r["hubs_run"] else
                                                              " (needed)"),
-              n(th["Hubs a week"], 0), gap(t["Hubs a week"], th["Hubs a week"], True, dp=0),
-              n(a["Hubs a week"], 0)),
+              n(th["Hubs a week"], 0), gap(t["Hubs a week"], th["Hubs a week"], True, dp=0)),
              ("Revenue per session", m(t["Revenue per session"]), m(th["Revenue per session"]),
-              gap(t["Revenue per session"], th["Revenue per session"], False, money=True),
-              m(a["Revenue per session"])),
+              gap(t["Revenue per session"], th["Revenue per session"], False, money=True)),
              ("Tutor cost % of fees", pct(t["Tutor cost %"]), pct(th["Tutor cost %"]),
-              gap(t["Tutor cost %"], th["Tutor cost %"], True, pct_only=True),
-              pct(a["Tutor cost %"])),
+              gap(t["Tutor cost %"], th["Tutor cost %"], True, pct_only=True)),
              ("Margin a week (after tutor cost)", m(t["Margin a week"]),
               m(th["Margin a week"]),
-              gap(t["Margin a week"], th["Margin a week"], False, money=True),
-              m(a["Margin a week"]))]
+              gap(t["Margin a week"], th["Margin a week"], False, money=True))]
     k = len(lines) - 1
-    table_html = _table(["", "Today", "Theoretical", "Today vs theoretical", "Achievable"],
+    table_html = _table(["", "Today", "Theoretical", "Today vs theoretical"],
                         [list(x) for x in lines], {k: "total"})
     nrs = r["not_recommended"]
     cause = ""
@@ -622,9 +617,9 @@ def _money_section(plans, rrp, ideal, row, week, vl, table, allowed, revenue):
             "Already at or above the achievable position.")
     st.markdown((f'<div class="mc-total">{head}</div><div class="mc-gains">{tiles}</div>')
                 .replace("$", "&#36;"), unsafe_allow_html=True)
-    sub = f"Margin a week: {_m(t['Margin a week'])} → {_m(a['Margin a week'])}" \
+    sub = f"Margin a week: {_m(t['Margin a week'])} today, {_m(th['Margin a week'])} theoretical" \
         if t["Margin a week"] is not None else "Fees only (no tutor rate for this country)"
-    _card("Today vs theoretical vs achievable", sub, table_html)
+    _card("Today vs theoretical", sub, table_html)
     notes = [f"Fill used: {r['fill']:.1f} students a hub (target for {row['Members']:.0f} "
              f"members: {r['target']:.1f}"
              + (f"; measured {r['measured_fill']:.1f}" if r["measured_fill"] else "") + ")."]
@@ -652,8 +647,8 @@ def _money_section(plans, rrp, ideal, row, week, vl, table, allowed, revenue):
     pool = full if allowed is None else vis
     c = pool[(pool["Country"] == country) & (pool["Members"] > 0)]
     price_frequency_chart(c, country_medians(full, country, allowed), country,
-                          "Today → achievable", highlight=loc,
-                          ideal=(a["Sessions per member"], a["Revenue per session"]),
+                          "Today → theoretical", highlight=loc,
+                          ideal=(th["Sessions per member"], th["Revenue per session"]),
                           key="pf_centre")
 
 
