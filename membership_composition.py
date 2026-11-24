@@ -39,6 +39,17 @@ NOT_RECOMMENDED_FROM = 4       # group plans with this many sessions a week or m
 NOT_RECOMMENDED = "4×+ (not recommended)"
 
 
+def whole_split(total, shares):
+    """Split `total` members into whole numbers in proportion to `shares` (a dict of %),
+    largest remainders first, so the parts add up to the total exactly."""
+    raw = {k: total * v / 100 for k, v in shares.items()}
+    out = {k: math.floor(x) for k, x in raw.items()}
+    left = int(round(total - sum(out.values())))
+    for k in sorted(raw, key=lambda k: -(raw[k] - out[k]))[:max(left, 0)]:
+        out[k] += 1
+    return out
+
+
 def not_recommended(kind, sessions):
     """Group plans with 4+ sessions a week: outside the recommended plans, so they are
     kept at today's price (no RRP uplift) and left out of the ideal mix and % of RRP."""
@@ -297,6 +308,7 @@ def ideal_table(plans, rrp, target=None):
     nr = plans[[not_recommended(k, s) for k, s in zip(plans["Type"], plans["Sessions/week"])]]
     n_rec = n - int(nr["Members"].sum())             # only these are spread to the ideal mix
     rows, comp = [], []
+    whole = whole_split(n_rec, target)               # whole members, adding up to n_rec
     for kind, plan, lo, hi, s in IDEAL_GROUPS:
         g = plans[(plans["Type"] == kind) & plans["Sessions/week"].between(lo, hi)]
         priced = g[~g["Freeze"]]
@@ -306,7 +318,7 @@ def ideal_table(plans, rrp, target=None):
                 (priced["Members"] * priced["Sessions/week"]).sum() * s
         r = rrp_price(rrp, kind, s)
         price = max(x for x in (r, own) if x is not None) if (r or own) else None
-        m = n_rec * target[plan] / 100
+        m = whole[plan]
         rows.append({"Type": kind, "Plan": plan, "Members": m, "Sessions/week": s,
                      "Total sessions": m * s,
                      "Membership price": price, "Total value": m * price if price else None,
@@ -314,7 +326,7 @@ def ideal_table(plans, rrp, target=None):
                      "Own price used": bool(own and r and own > r + 0.005),
                      "Not recommended": False})
         cur = g["Members"].sum() / n * 100 if n else 0
-        ideal_pct = target[plan] * n_rec / n if n else target[plan]
+        ideal_pct = m / n * 100 if n else target[plan]
         comp.append({"Plan": f"Group {plan}" if kind == "Group" else plan,
                      "Current %": cur, "Ideal %": ideal_pct, "Variance": cur - ideal_pct})
     if len(nr):                                      # kept as they are, at today's price
@@ -545,9 +557,10 @@ def where_the_money_is(plans, rrp, ideal, country, run=None):
     shares = {"1×": (1, 0.15), "2×": (2, 0.80), "3+": (3, 0.01), "1:1": (1, 0.04)}
     shares = {k: (s_, TARGET_MIX[k] / 100) for k, (s_, _) in shares.items()}
     price = dict(zip(rows["Plan"], rows["Membership price"]))
-    tv = sum(n * sh * float(price.get(k) or 0) for k, (_, sh) in shares.items())
-    ts = sum(n * sh * s_ for k, (s_, sh) in shares.items())
-    t_one = n * shares["1:1"][1]
+    tm = whole_split(n, TARGET_MIX)                  # whole members, adding up to n
+    tv = sum(tm[k] * float(price.get(k) or 0) for k in shares)
+    ts = sum(tm[k] * s_ for k, (s_, _) in shares.items())
+    t_one = tm["1:1"] * shares["1:1"][0]
     th = (ts - t_one) / target + t_one if target else 0.0
     theory = side(tv, ts, th, th * rate if rate else None)
     return {"today": side(v0, sess, hubs0, cost0), "ideal": best, "use_mix": use_mix,

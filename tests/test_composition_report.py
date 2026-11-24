@@ -113,8 +113,8 @@ def test_centre_tables():
     assert "Scheduling" not in html and "Plans" in html     # Alpha has 2 members on 4x
     tvt = html.split("Today vs theoretical</b>")[1].split("</table>")[0]
     spm = tvt.split(">Sessions per member</td>")[1].split("</tr>")[0]
-    assert ">2.08<" in spm and ">1.82<" in spm and "✓ +0.26 (+14%)" not in spm
-    assert "⚠ +0.26 (+14%)" in spm                         # more than 10% above
+    assert ">2.08<" in spm and ">1.83<" in spm              # theoretical: 22 sessions / 12
+    assert "⚠ +0.25 (+14%)" in spm                         # more than 10% above
     assert "2 members on 4×+ plans use" in html and "8 of the 25 sessions" in html
     plan_mix = html.split("Plan mix")[1].split("</table>")[0]
     g2 = plan_mix.split(">Group 2×</td>")[1].split("</tr>")[0]

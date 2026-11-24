@@ -132,6 +132,7 @@ def test_ideal_table_target_mix_and_own_higher_price():
     t = mc.ideal_table(plans("Alpha"), AU)
     rows = t["rows"].set_index("Plan")
     assert list(rows.index) == ["1×", "2×", "3+", "1:1", mc.NOT_RECOMMENDED]
+    assert list(rows["Members"]) == [2, 8, 0, 0, 2]                 # whole, add up to 12
     assert rows.loc["2×", "Members"] == pytest.approx(8.0)          # 10 recommended x 80%
     assert rows.loc["1×", "Membership price"] == 42                 # own $40 < RRP
     assert rows.loc["2×", "Membership price"] == pytest.approx(520 / 14 * 2)  # own > $74
@@ -139,18 +140,19 @@ def test_ideal_table_target_mix_and_own_higher_price():
     assert rows.loc["1:1", "Membership price"] == 300 and rows.loc["1:1", "Own price used"]
     nr = rows.loc[mc.NOT_RECOMMENDED]                               # the two 4x members as-is
     assert nr["Members"] == 2 and nr["Total value"] == 240 and nr["Total sessions"] == 8
-    assert t["total"] == pytest.approx(1.5 * 42 + 8 * 520 / 7 + 0.1 * 100 + 0.4 * 300 + 240)
+    assert t["total"] == pytest.approx(2 * 42 + 8 * 520 / 7 + 240)
     assert t["vs_today"] == pytest.approx(t["total"] - 1400)
     comp = t["composition"].set_index("Plan")
     assert comp.loc["Group 3+", "Current %"] == 0
     assert comp.loc["Group " + mc.NOT_RECOMMENDED, "Current %"] == pytest.approx(2 / 12 * 100)
-    assert comp.loc["1:1", "Variance"] == pytest.approx(2 / 12 * 100 - 4 * 10 / 12)
+    assert comp.loc["1:1", "Variance"] == pytest.approx(2 / 12 * 100)      # ideal rounds to 0
 
 
 def test_ideal_variance_is_current_minus_ideal():
     comp = mc.ideal_table(plans("Kiwi"), mc.rrp_for(mc.rrp_table(), "NZ"))["composition"]
     one = comp.set_index("Plan").loc["Group 1×"]
-    assert one["Current %"] == pytest.approx(72) and one["Variance"] == pytest.approx(57)
+    assert one["Current %"] == pytest.approx(72)        # ideal 1x: 4 of 25 whole members
+    assert one["Ideal %"] == pytest.approx(16) and one["Variance"] == pytest.approx(56)
 
 
 # ── Group overview ────────────────────────────────────────────────────────────
@@ -248,9 +250,16 @@ def test_4x_plans_not_recommended_no_rrp_uplift_and_left_out_of_pct_rrp():
     assert pl["sessions"] == 4 and pl["fees"] == pytest.approx(2 * p2 - 240)
     assert pl["net"] == pytest.approx(pl["fees"] + pl["hubs"] * 37.90)
     th = r["theory"]
-    assert th["Sessions per member"] == pytest.approx(1.82)
-    assert th["Hubs a week"] == pytest.approx(12 * 1.78 / 3.0 + 12 * 0.04)
+    assert th["Sessions per member"] == pytest.approx(22 / 12)   # 2 on 1x, 10 on 2x
+    assert th["Hubs a week"] == pytest.approx(22 / 3.0)
     g = mc.group_table(W, None, mc.rrp_table()).set_index("Centre")
     assert g.loc["Alpha", "Members on 4×+"] == 2
     paid, at = 40 + 40 + 480 + 600, 42 + 74 + 6 * 74 + 2 * 90 * 1
     assert g.loc["Alpha", "% of RRP"] == pytest.approx(paid / at * 100)
+
+
+def test_whole_split_adds_up():
+    assert mc.whole_split(43, mc.TARGET_MIX) == {"1×": 7, "2×": 34, "3+": 0, "1:1": 2}
+    assert mc.whole_split(56, mc.TARGET_MIX) == {"1×": 8, "2×": 45, "3+": 1, "1:1": 2}
+    for n in range(0, 200):
+        assert sum(mc.whole_split(n, mc.TARGET_MIX).values()) == n
